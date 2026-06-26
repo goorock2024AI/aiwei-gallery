@@ -831,6 +831,7 @@ const UI = {
         <div class="card-title">${editing ? '编辑使用记录' : '新增使用登记'}</div>
         <form id="space-form" class="form-grid">
           <div class="form-group"><label>日期</label><input type="date" id="sp-date" value="${todayStr()}"></div>
+          <div class="form-group"><label>结束日期</label><input type="date" id="sp-end-date" value=""></div>
           <div class="form-group"><label>空间</label><select id="sp-space">${MODELS.SPACES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>项目/活动名称</label><input type="text" id="sp-project" placeholder="请输入项目名称" required></div>
           <div class="form-group"><label>类型</label><select id="sp-type">${MODELS.SPACE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
@@ -892,6 +893,7 @@ const UI = {
         <div class="scd-name">${names[s] || s}</div>
         <div class="scd-status">${statusLabel}</div>
         ${isOccupied ? `<div class="scd-project">${usage.projectName}</div>
+          <div class="scd-meta">${usage.date}${usage.endDate ? ' → ' + usage.endDate : ''}</div>
           <div class="scd-meta">${usage.type} · ${usage.client || '—'}</div>
           <div class="scd-rent">${usage.rentalType === '免费' ? '免费' : '¥' + this._fmt(usage.receivableAmount)}</div>` : ''}
       </div>`;
@@ -925,6 +927,7 @@ const UI = {
 
   _fillSpaceForm(r) {
     $('#sp-date').value = r.date;
+    $('#sp-end-date').value = r.endDate || '';
     $('#sp-space').value = r.space;
     $('#sp-project').value = r.projectName;
     $('#sp-type').value = r.type;
@@ -948,11 +951,12 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">📋</div>暂无记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>租金类型</th><th>状态</th><th>应收</th><th>已收</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>结束日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>租金类型</th><th>状态</th><th>应收</th><th>已收</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       const statusTagClass = r.status === '已完成' ? 'tag-success' : r.status === '已取消' || r.status === '空闲' ? 'tag-danger' : 'tag-info';
       h += `<tr>
         <td>${r.date}</td>
+        <td>${r.endDate || '—'}</td>
         <td>${r.space}</td>
         <td>${r.projectName}</td>
         <td>${r.type}</td>
@@ -979,6 +983,7 @@ const UI = {
     const rentalType = $('#sp-rental-type').value;
     const data = {
       date: $('#sp-date').value,
+      endDate: $('#sp-end-date').value || '',
       space: $('#sp-space').value,
       projectName: $('#sp-project').value,
       type: $('#sp-type').value,

@@ -114,6 +114,7 @@ function createSpaceUsage(data = {}) {
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
+    endDate: data.endDate || '',
     space: data.space || '1号厅',
     projectName: data.projectName || '',
     type: data.type || '展览',
