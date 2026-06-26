@@ -1,0 +1,74 @@
+# ===== 二进制 & 媒体文件 =====
+*.psd
+*.ai
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.mp3
+*.wav
+*.flac
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.svg
+*.bmp
+*.tiff
+*.webp
+*.tif
+*.dwg
+*.m4v
+*.m4a
+*.aac
+*.ogg
+
+# ===== 办公文档 =====
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.pdf
+
+# ===== 压缩包 =====
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+*.bz2
+
+# ===== 可执行文件 =====
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+~$*
+._*
+*.swp
+*.swo
+*.lock
+
+# ===== 临时文件 =====
+node_modules/
+.temp/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+*.tmp
+~*
+.claude/settings.local.json
+.claude/scheduled_tasks.json
+supabase/.temp/
