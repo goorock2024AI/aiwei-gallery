@@ -805,13 +805,30 @@ const UI = {
     this._renderExpenseList();
   },
 
-  // === 空间使用 ===
+  // === 空间使用（卡片看板 + 统一录入） ===
   async renderSpacePage() {
     const page = $('#page-space');
+    const editing = this._editingSpaceId;
+    const records = await Store.getAll('space');
+
+    // 按空间聚合当前状态
+    const spaceStatuses = {};
+    MODELS.SPACES.forEach(s => { spaceStatuses[s] = null; });
+    records.forEach(r => {
+      if (['筹备中','已确认','进行中'].includes(r.status)) {
+        spaceStatuses[r.space] = r;
+      }
+    });
 
     html(page, `
       <div class="card">
-        <div class="card-title">${this._editingSpaceId ? '编辑空间使用记录' : '新增使用登记'}</div>
+        <div class="card-title">🏛 空间使用看板</div>
+        <div class="space-dashboard" id="space-dashboard-cards">
+          ${this._renderSpaceDashboardCards(spaceStatuses)}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">${editing ? '编辑使用记录' : '新增使用登记'}</div>
         <form id="space-form" class="form-grid">
           <div class="form-group"><label>日期</label><input type="date" id="sp-date" value="${todayStr()}"></div>
           <div class="form-group"><label>空间</label><select id="sp-space">${MODELS.SPACES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
@@ -819,16 +836,20 @@ const UI = {
           <div class="form-group"><label>类型</label><select id="sp-type">${MODELS.SPACE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
           <div class="form-group"><label>客户/合作方</label><input type="text" id="sp-client" placeholder="客户或合作方名称"></div>
           <div class="form-group"><label>状态</label><select id="sp-status">${MODELS.SPACE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
-          <div class="form-group"><label>应收金额</label><input type="number" id="sp-receivable" min="0" step="0.01" placeholder="0.00" value="0"></div>
-          <div class="form-group"><label>已收金额</label><input type="number" id="sp-received" min="0" step="0.01" placeholder="0.00" value="0"></div>
+          <div class="form-group"><label>租金类型</label>
+            <select id="sp-rental-type" onchange="UI._toggleRentalType()">
+              ${MODELS.RENTAL_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group" id="sp-rental-amount-group"><label>应收金额</label><input type="number" id="sp-receivable" min="0" step="0.01" placeholder="0.00" value="0"></div>
+          <div class="form-group" id="sp-received-group"><label>已收金额</label><input type="number" id="sp-received" min="0" step="0.01" placeholder="0.00" value="0"></div>
           <div class="form-group full"><label>备注</label><textarea id="sp-notes" rows="2"></textarea></div>
           <div class="form-actions full">
-            <button type="submit" class="btn btn-primary">${this._editingSpaceId ? '保存修改' : '保存记录'}</button>
-            ${this._editingSpaceId ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditSpace()">取消编辑</button>' : ''}
+            <button type="submit" class="btn btn-primary">${editing ? '保存修改' : '保存记录'}</button>
+            ${editing ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditSpace()">取消编辑</button>' : ''}
           </div>
         </form>
       </div>
-      <div class="card"><div class="card-title">当前使用中</div><div id="space-active" class="space-cards"><div class="loading-state"><div class="spinner"></div></div></div></div>
       <div class="card">
         <div class="card-title">全部记录</div>
         <div class="filter-bar">
@@ -840,12 +861,66 @@ const UI = {
       </div>
     `);
 
-    if (this._editingSpaceId) {
-      const r = await Store.getById('space', this._editingSpaceId);
+    document.getElementById('sp-filter-month').value = this._spaceFilterMonth || todayStr().slice(0, 7);
+
+    // 初始化租金类型（新增时默认付费）
+    this._toggleRentalType();
+
+    if (editing) {
+      const r = await Store.getById('space', editing);
       if (r) this._fillSpaceForm(r);
     }
-    await this._renderSpaceCards();
     await this._renderSpaceList();
+  },
+
+  _renderSpaceDashboardCards(spaceStatuses) {
+    const names = { '1号厅':'1号展厅', '2号厅':'2号展厅', '美学空间':'美学空间', '多功能厅':'多功能厅', '六楼综合空间':'六楼综合空间', '走廊画廊':'走廊画廊', '户外露台':'户外露台' };
+    const icons = { '1号厅':'🖼️', '2号厅':'🖼️', '美学空间':'💬', '多功能厅':'🎤', '六楼综合空间':'📦', '走廊画廊':'🖼️', '户外露台':'🌿' };
+    let h = '';
+    MODELS.SPACES.forEach(s => {
+      const usage = spaceStatuses[s];
+      const isOccupied = !!usage;
+      const statusClass = isOccupied
+        ? (usage.status === '进行中' ? 'card-occupied' : 'card-pending')
+        : 'card-free';
+      const statusLabel = isOccupied
+        ? `<span class="tag ${usage.status === '进行中' ? 'tag-success' : 'tag-info'}">${usage.status}</span>`
+        : '<span class="tag tag-free">空闲</span>';
+
+      h += `<div class="space-card-dash ${statusClass}" onclick="UI._quickSelectSpace('${s}')">
+        <div class="scd-icon">${icons[s] || '🏛️'}</div>
+        <div class="scd-name">${names[s] || s}</div>
+        <div class="scd-status">${statusLabel}</div>
+        ${isOccupied ? `<div class="scd-project">${usage.projectName}</div>
+          <div class="scd-meta">${usage.type} · ${usage.client || '—'}</div>
+          <div class="scd-rent">${usage.rentalType === '免费' ? '免费' : '¥' + this._fmt(usage.receivableAmount)}</div>` : ''}
+      </div>`;
+    });
+    return h;
+  },
+
+  _toggleRentalType() {
+    const type = $('#sp-rental-type')?.value;
+    const amountGroup = $('#sp-rental-amount-group');
+    const receivedGroup = $('#sp-received-group');
+    if (!amountGroup) return;
+    if (type === '免费') {
+      amountGroup.style.display = 'none';
+      receivedGroup.style.display = 'none';
+      const rInput = $('#sp-receivable');
+      const rvInput = $('#sp-received');
+      if (rInput) rInput.value = 0;
+      if (rvInput) rvInput.value = 0;
+    } else {
+      amountGroup.style.display = '';
+      receivedGroup.style.display = '';
+    }
+  },
+
+  _quickSelectSpace(space) {
+    document.getElementById('sp-space').value = space;
+    document.getElementById('sp-project').focus();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   },
 
   _fillSpaceForm(r) {
@@ -855,30 +930,11 @@ const UI = {
     $('#sp-type').value = r.type;
     $('#sp-client').value = r.client || '';
     $('#sp-status').value = r.status;
-    $('#sp-receivable').value = r.receivableAmount;
-    $('#sp-received').value = r.receivedAmount;
+    $('#sp-rental-type').value = r.rentalType || '付费';
+    $('#sp-receivable').value = r.receivableAmount || 0;
+    $('#sp-received').value = r.receivedAmount || 0;
     $('#sp-notes').value = r.notes || '';
-  },
-
-  async _renderSpaceCards() {
-    const el = $('#space-active');
-    if (!el) return;
-    const all = await Store.getAll('space');
-    const active = all.filter(r => ['筹备中','已确认','进行中'].includes(r.status));
-    if (!active.length) { html(el, '<div class="empty-state" style="grid-column:1/-1"><div class="icon">🏛️</div>暂无使用中的空间</div>'); return; }
-
-    let h = '';
-    active.forEach(r => {
-      const statusTag = r.status === '进行中' ? 'tag-success' : r.status === '已确认' ? 'tag-info' : 'tag-warning';
-      h += `<div class="space-card">
-        <div class="space-name">${r.space} · ${r.projectName}</div>
-        <div class="space-meta"><span class="tag ${statusTag}">${r.status}</span> ${r.type} · ${r.client || '未知客户'}</div>
-        <div class="space-meta">${r.date}</div>
-        <div class="space-amounts"><span>应收 ¥${this._fmt(r.receivableAmount)}</span><span>已收 ¥${this._fmt(r.receivedAmount)}</span></div>
-        <div style="margin-top:8px"><button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button></div>
-      </div>`;
-    });
-    html(el, h);
+    this._toggleRentalType();
   },
 
   async _renderSpaceList() {
@@ -892,17 +948,19 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">📋</div>暂无记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>状态</th><th>应收</th><th>已收</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>租金类型</th><th>状态</th><th>应收</th><th>已收</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
+      const statusTagClass = r.status === '已完成' ? 'tag-success' : r.status === '已取消' || r.status === '空闲' ? 'tag-danger' : 'tag-info';
       h += `<tr>
         <td>${r.date}</td>
         <td>${r.space}</td>
         <td>${r.projectName}</td>
         <td>${r.type}</td>
         <td>${r.client || '-'}</td>
-        <td><span class="tag ${r.status === '已完成' ? 'tag-success' : r.status === '已取消' ? 'tag-danger' : 'tag-info'}">${r.status}</span></td>
-        <td>${this._fmt(r.receivableAmount)}</td>
-        <td>${this._fmt(r.receivedAmount)}</td>
+        <td><span class="tag ${r.rentalType === '免费' ? 'tag-free' : 'tag-info'}">${r.rentalType || '付费'}</span></td>
+        <td><span class="tag ${statusTagClass}">${r.status}</span></td>
+        <td>${r.rentalType === '免费' ? '免费' : '¥' + this._fmt(r.receivableAmount)}</td>
+        <td>${r.rentalType === '免费' ? '—' : '¥' + this._fmt(r.receivedAmount)}</td>
         <td class="row-actions">
           <button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>
           <button class="btn btn-sm btn-danger" onclick="UI._deleteSpace('${r.id}')">删除</button>
@@ -918,6 +976,7 @@ const UI = {
     const btn = e.target.querySelector('button[type="submit"]');
     if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
 
+    const rentalType = $('#sp-rental-type').value;
     const data = {
       date: $('#sp-date').value,
       space: $('#sp-space').value,
@@ -925,8 +984,9 @@ const UI = {
       type: $('#sp-type').value,
       client: $('#sp-client').value,
       status: $('#sp-status').value,
-      receivableAmount: +($('#sp-receivable').value || 0),
-      receivedAmount: +($('#sp-received').value || 0),
+      rentalType: rentalType,
+      receivableAmount: rentalType === '免费' ? 0 : +($('#sp-receivable').value || 0),
+      receivedAmount: rentalType === '免费' ? 0 : +($('#sp-received').value || 0),
       notes: $('#sp-notes').value
     };
     const errs = validateSpaceUsage(data);
@@ -958,11 +1018,11 @@ const UI = {
     if (!confirm('确认删除此记录？')) return;
     await Store.delete('space', id);
     this.toast('已删除');
-    await this._renderSpaceCards();
-    await this._renderSpaceList();
+    await this.renderSpacePage();
   },
 
   _filterSpace() {
+    this._spaceFilterMonth = document.getElementById('sp-filter-month').value;
     this._renderSpaceList();
   },
 

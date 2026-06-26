@@ -199,6 +199,7 @@ table.data-table .tag {
 .tag-warning { background: var(--gold-light); color: var(--gold); }
 .tag-danger { background: var(--red-bg); color: var(--red); }
 .tag-info { background: var(--blue-bg); color: var(--blue); }
+.tag-free { background: var(--gray-200); color: var(--gray-700); }
 
 /* 概览仪表盘 */
 .stats-grid {
@@ -678,4 +679,67 @@ table.data-table .tag {
   .pos-grand-total { font-size: 22px; }
   .pos-confirm-btn { font-size: 16px; padding: 12px 18px; }
   .pos-summary { font-size: 12px; gap: 10px; }
+}
+
+/* ===== 空间使用看板卡片 ===== */
+.space-dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+.space-card-dash {
+  background: var(--white);
+  border-radius: var(--radius);
+  padding: 18px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1.5px solid var(--gray-200);
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+}
+.space-card-dash:hover {
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-2px);
+}
+.space-card-dash.card-free {
+  border-left: 4px solid var(--gray-300);
+}
+.space-card-dash.card-pending {
+  border-left: 4px solid var(--gold);
+}
+.space-card-dash.card-occupied {
+  border-left: 4px solid var(--green-500);
+}
+.scd-icon {
+  font-size: 28px;
+  margin-bottom: 6px;
+}
+.scd-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--gray-900);
+  margin-bottom: 4px;
+}
+.scd-status {
+  margin-bottom: 4px;
+}
+.scd-project {
+  font-size: 13px;
+  color: var(--green-700);
+  font-weight: 500;
+  margin-top: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scd-meta {
+  font-size: 11px;
+  color: var(--gray-500);
+}
+.scd-rent {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gold);
+  margin-top: 4px;
 }
