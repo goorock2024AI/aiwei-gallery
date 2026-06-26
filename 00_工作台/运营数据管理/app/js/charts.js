@@ -86,18 +86,21 @@ const Charts = {
     this._destroy('revenue-trend');
 
     const months = await Store.getMonthlySummary('revenue', year);
+    const galleryMonths = await Store.getMonthlySummary('gallery', year);
     const labels = [];
     const ticketData = [];
     const coffeeData = [];
     const workshopData = [];
     const creativeData = [];
     const venueData = [];
+    const galleryData = [];
 
     for (let m = 1; m <= 12; m++) {
       const ms = String(m).padStart(2, '0');
       labels.push(m + '月');
       const recs = months[ms];
-      let t = 0, c = 0, w = 0, cr = 0, v = 0;
+      const grecs = galleryMonths[ms];
+      let t = 0, c = 0, w = 0, cr = 0, v = 0, g = 0;
       recs.forEach(r => {
         t += r.ticketAmount || 0;
         c += r.coffeeAmount || 0;
@@ -105,11 +108,13 @@ const Charts = {
         cr += r.creativeAmount || 0;
         v += r.venueAmount || 0;
       });
+      grecs.forEach(r => { g += (r.price||0) - (r.commission||0); });
       ticketData.push(t);
       coffeeData.push(c);
       workshopData.push(w);
       creativeData.push(cr);
       venueData.push(v);
+      galleryData.push(g);
     }
 
     const ctx = canvas.getContext('2d');
@@ -122,7 +127,8 @@ const Charts = {
           { label: '咖啡套票', data: coffeeData, backgroundColor: '#7ab88a' },
           { label: '工坊', data: workshopData, backgroundColor: '#b8863a' },
           { label: '文创', data: creativeData, backgroundColor: '#c5c0b5' },
-          { label: '场地', data: venueData, backgroundColor: '#2c6b9e' }
+          { label: '场地', data: venueData, backgroundColor: '#2c6b9e' },
+          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' }
         ]
       },
       options: {
@@ -144,7 +150,8 @@ const Charts = {
 
     const ym = todayStr().slice(0, 7);
     const recs = await Store.getByMonth('revenue', ym);
-    let ticket = 0, coffee = 0, workshop = 0, creative = 0, venue = 0, other = 0;
+    const grecs = await Store.getByMonth('gallery', ym);
+    let ticket = 0, coffee = 0, workshop = 0, creative = 0, venue = 0, other = 0, gallery = 0;
     recs.forEach(r => {
       ticket += r.ticketAmount || 0;
       coffee += r.coffeeAmount || 0;
@@ -153,15 +160,16 @@ const Charts = {
       venue += r.venueAmount || 0;
       other += r.otherAmount || 0;
     });
+    grecs.forEach(r => { gallery += (r.price||0) - (r.commission||0); });
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-structure'] = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels: ['门票', '咖啡套票', '工坊', '文创', '场地', '其他'],
+        labels: ['门票', '咖啡套票', '工坊', '文创', '场地', '画廊', '其他'],
         datasets: [{
-          data: [ticket, coffee, workshop, creative, venue, other],
-          backgroundColor: ['#4a8c5c', '#7ab88a', '#b8863a', '#c5c0b5', '#2c6b9e', '#8a8578']
+          data: [ticket, coffee, workshop, creative, venue, gallery, other],
+          backgroundColor: ['#4a8c5c', '#7ab88a', '#b8863a', '#c5c0b5', '#2c6b9e', '#8e44ad', '#8a8578']
         }]
       },
       options: {

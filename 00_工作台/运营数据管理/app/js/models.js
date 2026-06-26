@@ -148,3 +148,34 @@ function validateSpaceUsage(d) {
   if (!d.projectName) errs.push('请输入项目/活动名称');
   return errs;
 }
+
+// 画廊销售记录
+function createGallerySale(data = {}) {
+  return {
+    id: data.id || createId(),
+    date: data.date || todayStr(),
+    artworkName: data.artworkName || '',
+    artist: data.artist || '',
+    price: +data.price || 0,
+    commission: +data.commission || 0,
+    buyerName: data.buyerName || '',
+    paymentMethod: data.paymentMethod || '扫码支付',
+    relatedExhibition: data.relatedExhibition || '',
+    status: data.status || '已售出',
+    handler: data.handler || '',
+    notes: data.notes || '',
+    createdAt: data.createdAt || new Date().toISOString()
+  };
+}
+
+function calcGalleryNet(price, commission) {
+  return (+price || 0) - (+commission || 0);
+}
+
+function validateGallerySale(d) {
+  const errs = [];
+  if (!d.date) errs.push('请选择日期');
+  if (!d.artworkName) errs.push('请输入作品名称');
+  if (!d.price || d.price <= 0) errs.push('请输入有效成交价');
+  return errs;
+}

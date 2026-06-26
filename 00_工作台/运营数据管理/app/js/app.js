@@ -29,6 +29,7 @@
         case 'dashboard': await UI.renderDashboard(); break;
         case 'revenue': await UI.renderRevenuePage(); break;
         case 'expense': await UI.renderExpensePage(); break;
+        case 'gallery': await UI.renderGalleryPage(); break;
         case 'space': await UI.renderSpacePage(); break;
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;

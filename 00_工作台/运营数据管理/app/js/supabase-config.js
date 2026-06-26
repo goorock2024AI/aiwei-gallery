@@ -8,7 +8,8 @@ const SUPABASE_CONFIG = {
 const TABLE_NAMES = {
   revenue: 'revenue',
   expense: 'expense',
-  space: 'space_usage'
+  space: 'space_usage',
+  gallery: 'gallery_sales'
 };
 
 // app_config 表名（固定）

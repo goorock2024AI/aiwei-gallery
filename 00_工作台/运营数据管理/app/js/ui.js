@@ -68,12 +68,16 @@ const UI = {
     const revenues = await Store.getByMonth('revenue', ym);
     const expenses = await Store.getByMonth('expense', ym);
     const spaces = await Store.getByMonth('space', ym);
+    const galleries = await Store.getByMonth('gallery', ym);
 
-    const totalRevenue = revenues.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0);
+    const totalRevenue = revenues.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0)
+      + galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
     const totalExpense = expenses.reduce((s, r) => s + (r.type === '备用金支出' ? (r.amount||0) : 0), 0);
     const totalBorrow = expenses.reduce((s, r) => s + (r.type === '备用金借入' ? (r.amount||0) : 0), 0);
     const balance = totalBorrow - totalExpense;
     const spaceCount = spaces.length;
+    const galleryTotal = galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
+    const galleryCount = galleries.length;
 
     const statsEl = $('dash-stats') || document.querySelector('#dash-stats');
     if (statsEl) {
@@ -82,6 +86,7 @@ const UI = {
         <div class="stat-card"><div class="stat-label">当月支出</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(totalExpense)}</div><div class="stat-sub">${ym}</div></div>
         <div class="stat-card"><div class="stat-label">备用金余额</div><div class="stat-value" style="color:${balance >= 0 ? 'var(--green-700)' : 'var(--red)'}">¥${this._fmt(balance)}</div><div class="stat-sub">借入 ${this._fmt(totalBorrow)}</div></div>
         <div class="stat-card"><div class="stat-label">空间使用</div><div class="stat-value">${spaceCount}</div><div class="stat-sub">本月登记项目</div></div>
+        <div class="stat-card"><div class="stat-label">画廊销售</div><div class="stat-value">¥${this._fmt(galleryTotal)}</div><div class="stat-sub">${galleryCount} 笔交易</div></div>
       </div>`;
     }
 
@@ -959,6 +964,187 @@ const UI = {
 
   _filterSpace() {
     this._renderSpaceList();
+  },
+
+  // === 画廊销售 ===
+  async renderGalleryPage() {
+    const page = $('#page-gallery');
+    const editing = this._editingGalleryId;
+
+    html(page, `
+      <div class="card">
+        <div class="card-title">${editing ? '编辑画廊销售记录' : '新增画廊销售记录'}</div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>日期</label>
+            <div style="display:flex;gap:6px"><input type="date" id="gal-date" value="${todayStr()}" style="flex:1">${this._todayBtn('gal-date')}</div>
+          </div>
+          <div class="form-group"><label>作品名称</label><input type="text" id="gal-artwork" placeholder="请输入作品名称" required></div>
+          <div class="form-group"><label>艺术家</label><input type="text" id="gal-artist" placeholder="艺术家姓名（选填）"></div>
+          <div class="form-group"><label>成交价（元）</label><input type="number" id="gal-price" min="0" step="0.01" placeholder="0.00" required oninput="UI._updateGalleryNet()"></div>
+          <div class="form-group"><label>佣金/手续费（元）</label><input type="number" id="gal-commission" min="0" step="0.01" placeholder="0.00" value="0" oninput="UI._updateGalleryNet()"></div>
+          <div class="form-group"><label>净收入 <span id="gal-net" style="font-weight:bold;color:var(--green-700)">¥0.00</span></label></div>
+          <div class="form-group"><label>买家</label><input type="text" id="gal-buyer" placeholder="买家姓名（选填）"></div>
+          <div class="form-group"><label>收款方式</label>
+            <select id="gal-payment">
+              <option value="扫码支付">扫码支付</option>
+              <option value="现金">现金</option>
+              <option value="对公转账">对公转账</option>
+            </select>
+          </div>
+          <div class="form-group"><label>状态</label>
+            <select id="gal-status">
+              <option value="已售出">已售出</option>
+              <option value="已预定">已预定</option>
+              <option value="已退款">已退款</option>
+            </select>
+          </div>
+          <div class="form-group"><label>关联展览</label><input type="text" id="gal-exhibition" placeholder="关联展览名称（选填）"></div>
+          <div class="form-group"><label>经手人</label><input type="text" id="gal-handler" placeholder="经手人姓名"></div>
+          <div class="form-group full"><label>备注</label><input type="text" id="gal-notes" placeholder="备注（选填）"></div>
+          <div class="form-actions full">
+            <button type="button" class="btn btn-primary" onclick="UI._saveGallerySale()">${editing ? '保存修改' : '保存记录'}</button>
+            ${editing ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditGallery()">取消编辑</button>' : ''}
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">画廊销售记录</div>
+        <div class="filter-bar">
+          <div class="form-group"><label>筛选月份</label><select id="gal-filter-month" onchange="UI._filterGallery()">${this._monthOptions()}</select></div>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('gal-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterGallery()">本月</button>
+          <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="gal-count"></span>
+        </div>
+        <div id="gallery-list"><div class="loading-state"><div class="spinner"></div></div></div>
+      </div>
+    `);
+
+    document.getElementById('gal-filter-month').value = todayStr().slice(0, 7);
+
+    if (editing) {
+      const r = await Store.getById('gallery', editing);
+      if (r) this._fillGalleryForm(r);
+    }
+    this._updateGalleryNet();
+    await this._renderGalleryList();
+  },
+
+  _updateGalleryNet() {
+    const price = +($('#gal-price')?.value || 0);
+    const comm = +($('#gal-commission')?.value || 0);
+    const net = $('#gal-net');
+    if (net) net.textContent = '¥' + Math.max(0, price - comm).toFixed(2);
+  },
+
+  _fillGalleryForm(r) {
+    $('#gal-date').value = r.date;
+    $('#gal-artwork').value = r.artworkName || '';
+    $('#gal-artist').value = r.artist || '';
+    $('#gal-price').value = r.price || 0;
+    $('#gal-commission').value = r.commission || 0;
+    $('#gal-buyer').value = r.buyerName || '';
+    $('#gal-payment').value = r.paymentMethod || '扫码支付';
+    $('#gal-status').value = r.status || '已售出';
+    $('#gal-exhibition').value = r.relatedExhibition || '';
+    $('#gal-handler').value = r.handler || '';
+    $('#gal-notes').value = r.notes || '';
+    this._updateGalleryNet();
+  },
+
+  async _saveGallerySale() {
+    const data = {
+      date: $('#gal-date').value,
+      artworkName: $('#gal-artwork').value.trim(),
+      artist: $('#gal-artist').value.trim(),
+      price: +($('#gal-price').value || 0),
+      commission: +($('#gal-commission').value || 0),
+      buyerName: $('#gal-buyer').value.trim(),
+      paymentMethod: $('#gal-payment').value,
+      status: $('#gal-status').value,
+      relatedExhibition: $('#gal-exhibition').value.trim(),
+      handler: $('#gal-handler').value.trim(),
+      notes: $('#gal-notes').value.trim()
+    };
+
+    const errs = validateGallerySale(data);
+    if (errs.length) { this.toast(errs[0], 'error'); return; }
+
+    const btn = document.querySelector('#page-gallery .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
+
+    try {
+      if (this._editingGalleryId) {
+        await Store.update('gallery', this._editingGalleryId, data);
+        this.toast('画廊记录已更新');
+        this._editingGalleryId = null;
+      } else {
+        await Store.add('gallery', createGallerySale(data));
+        this.toast('画廊销售记录已保存');
+      }
+    } catch (e) {
+      this.toast('保存失败：' + (e.message || e), 'error');
+      if (btn) { btn.disabled = false; btn.textContent = '保存记录'; }
+      return;
+    }
+
+    await this.renderGalleryPage();
+  },
+
+  async _renderGalleryList() {
+    const filter = document.getElementById('gal-filter-month')?.value || todayStr().slice(0, 7);
+    const el = $('#gallery-list');
+    if (!el) return;
+
+    const records = await Store.getByMonth('gallery', filter);
+    const countEl = $('#gal-count');
+    if (countEl) countEl.textContent = `${records.length} 条记录`;
+
+    if (!records.length) { html(el, '<div class="empty-state"><div class="icon">🖼️</div>暂无画廊销售记录</div>'); return; }
+
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>作品名称</th><th>艺术家</th><th>成交价</th><th>佣金</th><th>净收入</th><th>买家</th><th>状态</th><th>收款方式</th><th>操作</th></tr></thead><tbody>';
+    records.forEach(r => {
+      const net = Math.max(0, (r.price||0) - (r.commission||0));
+      const statusClass = r.status === '已售出' ? 'tag-success' : r.status === '已预定' ? 'tag-info' : 'tag-danger';
+      h += `<tr>
+        <td>${r.date}</td>
+        <td>${r.artworkName || '-'}</td>
+        <td>${r.artist || '-'}</td>
+        <td><strong>¥${this._fmt(r.price)}</strong></td>
+        <td>¥${this._fmt(r.commission)}</td>
+        <td>¥${this._fmt(net)}</td>
+        <td>${r.buyerName || '-'}</td>
+        <td><span class="tag ${statusClass}">${r.status || '已售出'}</span></td>
+        <td>${r.paymentMethod || '-'}</td>
+        <td class="row-actions">
+          <button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>
+          <button class="btn btn-sm btn-danger" onclick="UI._deleteGallery('${r.id}')">删除</button>
+        </td>
+      </tr>`;
+    });
+    h += '</tbody></table></div>';
+    html(el, h);
+  },
+
+  async _editGallery(id) {
+    this._editingGalleryId = id;
+    await this.renderGalleryPage();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  },
+
+  async _deleteGallery(id) {
+    if (!confirm('确认删除此画廊销售记录？')) return;
+    await Store.delete('gallery', id);
+    this.toast('已删除');
+    await this._renderGalleryList();
+  },
+
+  _cancelEditGallery() {
+    this._editingGalleryId = null;
+    this.renderGalleryPage();
+  },
+
+  _filterGallery() {
+    this._renderGalleryList();
   },
 
   // ===== 产品/资产管理 =====
