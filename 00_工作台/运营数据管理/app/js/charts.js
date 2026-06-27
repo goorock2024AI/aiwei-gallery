@@ -1,5 +1,5 @@
 // charts.js — Chart.js 图表渲染（Supabase 异步版）
-const Charts = {
+var Charts = {
   _charts: {},
 
   _destroy(id) {
@@ -8,19 +8,23 @@ const Charts = {
 
   async renderAll() {
     const year = document.getElementById('rpt-year')?.value || '2026';
+    const page = document.getElementById('page-reports');
+    if (!page) return;
+
+    // 数据总览
+    await this._renderOverview(year);
+
     const container = document.getElementById('report-charts');
-    if (container) {
-      html(container, `
-        <div class="chart-grid">
-          <div class="chart-box full"><div class="chart-title">月度收入趋势</div><canvas id="chart-revenue-trend"></canvas></div>
-          <div class="chart-box"><div class="chart-title">收入结构（当月）</div><canvas id="chart-revenue-structure"></canvas></div>
-          <div class="chart-box"><div class="chart-title">工坊项目销量排名</div><canvas id="chart-workshop-rank"></canvas></div>
-          <div class="chart-box"><div class="chart-title">支出分类汇总</div><canvas id="chart-expense-category"></canvas></div>
-          <div class="chart-box"><div class="chart-title">空间使用统计</div><canvas id="chart-space-usage"></canvas></div>
-          <div class="chart-box"><div class="chart-title">月度支出趋势</div><canvas id="chart-expense-trend"></canvas></div>
-        </div>
-      `);
-    }
+    html(container, `
+      <div class="chart-grid">
+        <div class="chart-box full"><div class="chart-title">月度收入趋势</div><canvas id="chart-revenue-trend"></canvas></div>
+        <div class="chart-box"><div class="chart-title">收入结构（当月）</div><canvas id="chart-revenue-structure"></canvas></div>
+        <div class="chart-box"><div class="chart-title">工坊项目销量排名</div><canvas id="chart-workshop-rank"></canvas></div>
+        <div class="chart-box"><div class="chart-title">支出分类汇总</div><canvas id="chart-expense-category"></canvas></div>
+        <div class="chart-box"><div class="chart-title">空间使用统计</div><canvas id="chart-space-usage"></canvas></div>
+        <div class="chart-box"><div class="chart-title">月度支出趋势</div><canvas id="chart-expense-trend"></canvas></div>
+      </div>
+    `);
     // 延迟一帧让 canvas 元素创建完毕
     await new Promise(r => setTimeout(r, 100));
     await this.renderRevenueTrend(year);
@@ -29,6 +33,54 @@ const Charts = {
     await this.renderExpenseCategory();
     await this.renderSpaceUsage();
     await this.renderExpenseTrend(year);
+  },
+
+  async _renderOverview(year) {
+    const page = document.getElementById('page-reports');
+    if (!page) return;
+
+    const revenues = await Store.getByYear('revenue', year);
+    const galleryAll = await Store.getByYear('gallery', year);
+
+    // 当月
+    const ym = todayStr().slice(0, 7);
+    const monthRev = revenues.filter(r => (r.date||'').startsWith(ym));
+    const monthGal = galleryAll.filter(r => (r.date||'').startsWith(ym));
+
+    const totalRevenue = monthRev.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0)
+      + monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
+
+    const ticketTotal = monthRev.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0), 0);
+    const coffeeTotal = monthRev.reduce((s, r) => s + (r.coffeeAmount||0), 0);
+    const workshopTotal = monthRev.reduce((s, r) => s + (r.workshopAmount||0), 0);
+    const creativeTotal = monthRev.reduce((s, r) => s + (r.retailAmount||0) + (r.creativeAmount||0), 0);
+    const venueTotal = monthRev.reduce((s, r) => s + (r.venueAmount||0), 0);
+    const galleryTotal = monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
+    const otherTotal = monthRev.reduce((s, r) => s + (r.otherAmount||0), 0);
+
+    const _fmt = n => Number(n || 0).toFixed(2);
+
+    const existing = page.querySelector('.rpt-overview');
+    if (existing) existing.remove();
+
+    const div = document.createElement('div');
+    div.className = 'rpt-overview';
+    div.innerHTML = `
+      <div class="card">
+        <div class="card-title">📊 当月收入总览（${ym}）</div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label">总收入</div><div class="stat-value" style="font-size:22px">¥${_fmt(totalRevenue)}</div></div>
+          <div class="stat-card"><div class="stat-label">门票（含套票）</div><div class="stat-value">¥${_fmt(ticketTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">咖啡套票</div><div class="stat-value">¥${_fmt(coffeeTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">工坊</div><div class="stat-value">¥${_fmt(workshopTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">文创零售</div><div class="stat-value">¥${_fmt(creativeTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">场地</div><div class="stat-value">¥${_fmt(venueTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">画廊</div><div class="stat-value">¥${_fmt(galleryTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">其他</div><div class="stat-value">¥${_fmt(otherTotal)}</div></div>
+        </div>
+      </div>
+    `;
+    page.insertBefore(div, page.querySelector('.filter-bar')?.nextSibling || null);
   },
 
   async renderDashboardTrend() {
@@ -117,6 +169,9 @@ const Charts = {
       galleryData.push(g);
     }
 
+    // 每月合计金额
+    const totalData = labels.map((_, i) => ticketData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i]);
+
     const ctx = canvas.getContext('2d');
     this._charts['revenue-trend'] = new Chart(ctx, {
       type: 'bar',
@@ -134,7 +189,18 @@ const Charts = {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } },
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: {
+            callbacks: {
+              afterBody: function(context) {
+                const idx = context[0].dataIndex;
+                const total = totalData[idx];
+                return '合计: ¥' + (total || 0).toFixed(2);
+              }
+            }
+          }
+        },
         scales: {
           x: { stacked: true },
           y: { stacked: true, beginAtZero: true, ticks: { callback: v => '¥' + v } }
@@ -166,7 +232,7 @@ const Charts = {
     this._charts['revenue-structure'] = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels: ['门票', '咖啡套票', '工坊', '文创', '场地', '画廊', '其他'],
+        labels,
         datasets: [{
           data: [ticket, coffee, workshop, creative, venue, gallery, other],
           backgroundColor: ['#4a8c5c', '#7ab88a', '#b8863a', '#c5c0b5', '#2c6b9e', '#8e44ad', '#8a8578']
@@ -174,7 +240,19 @@ const Charts = {
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } }
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                const val = context.parsed || 0;
+                const pct = total > 0 ? (val / total * 100).toFixed(1) : 0;
+                return context.label + ': ¥' + val.toFixed(2) + ' (' + pct + '%)';
+              }
+            }
+          }
+        }
       }
     });
   },
