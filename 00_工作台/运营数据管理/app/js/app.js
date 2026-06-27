@@ -67,6 +67,6 @@
     if (!health.ok) {
       UI.toast(health.message, 'error');
     }
-    await UI.renderDashboard();
+    await UI.renderRevenuePage();
   });
 })();
