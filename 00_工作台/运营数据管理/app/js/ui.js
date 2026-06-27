@@ -152,6 +152,30 @@ const UI = {
                 </div>
 
                 <div style="margin-top:14px">
+                  <div class="pos-section-title">📝 其他</div>
+                  <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                    <div class="form-group" style="margin-bottom:0"><label>其他金额</label><input type="number" id="rev-other" min="0" step="0.01" placeholder="0.00" value="0" style="width:90px" oninput="UI._updatePOS()"></div>
+                    <div class="form-group" style="margin-bottom:0;flex:1;min-width:100px"><label>说明</label><input type="text" id="rev-other-desc" placeholder="其他收入说明"></div>
+                    <div class="form-group" style="margin-bottom:0"><label>备注</label><input type="text" id="rev-notes" placeholder="备注"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 右列：文创零售 + 工坊 -->
+              <div>
+                <div class="pos-section-title">🛒 文创零售</div>
+                <div class="pos-retail-area">
+                  <div class="pos-input-row">
+                    <div class="form-group"><label>单价</label><input type="number" id="rt-price" min="0" step="0.01" placeholder="0.00" style="width:80px"></div>
+                    <div class="form-group"><label>数量</label><input type="number" id="rt-qty" min="1" value="1" style="width:60px"></div>
+                    <div class="form-group"><label>产品名</label><input type="text" id="rt-name" placeholder="产品名称" style="width:120px"></div>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="UI._addRetailItem()" style="margin-bottom:1px">+ 添加</button>
+                  </div>
+                  <div id="rt-list" class="pos-item-list"></div>
+                  <div id="rt-total" class="pos-section-total">文创小计: ¥0.00</div>
+                </div>
+
+                <div style="margin-top:14px">
                   <div class="pos-section-title">🔧 工坊</div>
                   <div class="pos-workshop-area">
                     <div class="pos-input-row">
@@ -168,31 +192,6 @@ const UI = {
                     <div id="ws-preview" style="font-size:12px;color:var(--gray-500);min-height:20px"></div>
                     <div id="ws-list" class="pos-item-list"></div>
                     <div id="ws-total" class="pos-section-total">工坊小计: ¥0.00</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 右列：文创零售 -->
-              <div>
-                <div class="pos-section-title">🛒 文创零售</div>
-                <div class="pos-retail-area">
-                  <div class="pos-input-row">
-                    <div class="form-group"><label>单价</label><input type="number" id="rt-price" min="0" step="0.01" placeholder="0.00" style="width:80px"></div>
-                    <div class="form-group"><label>数量</label><input type="number" id="rt-qty" min="1" value="1" style="width:60px"></div>
-                    <div class="form-group"><label>产品名</label><input type="text" id="rt-name" placeholder="产品名称" style="width:120px"></div>
-                    <button type="button" class="btn btn-sm btn-primary" onclick="UI._addRetailItem()" style="margin-bottom:1px">+ 添加</button>
-                  </div>
-                  <div id="rt-list" class="pos-item-list"></div>
-                  <div id="rt-total" class="pos-section-total">文创小计: ¥0.00</div>
-                </div>
-
-                <!-- 其他收入 -->
-                <div style="margin-top:14px">
-                  <div class="pos-section-title">📝 其他</div>
-                  <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-                    <div class="form-group" style="margin-bottom:0"><label>其他金额</label><input type="number" id="rev-other" min="0" step="0.01" placeholder="0.00" value="0" style="width:90px" oninput="UI._updatePOS()"></div>
-                    <div class="form-group" style="margin-bottom:0;flex:1;min-width:100px"><label>说明</label><input type="text" id="rev-other-desc" placeholder="其他收入说明"></div>
-                    <div class="form-group" style="margin-bottom:0"><label>备注</label><input type="text" id="rev-notes" placeholder="备注"></div>
                   </div>
                 </div>
               </div>
