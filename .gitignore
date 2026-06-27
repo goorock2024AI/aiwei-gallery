@@ -61,6 +61,8 @@ Thumbs.db
 
 # ===== 临时文件 =====
 node_modules/
+package.json
+package-lock.json
 .temp/
 __pycache__/
 *.pyc
