@@ -130,18 +130,6 @@ const UI = {
                   ${this._todayBtn('rev-date')}
                 </div>
               </div>
-              <div class="form-group" style="margin-bottom:0">
-                <label>关联项目/活动</label>
-                <input type="text" id="rev-project" list="project-list" placeholder="散客参观" style="flex:1">
-                <datalist id="project-list">
-                  <option value="散客参观">
-                  <option value="尚丁油画展">
-                  <option value="劳伟书法展">
-                  <option value="企业团建活动">
-                  <option value="工坊课程">
-                  <option value="场地租赁">
-                </datalist>
-              </div>
             </div>
 
             <div class="pos-layout">
@@ -481,7 +469,7 @@ const UI = {
       otherAmount: +($('#rev-other')?.value || 0),
       otherDesc: $('#rev-other-desc')?.value || '',
       paymentMethod,
-      projectName: $('#rev-project')?.value || '',
+      projectName: '',
       notes: $('#rev-notes')?.value || '',
       cashAmount: paymentMethod === '扫码支付' || paymentMethod === '对公转账' ? 0 : total,
       accountAmount: paymentMethod !== '扫码支付' && paymentMethod !== '对公转账' ? 0 : total
@@ -552,7 +540,6 @@ const UI = {
     const r = await Store.getById('revenue', id);
     if (!r) return;
     document.getElementById('rev-date').value = r.date || todayStr();
-    document.getElementById('rev-project').value = r.projectName || '';
 
     // 票务（动态）
     (r.ticketItems || []).forEach((item, i) => {
