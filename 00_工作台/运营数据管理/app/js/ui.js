@@ -985,7 +985,7 @@ const UI = {
       date: $('#sp-date').value,
       endDate: $('#sp-end-date').value || '',
       space: $('#sp-space').value,
-      projectName: $('#sp-project').value,
+      projectName: $('#sp-project').value.trim(),
       type: $('#sp-type').value,
       client: $('#sp-client').value,
       status: $('#sp-status').value,
@@ -994,8 +994,18 @@ const UI = {
       receivedAmount: rentalType === '免费' ? 0 : +($('#sp-received').value || 0),
       notes: $('#sp-notes').value
     };
-    const errs = validateSpaceUsage(data);
-    if (errs.length) { this.toast(errs[0], 'error'); if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; } return; }
+
+    if (!data.projectName) { this.toast('请输入项目/活动名称', 'error'); if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; } return; }
+
+    // 检查时间冲突
+    if (['已确认','进行中'].includes(data.status)) {
+      const conflict = await this._checkSpaceConflict(data);
+      if (conflict) {
+        this.toast(`时间冲突：该空间在所选时段已被「${conflict.projectName}」占用`, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; }
+        return;
+      }
+    }
 
     if (this._editingSpaceId) {
       await Store.update('space', this._editingSpaceId, data);
@@ -1006,6 +1016,54 @@ const UI = {
       this.toast('空间使用记录已保存');
     }
     await this.renderSpacePage();
+  },
+
+  async _checkSpaceConflict(newData) {
+    // 获取同一空间的所有记录
+    const all = await Store.getAll('space');
+    const sameSpace = all.filter(r =>
+      r.space === newData.space &&
+      ['已确认','进行中'].includes(r.status) &&
+      r.id !== this._editingSpaceId // 编辑时排除自身
+    );
+    if (!sameSpace.length) return null;
+
+    // 新记录占用日期集合
+    const occupiedDates = new Set();
+    const start = new Date(newData.date);
+    let end;
+    if (newData.endDate) {
+      // 有结束日期：占用到结束日期后一天
+      end = new Date(newData.endDate);
+      end.setDate(end.getDate() + 1);
+    } else {
+      // 只有开始日期：仅当天占用
+      end = new Date(newData.date);
+    }
+
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      occupiedDates.add(d.toISOString().slice(0, 10));
+    }
+
+    // 检查每条已有记录的占用区间
+    for (const record of sameSpace) {
+      const rStart = new Date(record.date);
+      let rEnd;
+      if (record.endDate) {
+        rEnd = new Date(record.endDate);
+        rEnd.setDate(rEnd.getDate() + 1);
+      } else {
+        rEnd = new Date(record.date);
+      }
+
+      for (let d = new Date(rStart); d <= rEnd; d.setDate(d.getDate() + 1)) {
+        if (occupiedDates.has(d.toISOString().slice(0, 10))) {
+          return record; // 返回冲突记录
+        }
+      }
+    }
+
+    return null;
   },
 
   async _editSpace(id) {
