@@ -41,19 +41,27 @@ function todayStr() {
 
 // 收入记录
 function createRevenue(data = {}) {
+  // POS 模式：从 ticketItems/coffeeItems 推导数量和金额
+  const ticketItems = data.ticketItems || [];
+  const coffeeItems = data.coffeeItems || [];
+  const hasTicketItems = ticketItems.length > 0;
+  const hasCoffeeItems = coffeeItems.length > 0;
+
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
-    ticketQty: +data.ticketQty || 0,
-    ticketAmount: +data.ticketQty * MODELS.TICKET_PRICE || 0,
+    ticketQty: hasTicketItems ? ticketItems.reduce((s, i) => s + (+i.qty || 0), 0) : (+data.ticketQty || 0),
+    ticketAmount: hasTicketItems ? ticketItems.reduce((s, i) => s + i.amount, 0) : (+data.ticketQty * MODELS.TICKET_PRICE || 0),
+    ticketItems: data.ticketItems || [],
     comboQty: +data.comboQty || 0,
-    comboAmount: +data.comboQty * MODELS.COMBO_PRICE || 0,
-    coffeeQty: +data.coffeeQty || 0,
-    coffeeAmount: +data.coffeeQty * MODELS.COFFEE_PRICE || 0,
+    comboAmount: +data.comboAmount || 0,
+    coffeeQty: hasCoffeeItems ? coffeeItems.reduce((s, i) => s + (+i.qty || 0), 0) : (+data.coffeeQty || 0),
+    coffeeAmount: hasCoffeeItems ? coffeeItems.reduce((s, i) => s + i.amount, 0) : (+data.coffeeQty * MODELS.COFFEE_PRICE || 0),
+    coffeeItems: data.coffeeItems || [],
     workshopItems: data.workshopItems || [],
-    workshopAmount: calcWorkshopTotal(data.workshopItems || []),
+    workshopAmount: data.workshopAmount || calcWorkshopTotal(data.workshopItems || []),
     retailItems: data.retailItems || [],
-    retailAmount: calcRetailTotal(data.retailItems || []),
+    retailAmount: data.retailAmount || calcRetailTotal(data.retailItems || []),
     creativeAmount: +data.creativeAmount || 0,
     venueAmount: +data.venueAmount || 0,
     otherAmount: +data.otherAmount || 0,

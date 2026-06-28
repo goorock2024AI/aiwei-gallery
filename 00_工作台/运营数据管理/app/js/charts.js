@@ -6,19 +6,29 @@ var Charts = {
     if (this._charts[id]) { this._charts[id].destroy(); delete this._charts[id]; }
   },
 
-  async renderAll() {
+  _getYM() {
     const year = document.getElementById('rpt-year')?.value || '2026';
+    const month = document.getElementById('rpt-month')?.value || '';
+    return { year, month };
+  },
+
+  _onFilterChange() {
+    this.renderAll();
+  },
+
+  async renderAll() {
+    const { year, month } = this._getYM();
     const page = document.getElementById('page-reports');
     if (!page) return;
 
     // 数据总览
-    await this._renderOverview(year);
+    await this._renderOverview(year, month);
 
     const container = document.getElementById('report-charts');
     html(container, `
       <div class="chart-grid">
         <div class="chart-box full"><div class="chart-title">月度收入趋势</div><canvas id="chart-revenue-trend"></canvas></div>
-        <div class="chart-box"><div class="chart-title">收入结构（当月）</div><canvas id="chart-revenue-structure"></canvas></div>
+        <div class="chart-box"><div class="chart-title">收入结构</div><canvas id="chart-revenue-structure"></canvas></div>
         <div class="chart-box"><div class="chart-title">工坊项目销量排名</div><canvas id="chart-workshop-rank"></canvas></div>
         <div class="chart-box"><div class="chart-title">支出分类汇总</div><canvas id="chart-expense-category"></canvas></div>
         <div class="chart-box"><div class="chart-title">空间使用统计</div><canvas id="chart-space-usage"></canvas></div>
@@ -35,26 +45,41 @@ var Charts = {
     await this.renderExpenseTrend(year);
   },
 
-  async _renderOverview(year) {
+  async _renderOverview(year, month) {
     const page = document.getElementById('page-reports');
     if (!page) return;
 
     const revenues = await Store.getByYear('revenue', year);
     const galleryAll = await Store.getByYear('gallery', year);
+    const spaceAll = await Store.getByYear('space', year);
 
-    // 当月
-    const ym = todayStr().slice(0, 7);
-    const monthRev = revenues.filter(r => (r.date||'').startsWith(ym));
-    const monthGal = galleryAll.filter(r => (r.date||'').startsWith(ym));
+    // month 为空表示全年，否则按指定月份过滤
+    let monthRev, monthGal, monthSpace, title;
+    if (month) {
+      const ym = year + '-' + month;
+      monthRev = revenues.filter(r => (r.date||'').startsWith(ym));
+      monthGal = galleryAll.filter(r => (r.date||'').startsWith(ym));
+      monthSpace = spaceAll.filter(r => (r.date||'').startsWith(ym));
+      title = year + '年' + parseInt(month) + '月';
+    } else {
+      monthRev = revenues;
+      monthGal = galleryAll;
+      monthSpace = spaceAll;
+      title = year + '年全年';
+    }
+
+    const spaceRentIncome = monthSpace.filter(s => s.rentalType === '付费').reduce((s, r) => s + (r.receivedAmount || 0), 0);
 
     const totalRevenue = monthRev.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0)
-      + monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
+      + monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0)
+      + spaceRentIncome;
 
-    const ticketTotal = monthRev.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0), 0);
+    const ticketTotal = monthRev.reduce((s, r) => s + (r.ticketAmount||0), 0);
+    const comboTotal = monthRev.reduce((s, r) => s + (r.comboAmount||0), 0);
     const coffeeTotal = monthRev.reduce((s, r) => s + (r.coffeeAmount||0), 0);
     const workshopTotal = monthRev.reduce((s, r) => s + (r.workshopAmount||0), 0);
     const creativeTotal = monthRev.reduce((s, r) => s + (r.retailAmount||0) + (r.creativeAmount||0), 0);
-    const venueTotal = monthRev.reduce((s, r) => s + (r.venueAmount||0), 0);
+    const venueTotal = monthRev.reduce((s, r) => s + (r.venueAmount||0), 0) + spaceRentIncome;
     const galleryTotal = monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
     const otherTotal = monthRev.reduce((s, r) => s + (r.otherAmount||0), 0);
 
@@ -67,11 +92,12 @@ var Charts = {
     div.className = 'rpt-overview';
     div.innerHTML = `
       <div class="card">
-        <div class="card-title">📊 当月收入总览（${ym}）</div>
+        <div class="card-title">📊 收入总览（${month ? year + '年' + parseInt(month) + '月' : year + '年全年'}）</div>
         <div class="stats-grid">
           <div class="stat-card"><div class="stat-label">总收入</div><div class="stat-value" style="font-size:22px">¥${_fmt(totalRevenue)}</div></div>
-          <div class="stat-card"><div class="stat-label">门票（含套票）</div><div class="stat-value">¥${_fmt(ticketTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">咖啡套票</div><div class="stat-value">¥${_fmt(coffeeTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">门票</div><div class="stat-value">¥${_fmt(ticketTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">咖啡套票</div><div class="stat-value">¥${_fmt(comboTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">咖啡</div><div class="stat-value">¥${_fmt(coffeeTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">工坊</div><div class="stat-value">¥${_fmt(workshopTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">文创零售</div><div class="stat-value">¥${_fmt(creativeTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">场地</div><div class="stat-value">¥${_fmt(venueTotal)}</div></div>
@@ -139,8 +165,10 @@ var Charts = {
 
     const months = await Store.getMonthlySummary('revenue', year);
     const galleryMonths = await Store.getMonthlySummary('gallery', year);
+    const spaceAll = await Store.getByYear('space', year);
     const labels = [];
     const ticketData = [];
+    const comboData = [];
     const coffeeData = [];
     const workshopData = [];
     const creativeData = [];
@@ -152,16 +180,20 @@ var Charts = {
       labels.push(m + '月');
       const recs = months[ms];
       const grecs = galleryMonths[ms];
-      let t = 0, c = 0, w = 0, cr = 0, v = 0, g = 0;
+      const spRecs = spaceAll.filter(r => (r.date||'').startsWith(year + '-' + ms) && r.rentalType === '付费');
+      let t = 0, cb = 0, c = 0, w = 0, cr = 0, v = 0, g = 0;
       recs.forEach(r => {
         t += r.ticketAmount || 0;
+        cb += r.comboAmount || 0;
         c += r.coffeeAmount || 0;
         w += r.workshopAmount || 0;
         cr += r.creativeAmount || 0;
         v += r.venueAmount || 0;
       });
       grecs.forEach(r => { g += (r.price||0) - (r.commission||0); });
+      spRecs.forEach(r => { v += r.receivedAmount || 0; });
       ticketData.push(t);
+      comboData.push(cb);
       coffeeData.push(c);
       workshopData.push(w);
       creativeData.push(cr);
@@ -170,7 +202,7 @@ var Charts = {
     }
 
     // 每月合计金额
-    const totalData = labels.map((_, i) => ticketData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i]);
+    const totalData = labels.map((_, i) => ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i]);
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-trend'] = new Chart(ctx, {
@@ -179,7 +211,8 @@ var Charts = {
         labels,
         datasets: [
           { label: '门票', data: ticketData, backgroundColor: '#4a8c5c' },
-          { label: '咖啡套票', data: coffeeData, backgroundColor: '#7ab88a' },
+          { label: '咖啡套票', data: comboData, backgroundColor: '#57a86a' },
+          { label: '咖啡', data: coffeeData, backgroundColor: '#7ab88a' },
           { label: '工坊', data: workshopData, backgroundColor: '#b8863a' },
           { label: '文创', data: creativeData, backgroundColor: '#c5c0b5' },
           { label: '场地', data: venueData, backgroundColor: '#2c6b9e' },
@@ -214,12 +247,15 @@ var Charts = {
     if (!canvas) return;
     this._destroy('revenue-structure');
 
-    const ym = todayStr().slice(0, 7);
+    const { year, month } = this._getYM();
+    const ym = month ? year + '-' + month : todayStr().slice(0, 7);
     const recs = await Store.getByMonth('revenue', ym);
     const grecs = await Store.getByMonth('gallery', ym);
-    let ticket = 0, coffee = 0, workshop = 0, creative = 0, venue = 0, other = 0, gallery = 0;
+    const spRecs = await Store.getByMonth('space', ym);
+    let ticket = 0, combo = 0, coffee = 0, workshop = 0, creative = 0, venue = 0, other = 0, gallery = 0;
     recs.forEach(r => {
       ticket += r.ticketAmount || 0;
+      combo += r.comboAmount || 0;
       coffee += r.coffeeAmount || 0;
       workshop += r.workshopAmount || 0;
       creative += r.creativeAmount || 0;
@@ -227,15 +263,16 @@ var Charts = {
       other += r.otherAmount || 0;
     });
     grecs.forEach(r => { gallery += (r.price||0) - (r.commission||0); });
+    spRecs.filter(s => s.rentalType === '付费').forEach(r => { venue += r.receivedAmount || 0; });
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-structure'] = new Chart(ctx, {
       type: 'doughnut',
       data: {
-        labels,
+        labels: ['门票', '咖啡套票', '咖啡', '工坊', '文创', '场地', '画廊', '其他'],
         datasets: [{
-          data: [ticket, coffee, workshop, creative, venue, gallery, other],
-          backgroundColor: ['#4a8c5c', '#7ab88a', '#b8863a', '#c5c0b5', '#2c6b9e', '#8e44ad', '#8a8578']
+          data: [ticket, combo, coffee, workshop, creative, venue, gallery, other],
+          backgroundColor: ['#4a8c5c', '#57a86a', '#7ab88a', '#b8863a', '#c5c0b5', '#2c6b9e', '#8e44ad', '#8a8578']
         }]
       },
       options: {
@@ -301,7 +338,8 @@ var Charts = {
     if (!canvas) return;
     this._destroy('expense-category');
 
-    const ym = todayStr().slice(0, 7);
+    const { year, month } = this._getYM();
+    const ym = month ? year + '-' + month : todayStr().slice(0, 7);
     const recs = await Store.getByMonth('expense', ym);
     const cats = {};
     recs.forEach(r => {

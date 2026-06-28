@@ -3,8 +3,11 @@ const UI = {
   _editingId: null,
   _editingExpenseId: null,
   _editingSpaceId: null,
+  _editingGalleryId: null,
   _revenueFilterMonth: '',
   _expenseFilterMonth: '',
+  _spaceFilterMonth: '',
+  _galleryFilterMonth: '',
 
   // === Toast 通知 ===
   toast(msg, type = 'success') {
@@ -70,8 +73,11 @@ const UI = {
     const spaces = await Store.getByMonth('space', ym);
     const galleries = await Store.getByMonth('gallery', ym);
 
+    const spaceRentIncome = spaces.filter(s => s.rentalType === '付费').reduce((s, r) => s + (r.receivedAmount || 0), 0);
+
     const totalRevenue = revenues.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0)
-      + galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
+      + galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0)
+      + spaceRentIncome;
     const totalExpense = expenses.reduce((s, r) => s + (r.type === '备用金支出' ? (r.amount||0) : 0), 0);
     const totalBorrow = expenses.reduce((s, r) => s + (r.type === '备用金借入' ? (r.amount||0) : 0), 0);
     const balance = totalBorrow - totalExpense;
@@ -130,6 +136,7 @@ const UI = {
                   ${this._todayBtn('rev-date')}
                 </div>
               </div>
+              <div id="space-rent-reminder" class="space-rent-reminder"></div>
             </div>
 
             <div class="pos-layout">
@@ -246,6 +253,7 @@ const UI = {
     }
 
     this._updatePOS();
+    this._loadSpaceRentReminder();
     await this._renderRevenueList();
   },
 
@@ -643,6 +651,23 @@ const UI = {
   _filterRevenue() {
     this._revenueFilterMonth = document.getElementById('rev-filter-month').value;
     this._renderRevenueList();
+  },
+
+  // === 场地租金待收款提醒（收银台顶部） ===
+  async _loadSpaceRentReminder() {
+    const el = document.getElementById('space-rent-reminder');
+    if (!el) return;
+    const all = await Store.getAll('space');
+    const unpaid = all.filter(s => s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
+    if (!unpaid.length) { el.style.display = 'none'; return; }
+    const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
+    el.style.display = 'block';
+    el.innerHTML = `⚠️ 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔），请前往 <a href="#" onclick="UI._goToSpaceTab();return false">🏛 空间使用</a> 核对到账`;
+  },
+
+  _goToSpaceTab() {
+    const btn = document.querySelector('.tab-btn[data-tab="space"]');
+    if (btn) btn.click();
   },
 
   // === 支出录入 ===
@@ -1128,7 +1153,7 @@ const UI = {
       </div>
     `);
 
-    document.getElementById('gal-filter-month').value = todayStr().slice(0, 7);
+    document.getElementById('gal-filter-month').value = this._galleryFilterMonth || todayStr().slice(0, 7);
 
     if (editing) {
       const r = await Store.getById('gallery', editing);
@@ -1253,6 +1278,7 @@ const UI = {
   },
 
   _filterGallery() {
+    this._galleryFilterMonth = document.getElementById('gal-filter-month').value;
     this._renderGalleryList();
   },
 
@@ -1407,9 +1433,17 @@ const UI = {
   // === 数据报表 ===
   async renderReportsPage() {
     const page = $('#page-reports');
+    const ym = todayStr().slice(0, 7);
     html(page, `
       <div class="filter-bar">
-        <div class="form-group"><label>年份</label><select id="rpt-year" onchange="Charts.renderAll()">${this._yearOptions()}</select></div>
+        <div class="form-group"><label>年份</label><select id="rpt-year" onchange="Charts._onFilterChange()">${this._yearOptions()}</select></div>
+        <div class="form-group"><label>月份</label><select id="rpt-month" onchange="Charts._onFilterChange()">
+          <option value="">全部</option>
+          ${[1,2,3,4,5,6,7,8,9,10,11,12].map(m => {
+            const ms = String(m).padStart(2, '0');
+            return `<option value="${ms}"${ms === ym.slice(5) ? ' selected' : ''}>${m}月</option>`;
+          }).join('')}
+        </select></div>
         <button type="button" class="btn btn-sm btn-secondary" onclick="Charts.renderAll()">刷新图表</button>
       </div>
       <div id="report-charts"><div class="loading-state" style="text-align:center;padding:80px"><div class="spinner"></div><span style="margin-left:10px">加载报表数据中...</span></div></div>
@@ -1439,6 +1473,7 @@ const UI = {
           <button class="btn btn-gold" onclick="ImportExport.exportCSV('revenue')">导出收入数据</button>
           <button class="btn btn-gold" onclick="ImportExport.exportCSV('expense')">导出支出数据</button>
           <button class="btn btn-gold" onclick="ImportExport.exportCSV('space')">导出空间使用数据</button>
+          <button class="btn btn-gold" onclick="ImportExport.exportCSV('gallery')">导出画廊销售数据</button>
           <button class="btn btn-gold" onclick="ImportExport.exportAllJSON()">导出全部(JSON备份)</button>
         </div>
       </div>
@@ -1467,8 +1502,9 @@ const UI = {
     const rev = await Store.getAll('revenue');
     const exp = await Store.getAll('expense');
     const spa = await Store.getAll('space');
+    const gal = await Store.getAll('gallery');
     const el = $('#manage-data-count');
-    if (el) el.innerHTML = `收入记录 <strong>${rev.length}</strong> 条 · 支出记录 <strong>${exp.length}</strong> 条 · 空间使用记录 <strong>${spa.length}</strong> 条`;
+    if (el) el.innerHTML = `收入记录 <strong>${rev.length}</strong> 条 · 支出记录 <strong>${exp.length}</strong> 条 · 空间使用记录 <strong>${spa.length}</strong> 条 · 画廊销售记录 <strong>${gal.length}</strong> 条`;
   },
 
   async _checkDBStatus() {
@@ -1487,6 +1523,7 @@ const UI = {
     await Store.clearAll('revenue');
     await Store.clearAll('expense');
     await Store.clearAll('space');
+    await Store.clearAll('gallery');
     this.toast('所有数据已清除');
     await this._updateManageStats();
   },

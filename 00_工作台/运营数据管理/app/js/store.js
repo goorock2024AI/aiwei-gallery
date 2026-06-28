@@ -13,6 +13,7 @@ const Store = {
   async _createClient() {
     if (typeof supabase === 'undefined') throw new Error('Supabase 客户端未加载，请检查网络连接后刷新页面');
     this._supabase = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, { auth: { persistSession: false } });
+    this._ready = true;
     return this._supabase;
   },
 
@@ -41,16 +42,8 @@ const Store = {
     return result;
   },
 
-  _toSnakeList(arr) { return (arr || []).map(this._toSnake); },
-  _toCamelList(arr) { return (arr || []).map(this._toCamel); },
-
-  async _ensureClient() {
-    if (this._supabase) return this._supabase;
-    if (typeof supabase === 'undefined') throw new Error('Supabase 客户端未加载，请检查网络连接后刷新页面');
-    this._supabase = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, { auth: { persistSession: false } });
-    this._ready = true;
-    return this._supabase;
-  },
+  _toSnakeList(arr) { return (arr || []).map(o => this._toSnake(o)); },
+  _toCamelList(arr) { return (arr || []).map(o => this._toCamel(o)); },
 
   _table(type) {
     const name = TABLE_NAMES[type];
@@ -90,7 +83,7 @@ const Store = {
     record.createdAt = record.createdAt || new Date().toISOString();
     const dbRecord = this._toSnake(record);
     const { data, error } = await client.from(this._table(type)).insert(dbRecord).select().single();
-    if (error) { this._handleError(error, '新增'); return null; }
+    if (error) { this._handleError(error, '新增'); throw new Error(error.message); }
     return data ? this._toCamel(data) : record;
   },
 
@@ -98,14 +91,14 @@ const Store = {
     const client = await this._ensureClient();
     const dbUpdates = this._toSnake(updates);
     const { data, error } = await client.from(this._table(type)).update(dbUpdates).eq('id', id).select().single();
-    if (error) { this._handleError(error, '更新'); return null; }
+    if (error) { this._handleError(error, '更新'); throw new Error(error.message); }
     return data ? this._toCamel(data) : null;
   },
 
   async delete(type, id) {
     const client = await this._ensureClient();
-    const { error } = await client.from(this._table(type)).delete().eq('id', id);
-    if (error) this._handleError(error, '删除');
+    const { data, error } = await client.from(this._table(type)).delete().eq('id', id);
+    if (error) { this._handleError(error, '删除'); throw new Error(error.message); }
   },
 
   async getByDateRange(type, startDate, endDate) {

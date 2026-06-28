@@ -87,7 +87,9 @@ function parseNewSheet(ws) {
     const coffeeAmount = parseNum(row[7]);
     const venueAmount = parseNum(row[8]);
     const galleryAmount = parseNum(row[9]);
-    const otherAmount = parseNum(row[10]) - venueAmount - galleryAmount; // 收入合计去掉场地和画廊
+    // 其他 = 收入合计 - 所有已知分类（修复：原代码只减了venue+gallery，导致重复计数）
+    const totalAmount = parseNum(row[10]);
+    const otherAmount = Math.max(0, totalAmount - ticketAmount - comboAmount - coffeeAmount - workshopAmount - creativeAmount - venueAmount - galleryAmount);
     const projectName = (row[15] || '').trim();
     const notes = (row[16] || '').trim();
 

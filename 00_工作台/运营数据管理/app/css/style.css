@@ -414,6 +414,18 @@ table.data-table .tag {
   flex-wrap: wrap;
 }
 .pos-topbar .form-group { min-width: 140px; margin-bottom: 0; }
+.space-rent-reminder {
+  display: none;
+  font-size: 13px;
+  color: var(--red);
+  font-weight: 600;
+  margin-left: auto;
+  line-height: 1.4;
+}
+.space-rent-reminder a {
+  color: var(--red);
+  text-decoration: underline;
+}
 
 /* 票务/咖啡按钮 */
 .pos-ticket-area {

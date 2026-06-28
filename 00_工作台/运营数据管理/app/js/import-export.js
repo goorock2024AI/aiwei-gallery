@@ -14,6 +14,9 @@ const ImportExport = {
     } else if (type === 'space') {
       headers = ['日期','空间','项目名称','类型','客户','状态','应收金额','已收金额','备注','创建时间'];
       rows = records.map(r => [r.date, r.space, r.projectName, r.type, r.client||'', r.status, r.receivableAmount||0, r.receivedAmount||0, r.notes||'', r.createdAt||'']);
+    } else if (type === 'gallery') {
+      headers = ['日期','作品名称','艺术家','成交价','佣金','净收入','买家','收款方式','状态','关联展览','经手人','备注','创建时间'];
+      rows = records.map(r => [r.date, r.artworkName, r.artist, r.price||0, r.commission||0, Math.max(0, (r.price||0) - (r.commission||0)), r.buyerName||'', r.paymentMethod||'', r.status||'', r.relatedExhibition||'', r.handler||'', r.notes||'', r.createdAt||'']);
     }
 
     const csvContent = '﻿' + headers.join(',') + '\n' + rows.map(row => row.map(v => {
@@ -23,7 +26,7 @@ const ImportExport = {
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
-    const typeNames = { revenue: '收入', expense: '支出', space: '空间使用' };
+    const typeNames = { revenue: '收入', expense: '支出', space: '空间使用', gallery: '画廊销售' };
     link.href = URL.createObjectURL(blob);
     link.download = `艾维美术馆_${typeNames[type]}_${todayStr()}.csv`;
     link.click();
@@ -32,14 +35,15 @@ const ImportExport = {
   },
 
   async exportAllJSON() {
-    const [revenue, expense, space] = await Promise.all([
+    const [revenue, expense, space, gallery] = await Promise.all([
       Store.getAll('revenue'),
       Store.getAll('expense'),
-      Store.getAll('space')
+      Store.getAll('space'),
+      Store.getAll('gallery')
     ]);
-    if (!revenue.length && !expense.length && !space.length) { UI.toast('没有数据可以导出', 'error'); return; }
+    if (!revenue.length && !expense.length && !space.length && !gallery.length) { UI.toast('没有数据可以导出', 'error'); return; }
 
-    const data = { version: 1, exportDate: new Date().toISOString(), revenue, expense, space };
+    const data = { version: 1, exportDate: new Date().toISOString(), revenue, expense, space, gallery };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
@@ -89,6 +93,10 @@ const ImportExport = {
       await Store.importData('space', data.space);
       count += data.space.length;
     }
+    if (data.gallery && Array.isArray(data.gallery)) {
+      await Store.importData('gallery', data.gallery);
+      count += data.gallery.length;
+    }
     if (!count) { UI.toast('JSON 格式无法识别，请使用系统导出的备份文件', 'error'); return; }
     UI.toast(`JSON 数据导入完成！共 ${count} 条记录（追加模式）`);
   },
@@ -97,6 +105,7 @@ const ImportExport = {
     let type = 'revenue';
     if (filename.includes('支出')) type = 'expense';
     else if (filename.includes('空间')) type = 'space';
+    else if (filename.includes('画廊')) type = 'gallery';
 
     const lines = content.replace(/^﻿/, '').split('\n').filter(line => line.trim());
     if (lines.length < 2) { UI.toast('CSV 文件为空或只有表头', 'error'); return; }
@@ -130,6 +139,13 @@ const ImportExport = {
           type: record['类型'] || '展览', client: record['客户'] || '', status: record['状态'] || '筹备中',
           receivableAmount: +record['应收金额'] || 0, receivedAmount: +record['已收金额'] || 0, notes: record['备注'] || ''
         }));
+      } else if (type === 'gallery') {
+        records.push(createGallerySale({
+          date: record['日期'] || '', artworkName: record['作品名称'] || '', artist: record['艺术家'] || '',
+          price: +record['成交价'] || 0, commission: +record['佣金'] || 0, buyerName: record['买家'] || '',
+          paymentMethod: record['收款方式'] || '扫码支付', status: record['状态'] || '已售出',
+          relatedExhibition: record['关联展览'] || '', handler: record['经手人'] || '', notes: record['备注'] || ''
+        }));
       }
     }
 
@@ -137,7 +153,7 @@ const ImportExport = {
 
     const existing = await Store.getAll(type);
     await Store.importData(type, [...existing, ...records]);
-    const typeNames = { revenue: '收入', expense: '支出', space: '空间使用' };
+    const typeNames = { revenue: '收入', expense: '支出', space: '空间使用', gallery: '画廊销售' };
     UI.toast(`CSV 导入完成：${typeNames[type]} ${records.length} 条（追加模式）`);
   },
 

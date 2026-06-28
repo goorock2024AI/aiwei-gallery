@@ -71,6 +71,5 @@ __pycache__/
 *.log
 *.tmp
 ~*
-.claude/settings.local.json
-.claude/scheduled_tasks.json
+.claude/
 supabase/.temp/
