@@ -138,6 +138,7 @@ const UI = {
               </div>
               <div id="space-rent-reminder" class="space-rent-reminder"></div>
             </div>
+            <div id="pos-today-stats" class="pos-today-stats"></div>
 
             <div class="pos-layout">
               <!-- 左列：门票 + 咖啡 + 工坊 -->
@@ -254,6 +255,7 @@ const UI = {
 
     this._updatePOS();
     this._loadSpaceRentReminder();
+    this._loadTodayStats();
     await this._renderRevenueList();
   },
 
@@ -500,6 +502,7 @@ const UI = {
     this._submittingPayment = false;
     this._resetPOS();
     await this._renderRevenueList();
+    this._loadTodayStats();
   },
 
   _getPOSTotal() {
@@ -663,6 +666,24 @@ const UI = {
     const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
     el.style.display = 'block';
     el.innerHTML = `⚠️ 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔），请前往 <a href="#" onclick="UI._goToSpaceTab();return false">🏛 空间使用</a> 核对到账`;
+  },
+
+  // === 当日销售统计（收银台顶部） ===
+  async _loadTodayStats() {
+    const el = document.getElementById('pos-today-stats');
+    if (!el) return;
+    const today = todayStr();
+    const all = await Store.getAll('revenue');
+    const todayRecords = all.filter(r => r.date === today);
+    const ticketQty = todayRecords.reduce((s, r) => s + (r.ticketQty || 0), 0);
+    const totalAmount = todayRecords.reduce((s, r) => {
+      return s + (r.ticketAmount||0) + (r.coffeeAmount||0) + (r.comboAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0);
+    }, 0);
+    el.innerHTML = `
+      <div class="today-stat-item"><span class="today-stat-label">今日门票</span><span class="today-stat-value">${ticketQty} 张</span></div>
+      <div class="today-stat-divider"></div>
+      <div class="today-stat-item"><span class="today-stat-label">今日实收</span><span class="today-stat-value">¥${this._fmt(totalAmount)}</span></div>
+    `;
   },
 
   _goToSpaceTab() {

@@ -427,6 +427,37 @@ table.data-table .tag {
   text-decoration: underline;
 }
 
+/* 收银台当日统计 */
+.pos-today-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  margin: 8px 0 12px;
+  background: var(--green-100);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.today-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.today-stat-label {
+  color: var(--gray-700);
+  font-weight: 500;
+}
+.today-stat-value {
+  color: var(--green-700);
+  font-weight: 700;
+  font-size: 15px;
+}
+.today-stat-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--green-300);
+}
+
 /* 票务/咖啡按钮 */
 .pos-ticket-area {
   display: flex;
