@@ -1464,7 +1464,6 @@ const UI = {
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
           <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('week')">本周</button>
           <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('month')">本月</button>
-          <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('quarter')">本季度</button>
           <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('year')">本年</button>
           <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('all')">全部</button>
         </div>
@@ -1538,11 +1537,6 @@ const UI = {
       // 自然月：1日 ~ 月末
       start.value = fmt(new Date(y, m, 1));
       end.value = fmt(new Date(y, m + 1, 0));
-    } else if (range === 'quarter') {
-      // 自然季度：季度首日 ~ 季度末日
-      const qStart = Math.floor(m / 3) * 3;
-      start.value = fmt(new Date(y, qStart, 1));
-      end.value = fmt(new Date(y, qStart + 3, 0));
     } else if (range === 'year') {
       // 本年：1月1日 ~ 今天
       start.value = fmt(new Date(y, 0, 1));
