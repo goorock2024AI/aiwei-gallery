@@ -104,8 +104,9 @@ const Auth = {
   async deleteUser(id) {
     if (!this.isAdmin) throw new Error('无权限');
     if (id === this._currentUser.id) throw new Error('不能删除自己');
-    const user = await Store.getById('users', id);
-    if (!user) throw new Error('用户不存在');
+    const client = await Store._ensureClient();
+    const { data: user, error: fetchErr } = await client.from('users').select('role').eq('id', id).single();
+    if (fetchErr || !user) throw new Error('用户不存在');
     if (user.role === 'admin') throw new Error('不能删除管理员');
     await Store.delete('users', id);
   },
