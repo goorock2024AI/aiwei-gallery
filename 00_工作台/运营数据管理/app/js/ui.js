@@ -1526,21 +1526,27 @@ const UI = {
       return;
     }
     if (range === 'week') {
+      // 自然周：周一 ~ 周日
       const day = now.getDay() || 7; // Sun=0->7
       const mon = new Date(now);
       mon.setDate(d - day + 1);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
       start.value = fmt(mon);
-      end.value = fmt(now);
+      end.value = fmt(sun);
     } else if (range === 'month') {
+      // 自然月：1日 ~ 月末
       start.value = fmt(new Date(y, m, 1));
-      end.value = fmt(now);
+      end.value = fmt(new Date(y, m + 1, 0));
     } else if (range === 'quarter') {
+      // 自然季度：季度首日 ~ 季度末日
       const qStart = Math.floor(m / 3) * 3;
       start.value = fmt(new Date(y, qStart, 1));
-      end.value = fmt(now);
+      end.value = fmt(new Date(y, qStart + 3, 0));
     } else if (range === 'year') {
+      // 自然年：1月1日 ~ 12月31日
       start.value = fmt(new Date(y, 0, 1));
-      end.value = fmt(now);
+      end.value = fmt(new Date(y, 11, 31));
     }
   },
 
