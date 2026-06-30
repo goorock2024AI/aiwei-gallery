@@ -1544,9 +1544,9 @@ const UI = {
       start.value = fmt(new Date(y, qStart, 1));
       end.value = fmt(new Date(y, qStart + 3, 0));
     } else if (range === 'year') {
-      // 自然年：1月1日 ~ 12月31日
+      // 本年：1月1日 ~ 今天
       start.value = fmt(new Date(y, 0, 1));
-      end.value = fmt(new Date(y, 11, 31));
+      end.value = fmt(now);
     }
   },
 
