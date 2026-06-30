@@ -4,7 +4,7 @@ const UI = {
   _editingExpenseId: null,
   _editingSpaceId: null,
   _editingGalleryId: null,
-  _revenueFilterMonth: '',
+  _revenueFilterDate: '',
   _expenseFilterMonth: '',
   _spaceFilterMonth: '',
   _galleryFilterMonth: '',
@@ -123,8 +123,6 @@ const UI = {
   async renderRevenuePage() {
     const page = $('#page-revenue');
     if (!Auth.hasModuleAccess('revenue')) { this._noAccess(page); return; }
-    const filter = this._revenueFilterMonth || todayStr().slice(0, 7);
-
     // —— 编辑模式下也用 POS 布局，只是预填数据 ——
     const editing = this._editingId;
 
@@ -211,12 +209,12 @@ const UI = {
             </div>
           </div>
 
-          <!-- 历史记录列表 -->
+          <!-- 收入记录列表 -->
           <div class="card">
             <div class="card-title">收入记录</div>
             <div class="filter-bar">
-              <div class="form-group"><label>筛选月份</label><select id="rev-filter-month" onchange="UI._filterRevenue()">${this._monthOptions()}</select></div>
-              <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rev-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterRevenue()">本月</button>
+              <div class="form-group"><label>筛选日期</label><input type="date" id="rev-filter-date" value="${this._revenueFilterDate || todayStr()}" onchange="UI._filterRevenue()"></div>
+              <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rev-filter-date').value='${todayStr()}'; UI._filterRevenue()">今天</button>
               <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="rev-count"></span>
             </div>
             <div id="revenue-list"><div class="loading-state"><div class="spinner"></div></div></div>
@@ -251,7 +249,8 @@ const UI = {
         </div>
       </div>`);
 
-    document.getElementById('rev-filter-month').value = filter;
+    const dateInput = document.getElementById('rev-filter-date');
+    if (dateInput && this._revenueFilterDate) dateInput.value = this._revenueFilterDate;
 
     // 编辑模式：预填数据
     if (editing) {
@@ -606,13 +605,14 @@ const UI = {
     this.renderRevenuePage();
   },
 
-  // —— 收入记录列表 ——
+  // —— 收入记录列表（按日筛选） ——
   async _renderRevenueList() {
-    const filter = document.getElementById('rev-filter-month')?.value || todayStr().slice(0, 7);
     const el = $('#revenue-list');
     if (!el) return;
 
-    const records = await Store.getByMonth('revenue', filter);
+    const filter = document.getElementById('rev-filter-date')?.value || todayStr();
+    const all = await Store.getAll('revenue');
+    const records = all.filter(r => r.date === filter);
     const countEl = $('#rev-count');
     if (countEl) countEl.textContent = `${records.length} 条记录`;
 
@@ -649,16 +649,16 @@ const UI = {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   },
 
+  _filterRevenue() {
+    this._revenueFilterDate = document.getElementById('rev-filter-date').value;
+    this._renderRevenueList();
+  },
+
   async _deleteRevenue(id) {
     if (!confirm('确认删除此收入记录？')) return;
     await Store.delete('revenue', id);
     this.toast('已删除');
     await this._renderRevenueList();
-  },
-
-  _filterRevenue() {
-    this._revenueFilterMonth = document.getElementById('rev-filter-month').value;
-    this._renderRevenueList();
   },
 
   // === 场地租金待收款提醒（收银台顶部） ===
