@@ -37,6 +37,7 @@
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;
         case 'products': await UI.renderProductPage(); break;
+        case 'users': await UI.renderUsersPage(); break;
       }
     } catch (err) {
       console.error('渲染错误：', err);
@@ -118,6 +119,10 @@
     $('#app').style.display = '';
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
+    // admin-only 按钮控制
+    document.querySelectorAll('.tab-btn-admin').forEach(btn => {
+      btn.style.display = Auth.isAdmin ? '' : 'none';
+    });
     // 正常初始化
     _initApp();
   }
@@ -143,6 +148,9 @@
     // 已登录
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
+    document.querySelectorAll('.tab-btn-admin').forEach(btn => {
+      btn.style.display = Auth.isAdmin ? '' : 'none';
+    });
     if (Auth.currentUser.needPasswordChange) {
       $('#change-pwd-overlay').style.display = 'flex';
       return;

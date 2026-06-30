@@ -75,6 +75,19 @@ body {
   border-left-color: var(--gold);
   background: rgba(255,255,255,0.1);
 }
+.nav-divider {
+  height: 1px;
+  margin: 6px 12px;
+  background: rgba(255,255,255,0.1);
+}
+#sidebar-nav .tab-btn-logout {
+  color: rgba(255,255,255,0.5);
+  font-size: 12px;
+}
+#sidebar-nav .tab-btn-logout:hover {
+  color: var(--gold-light);
+  background: rgba(255,255,255,0.05);
+}
 
 /* 主区域 */
 #main-area { margin-left: 200px; min-height: 100vh; }

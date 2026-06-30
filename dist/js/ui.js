@@ -1451,6 +1451,59 @@ const UI = {
     this.renderProductPage();
   },
 
+  // === 用户管理 ===
+  async renderUsersPage() {
+    const page = $('#page-users');
+    if (!Auth.isAdmin) { html(page, '<div class="card"><p style="color:var(--red)">无权限访问</p></div>'); return; }
+    html(page, '<div class="loading-state"><div class="spinner"></div><span>加载用户数据...</span></div>');
+    try {
+      const users = await Auth.listUsers();
+      let h = '<div class="card"><div class="card-title">👥 用户管理</div>';
+      h += '<table class="data-table"><thead><tr><th>用户名</th><th>显示名称</th><th>角色</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead><tbody>';
+      users.forEach(u => {
+        const isSelf = u.id === Auth.currentUser.id;
+        h += `<tr>
+          <td>${u.username}</td>
+          <td>${u.displayName || '-'}</td>
+          <td>${u.role === 'admin' ? '管理员' : u.role === 'editor' ? '编辑者' : '查看者'}</td>
+          <td>${u.isActive ? '<span style="color:var(--green-700)">启用</span>' : '<span style="color:var(--red)">禁用</span>'}</td>
+          <td>${u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('zh-CN') : '从未登录'}</td>
+          <td>
+            ${u.role !== 'admin' && !isSelf ? `<button class="btn btn-sm ${u.isActive ? 'btn-secondary' : 'btn-primary'}" onclick="Auth.toggleUser('${u.id}').then(()=>UI.renderUsersPage()).catch(e=>UI.toast(e.message,'error'))">${u.isActive ? '禁用' : '启用'}</button> ` : ''}
+            ${u.role !== 'admin' && !isSelf ? `<button class="btn btn-sm btn-secondary" onclick="Auth.resetPassword('${u.id}').then(()=>UI.toast('密码已重置为 88888888')).then(()=>UI.renderUsersPage()).catch(e=>UI.toast(e.message,'error'))">重置密码</button>` : ''}
+            ${isSelf ? '<span style="color:var(--gray-500);font-size:12px">当前用户</span>' : ''}
+          </td>
+        </tr>`;
+      });
+      h += '</tbody></table></div>';
+      // 新增用户表单
+      h += '<div class="card"><div class="card-title">➕ 新增用户</div>';
+      h += '<div class="form-grid" style="max-width:600px">';
+      h += '<div class="form-group"><label>用户名</label><input type="text" id="new-user-name" placeholder="支持中文"></div>';
+      h += '<div class="form-group"><label>显示名称</label><input type="text" id="new-user-display" placeholder="选填"></div>';
+      h += '<div class="form-group"><label>角色</label><select id="new-user-role"><option value="editor">编辑者</option><option value="viewer">查看者</option></select></div>';
+      h += '<div class="form-group" style="align-self:flex-end"><button class="btn btn-primary" onclick="UI._addUser()">创建用户</button></div>';
+      h += '</div></div>';
+      html(page, h);
+    } catch (e) {
+      html(page, '<div class="card"><p style="color:var(--red)">' + e.message + '</p></div>');
+    }
+  },
+
+  async _addUser() {
+    const name = $('#new-user-name')?.value?.trim();
+    const display = $('#new-user-display')?.value?.trim();
+    const role = $('#new-user-role')?.value;
+    if (!name) { UI.toast('请输入用户名', 'error'); return; }
+    try {
+      await Auth.addUser({ username: name, displayName: display, role });
+      UI.toast(`用户「${name}」已创建（默认密码 88888888）`);
+      this.renderUsersPage();
+    } catch (e) {
+      UI.toast(e.message, 'error');
+    }
+  },
+
   // === 数据报表 ===
   async renderReportsPage() {
     const page = $('#page-reports');
