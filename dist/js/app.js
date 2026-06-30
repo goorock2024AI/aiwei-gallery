@@ -115,6 +115,7 @@
   function _enterApp() {
     $('#login-overlay').style.display = 'none';
     $('#change-pwd-overlay').style.display = 'none';
+    $('#app').style.display = '';
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
     // 正常初始化
