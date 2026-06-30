@@ -1491,12 +1491,7 @@ const UI = {
           <button class="btn btn-sm btn-secondary" onclick="UI._checkDBStatus()">刷新状态</button>
         </div>
       </div>
-      <div class="card manage-section" style="border-left:3px solid var(--red)">
-        <h3 style="color:var(--red)">⚠️ 危险操作</h3>
-        <p class="manage-desc">以下操作不可恢复，请谨慎使用。</p>
-        <button class="btn btn-danger" onclick="UI._clearAllData()">清除所有数据</button>
-      </div>
-    `);
+          `);
     await this._updateManageStats();
     this._checkDBStatus();
   },
