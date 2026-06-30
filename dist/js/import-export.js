@@ -1,8 +1,33 @@
 // import-export.js — CSV/JSON 导入导出（Supabase 异步版）
 const ImportExport = {
+  _getExportDates() {
+    const start = document.getElementById('export-start');
+    const end = document.getElementById('export-end');
+    return {
+      start: start?.value || '',
+      end: end?.value || ''
+    };
+  },
+  _filterByDateRange(records, start, end) {
+    if (!start && !end) return records;
+    return records.filter(r => {
+      const d = r.date || '';
+      return (!start || d >= start) && (!end || d <= end);
+    });
+  },
+  _suffix() {
+    const { start, end } = this._getExportDates();
+    if (start && end) return '_' + start + '_' + end;
+    if (start) return '_' + start + '_end';
+    if (end) return '_begin_' + end;
+    return '_' + todayStr();
+  },
+
   async exportCSV(type) {
-    const records = await Store.getAll(type);
-    if (!records.length) { UI.toast('没有数据可以导出', 'error'); return; }
+    const { start, end } = this._getExportDates();
+    const all = await Store.getAll(type);
+    const records = this._filterByDateRange(all, start, end);
+    if (!records.length) { UI.toast('没有数据可以导出' + (all.length ? '（所选范围内无数据）' : ''), 'error'); return; }
 
     let headers, rows;
     if (type === 'revenue') {
@@ -28,26 +53,32 @@ const ImportExport = {
     const link = document.createElement('a');
     const typeNames = { revenue: '收入', expense: '支出', space: '空间使用', gallery: '画廊销售' };
     link.href = URL.createObjectURL(blob);
-    link.download = `艾维美术馆_${typeNames[type]}_${todayStr()}.csv`;
+    link.download = `艾维美术馆_${typeNames[type]}${this._suffix()}.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
     UI.toast(`${typeNames[type]}数据已导出`);
   },
 
   async exportAllJSON() {
-    const [revenue, expense, space, gallery] = await Promise.all([
+    const { start, end } = this._getExportDates();
+    const [revAll, expAll, spaAll, galAll] = await Promise.all([
       Store.getAll('revenue'),
       Store.getAll('expense'),
       Store.getAll('space'),
       Store.getAll('gallery')
     ]);
-    if (!revenue.length && !expense.length && !space.length && !gallery.length) { UI.toast('没有数据可以导出', 'error'); return; }
+    const revenue = this._filterByDateRange(revAll, start, end);
+    const expense = this._filterByDateRange(expAll, start, end);
+    const space = this._filterByDateRange(spaAll, start, end);
+    const gallery = this._filterByDateRange(galAll, start, end);
+    const total = revenue.length + expense.length + space.length + gallery.length;
+    if (!total) { UI.toast('没有数据可以导出' + (revAll.length ? '（所选范围内无数据）' : ''), 'error'); return; }
 
     const data = { version: 1, exportDate: new Date().toISOString(), revenue, expense, space, gallery };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `艾维美术馆_数据备份_${todayStr()}.json`;
+    link.download = `艾维美术馆_数据备份${this._suffix()}.json`;
     link.click();
     URL.revokeObjectURL(link.href);
     UI.toast('JSON 备份已导出');

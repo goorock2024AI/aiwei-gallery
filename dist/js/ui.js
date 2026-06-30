@@ -1458,16 +1458,20 @@ const UI = {
   async renderManagePage() {
     const page = $('#page-manage');
     html(page, `
-      <div class="card manage-section">
-        <h3>📥 导入数据</h3>
-        <p class="manage-desc">支持 JSON 备份文件或 CSV 导入</p>
-        <div class="manage-actions">
-          <input type="file" id="import-file" accept=".csv,.json" style="font-size:13px">
-          <button class="btn btn-primary" onclick="ImportExport.importData()">导入</button>
-        </div>
-      </div>
-      <div class="card manage-section">
+<div class="card manage-section">
         <h3>📤 导出数据</h3>
+        <p class="manage-desc">选择导出时间范围（留空为全部数据）：</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('week')">本周</button>
+          <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('month')">本月</button>
+          <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('quarter')">本季度</button>
+          <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('year')">本年</button>
+          <button class="btn btn-sm btn-secondary" onclick="UI._setExportRange('all')">全部</button>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+          <label style="font-size:13px;display:flex;align-items:center;gap:4px">开始日期：<input type="date" id="export-start" style="padding:4px 8px;border:1px solid var(--gray-300);border-radius:var(--radius-sm);font-size:13px"></label>
+          <label style="font-size:13px;display:flex;align-items:center;gap:4px">结束日期：<input type="date" id="export-end" style="padding:4px 8px;border:1px solid var(--gray-300);border-radius:var(--radius-sm);font-size:13px"></label>
+        </div>
         <p class="manage-desc">导出为 CSV 或 JSON 格式</p>
         <div class="manage-actions">
           <button class="btn btn-gold" onclick="ImportExport.exportCSV('revenue')">导出收入数据</button>
@@ -1505,6 +1509,39 @@ const UI = {
     const gal = await Store.getAll('gallery');
     const el = $('#manage-data-count');
     if (el) el.innerHTML = `收入记录 <strong>${rev.length}</strong> 条 · 支出记录 <strong>${exp.length}</strong> 条 · 空间使用记录 <strong>${spa.length}</strong> 条 · 画廊销售记录 <strong>${gal.length}</strong> 条`;
+  },
+
+  _setExportRange(range) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const d = now.getDate();
+    const fmt = d => d.toISOString().slice(0, 10);
+    const start = document.getElementById('export-start');
+    const end = document.getElementById('export-end');
+    if (!start || !end) return;
+    if (range === 'all') {
+      start.value = '';
+      end.value = '';
+      return;
+    }
+    if (range === 'week') {
+      const day = now.getDay() || 7; // Sun=0->7
+      const mon = new Date(now);
+      mon.setDate(d - day + 1);
+      start.value = fmt(mon);
+      end.value = fmt(now);
+    } else if (range === 'month') {
+      start.value = fmt(new Date(y, m, 1));
+      end.value = fmt(now);
+    } else if (range === 'quarter') {
+      const qStart = Math.floor(m / 3) * 3;
+      start.value = fmt(new Date(y, qStart, 1));
+      end.value = fmt(now);
+    } else if (range === 'year') {
+      start.value = fmt(new Date(y, 0, 1));
+      end.value = fmt(now);
+    }
   },
 
   async _checkDBStatus() {
