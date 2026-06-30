@@ -9,7 +9,15 @@ const TABLE_NAMES = {
   revenue: 'revenue',
   expense: 'expense',
   space: 'space_usage',
-  gallery: 'gallery_sales'
+  gallery: 'gallery_sales',
+  // 全域数据实体（2026-06-28）
+  users: 'users',
+  operationLogs: 'operation_logs',
+  projectRegistry: 'project_registry',
+  inventory: 'inventory',
+  artworks: 'artworks',
+  partners: 'partners',
+  contentPosts: 'content_posts'
 };
 
 // app_config 表名（固定）
