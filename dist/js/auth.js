@@ -153,7 +153,33 @@ const Auth = {
   // ===== Getter =====
   get isLoggedIn() { return !!this._currentUser; },
   get isAdmin() { return this._currentUser?.role === 'admin'; },
+  get isEditor() { return this._currentUser?.role === 'editor'; },
+  get isViewer() { return this._currentUser?.role === 'viewer'; },
+  get roleLabel() {
+    const map = { admin: '管理员', editor: '编辑者', viewer: '查看者' };
+    return map[this._currentUser?.role] || '未知';
+  },
   get currentUser() { return this._currentUser; },
+
+  /**
+   * 检查当前用户是否有权访问指定模块
+   * @param {'revenue'|'expense'|'gallery'|'space'|'reports'|'manage'|'products'|'users'} moduleKey
+   */
+  hasModuleAccess(moduleKey) {
+    if (!this._currentUser) return false;
+    const role = this._currentUser.role;
+    const accessMap = {
+      revenue:  ['admin', 'editor'],
+      expense:  ['admin', 'editor'],
+      gallery:  ['admin', 'editor'],
+      space:    ['admin', 'editor'],
+      reports:  ['admin', 'editor', 'viewer'],
+      manage:   ['admin'],
+      products: ['admin'],
+      users:    ['admin'],
+    };
+    return (accessMap[moduleKey] || []).includes(role);
+  },
 
   // ===== 内部工具 =====
   async _hash(password) {

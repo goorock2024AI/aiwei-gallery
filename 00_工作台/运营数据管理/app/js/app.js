@@ -119,9 +119,12 @@
     $('#app').style.display = '';
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    // admin-only 按钮控制
-    document.querySelectorAll('.tab-btn-admin').forEach(btn => {
-      btn.style.display = Auth.isAdmin ? '' : 'none';
+    // 角色权限控制：各 tab 按 hasModuleAccess 显示/隐藏
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      const tab = btn.dataset.tab;
+      if (tab) {
+        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
+      }
     });
     // 正常初始化
     _initApp();
@@ -148,8 +151,11 @@
     // 已登录
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    document.querySelectorAll('.tab-btn-admin').forEach(btn => {
-      btn.style.display = Auth.isAdmin ? '' : 'none';
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      const tab = btn.dataset.tab;
+      if (tab) {
+        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
+      }
     });
     if (Auth.currentUser.needPasswordChange) {
       $('#change-pwd-overlay').style.display = 'flex';

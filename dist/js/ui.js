@@ -30,6 +30,10 @@ const UI = {
     }
   },
 
+  _noAccess(page) {
+    html(page, '<div class="card" style="text-align:center;padding:60px 20px"><p style="font-size:16px;color:var(--gray-500)">无权限访问此页面</p></div>');
+  },
+
   // === 日期工具 ===
   _monthOptions() {
     const opts = [];
@@ -118,6 +122,7 @@ const UI = {
   // === 收入录入（POS 收银模式） ===
   async renderRevenuePage() {
     const page = $('#page-revenue');
+    if (!Auth.hasModuleAccess('revenue')) { this._noAccess(page); return; }
     const filter = this._revenueFilterMonth || todayStr().slice(0, 7);
 
     // —— 编辑模式下也用 POS 布局，只是预填数据 ——
@@ -694,6 +699,7 @@ const UI = {
   // === 支出录入 ===
   async renderExpensePage() {
     const page = $('#page-expense');
+    if (!Auth.hasModuleAccess('expense')) { this._noAccess(page); return; }
 
     html(page, `
       <div class="card">
@@ -840,6 +846,7 @@ const UI = {
   // === 空间使用（卡片看板 + 统一录入） ===
   async renderSpacePage() {
     const page = $('#page-space');
+    if (!Auth.hasModuleAccess('space')) { this._noAccess(page); return; }
     const editing = this._editingSpaceId;
     const records = await Store.getAll('space');
 
@@ -1124,6 +1131,7 @@ const UI = {
   // === 画廊销售 ===
   async renderGalleryPage() {
     const page = $('#page-gallery');
+    if (!Auth.hasModuleAccess('gallery')) { this._noAccess(page); return; }
     const editing = this._editingGalleryId;
 
     html(page, `
@@ -1305,6 +1313,7 @@ const UI = {
 
   // ===== 产品/资产管理 =====
   async renderProductPage() {
+    if (!Auth.hasModuleAccess('products')) { this._noAccess($('#page-products')); return; }
     // 确保配置已从数据库加载
     await Store.loadAppConfig();
     const page = $('#page-products');
@@ -1523,6 +1532,7 @@ const UI = {
         <div class="form-grid">
           <div class="form-group"><label>显示名称</label><input type="text" id="edit-user-display" value="${displayName}"></div>
           <div class="form-group"><label>角色</label><select id="edit-user-role">
+            <option value="admin" ${role === 'admin' ? 'selected' : ''}>管理员</option>
             <option value="editor" ${role === 'editor' ? 'selected' : ''}>编辑者</option>
             <option value="viewer" ${role === 'viewer' ? 'selected' : ''}>查看者</option>
           </select></div>
@@ -1533,7 +1543,11 @@ const UI = {
         </div>
       </div>`;
     document.body.appendChild(overlay);
+
+    // 点击遮罩关闭
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    // 保存
     overlay.querySelector('#edit-user-confirm').addEventListener('click', async () => {
       const newDisplay = overlay.querySelector('#edit-user-display').value.trim();
       const newRole = overlay.querySelector('#edit-user-role').value;
@@ -1618,6 +1632,7 @@ const UI = {
   // === 数据管理 ===
   async renderManagePage() {
     const page = $('#page-manage');
+    if (!Auth.hasModuleAccess('manage')) { this._noAccess(page); return; }
     html(page, `
 <div class="card manage-section">
         <h3>📤 导出数据</h3>
