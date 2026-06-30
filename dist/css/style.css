@@ -199,6 +199,14 @@ table.data-table td {
   padding: 9px 12px;
   border-bottom: 1px solid var(--gray-200);
 }
+table.data-table td.action-cell {
+  white-space: nowrap;
+}
+table.data-table td.action-cell .row-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
 table.data-table tr:hover td { background: var(--gray-100); }
 table.data-table .row-actions { display: flex; gap: 6px; }
 table.data-table .tag {
@@ -873,3 +881,39 @@ table.data-table .tag {
   transition: background 0.2s;
 }
 .btn-logout:hover { background: rgba(255,255,255,0.1); }
+
+/* 模态弹窗 */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 3000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.4);
+}
+.modal-card {
+  width: 420px;
+  background: var(--white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 28px 32px;
+}
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--green-700);
+  margin-bottom: 20px;
+}
+.modal-card .form-group { margin-bottom: 14px; }
+.modal-card .form-group label { display: block; margin-bottom: 4px; font-weight: 500; }
+.modal-card .form-group input,
+.modal-card .form-group select {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+}
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}

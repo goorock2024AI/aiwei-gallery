@@ -1458,7 +1458,19 @@ const UI = {
     html(page, '<div class="loading-state"><div class="spinner"></div><span>加载用户数据...</span></div>');
     try {
       const users = await Auth.listUsers();
-      let h = '<div class="card"><div class="card-title">👥 用户管理</div>';
+      let h = '';
+
+      // 修改密码卡片
+      h += '<div class="card"><div class="card-title">🔑 修改密码</div>';
+      h += '<div class="form-grid" style="max-width:500px">';
+      h += '<div class="form-group"><label>当前密码</label><input type="password" id="self-old-pwd" autocomplete="current-password"></div>';
+      h += '<div class="form-group"><label>新密码（至少 6 位）</label><input type="password" id="self-new-pwd" autocomplete="new-password"></div>';
+      h += '<div class="form-group"><label>确认新密码</label><input type="password" id="self-new-pwd-confirm" autocomplete="new-password"></div>';
+      h += '<div class="form-group" style="align-self:flex-end"><button class="btn btn-primary" onclick="UI._changeOwnPassword()">确认修改</button></div>';
+      h += '</div></div>';
+
+      // 用户列表
+      h += '<div class="card"><div class="card-title">👥 用户管理</div>';
       h += '<table class="data-table"><thead><tr><th>用户名</th><th>显示名称</th><th>角色</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead><tbody>';
       users.forEach(u => {
         const isSelf = u.id === Auth.currentUser.id;
@@ -1468,10 +1480,14 @@ const UI = {
           <td>${u.role === 'admin' ? '管理员' : u.role === 'editor' ? '编辑者' : '查看者'}</td>
           <td>${u.isActive ? '<span style="color:var(--green-700)">启用</span>' : '<span style="color:var(--red)">禁用</span>'}</td>
           <td>${u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('zh-CN') : '从未登录'}</td>
-          <td>
-            ${u.role !== 'admin' && !isSelf ? `<button class="btn btn-sm ${u.isActive ? 'btn-secondary' : 'btn-primary'}" onclick="Auth.toggleUser('${u.id}').then(()=>UI.renderUsersPage()).catch(e=>UI.toast(e.message,'error'))">${u.isActive ? '禁用' : '启用'}</button> ` : ''}
-            ${u.role !== 'admin' && !isSelf ? `<button class="btn btn-sm btn-secondary" onclick="Auth.resetPassword('${u.id}').then(()=>UI.toast('密码已重置为 88888888')).then(()=>UI.renderUsersPage()).catch(e=>UI.toast(e.message,'error'))">重置密码</button>` : ''}
+          <td class="action-cell">
+            <div class="row-actions">
+            ${u.role !== 'admin' && !isSelf ? `<button class="btn btn-sm btn-secondary" onclick="Auth.toggleUser('${u.id}').then(()=>UI.renderUsersPage()).catch(e=>UI.toast(e.message,'error'))">${u.isActive ? '禁用' : '启用'}</button> ` : ''}
+            ${u.role !== 'admin' && !isSelf ? `<button class="btn btn-sm btn-secondary" onclick="Auth.resetPassword('${u.id}').then(()=>UI.toast('密码已重置为 88888888')).then(()=>UI.renderUsersPage()).catch(e=>UI.toast(e.message,'error'))">重置密码</button> ` : ''}
+            ${u.role !== 'admin' ? `<button class="btn btn-sm btn-secondary" onclick="UI._editUser('${u.id}')">编辑</button> ` : ''}
+            ${u.role !== 'admin' && !isSelf ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteUser('${u.id}','${u.username}')">删除</button>` : ''}
             ${isSelf ? '<span style="color:var(--gray-500);font-size:12px">当前用户</span>' : ''}
+            </div>
           </td>
         </tr>`;
       });
@@ -1487,6 +1503,77 @@ const UI = {
       html(page, h);
     } catch (e) {
       html(page, '<div class="card"><p style="color:var(--red)">' + e.message + '</p></div>');
+    }
+  },
+
+  async _editUser(id) {
+    // 获取用户最新数据
+    const user = await Store.getById('users', id);
+    if (!user) { UI.toast('用户不存在', 'error'); return; }
+    const displayName = user.displayName || '';
+    const role = user.role || 'editor';
+
+    // 构建编辑弹窗
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+      <div class="modal-card">
+        <div class="modal-title">编辑用户</div>
+        <div class="form-grid">
+          <div class="form-group"><label>显示名称</label><input type="text" id="edit-user-display" value="${displayName}"></div>
+          <div class="form-group"><label>角色</label><select id="edit-user-role">
+            <option value="editor" ${role === 'editor' ? 'selected' : ''}>编辑者</option>
+            <option value="viewer" ${role === 'viewer' ? 'selected' : ''}>查看者</option>
+          </select></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button class="btn btn-primary" id="edit-user-confirm">保存</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#edit-user-confirm').addEventListener('click', async () => {
+      const newDisplay = overlay.querySelector('#edit-user-display').value.trim();
+      const newRole = overlay.querySelector('#edit-user-role').value;
+      try {
+        await Auth.editUser(id, { displayName: newDisplay || displayName, role: newRole });
+        UI.toast('用户信息已更新');
+        overlay.remove();
+        UI.renderUsersPage();
+      } catch (e) {
+        UI.toast(e.message, 'error');
+      }
+    });
+  },
+
+  async _deleteUser(id, username) {
+    if (!confirm(`确定要删除用户「${username}」吗？此操作不可恢复。`)) return;
+    try {
+      await Auth.deleteUser(id);
+      UI.toast(`用户「${username}」已删除`);
+      this.renderUsersPage();
+    } catch (e) {
+      UI.toast(e.message, 'error');
+    }
+  },
+
+  async _changeOwnPassword() {
+    const oldPwd = $('#self-old-pwd')?.value;
+    const newPwd = $('#self-new-pwd')?.value;
+    const confirm = $('#self-new-pwd-confirm')?.value;
+    if (!oldPwd) { UI.toast('请输入当前密码', 'error'); return; }
+    if (newPwd.length < 6) { UI.toast('新密码至少 6 位', 'error'); return; }
+    if (newPwd !== confirm) { UI.toast('两次密码输入不一致', 'error'); return; }
+    try {
+      await Auth.changeOwnPassword(oldPwd, newPwd);
+      UI.toast('密码修改成功');
+      $('#self-old-pwd').value = '';
+      $('#self-new-pwd').value = '';
+      $('#self-new-pwd-confirm').value = '';
+    } catch (e) {
+      UI.toast(e.message, 'error');
     }
   },
 

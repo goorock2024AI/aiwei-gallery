@@ -90,6 +90,52 @@ const Auth = {
     await Store.update('users', id, { isActive: !user.isActive });
   },
 
+  async editUser(id, data) {
+    if (!this.isAdmin) throw new Error('无权限');
+    const user = await Store.getById('users', id);
+    if (!user) throw new Error('用户不存在');
+    const updates = {};
+    if (data.displayName !== undefined) updates.displayName = data.displayName;
+    if (data.role !== undefined) updates.role = data.role;
+    if (Object.keys(updates).length === 0) throw new Error('没有需要修改的字段');
+    await Store.update('users', id, updates);
+  },
+
+  async deleteUser(id) {
+    if (!this.isAdmin) throw new Error('无权限');
+    if (id === this._currentUser.id) throw new Error('不能删除自己');
+    const user = await Store.getById('users', id);
+    if (!user) throw new Error('用户不存在');
+    if (user.role === 'admin') throw new Error('不能删除管理员');
+    await Store.delete('users', id);
+  },
+
+  async changeOwnPassword(oldPwd, newPwd) {
+    const user = this._currentUser;
+    if (!user) throw new Error('未登录');
+    if (!oldPwd) throw new Error('请输入当前密码');
+    if (newPwd.length < 6) throw new Error('新密码长度至少 6 位');
+
+    // 验证旧密码
+    const oldHash = await this._hash(oldPwd);
+    const client = await Store._ensureClient();
+    const { data, error } = await client.from('users').select('password_hash').eq('id', user.id).single();
+    if (error) throw new Error('验证失败：' + error.message);
+    let storedHash = data.password_hash || '';
+    if (storedHash.startsWith('__need_change__:')) {
+      storedHash = storedHash.slice('__need_change__:'.length);
+    }
+    if (oldHash !== storedHash) throw new Error('当前密码错误');
+
+    // 设置新密码
+    const newHash = await this._hash(newPwd);
+    const { error: updateError } = await client.from('users').update({ password_hash: newHash }).eq('id', user.id);
+    if (updateError) throw new Error('密码修改失败：' + updateError.message);
+
+    user.needPasswordChange = false;
+    sessionStorage.setItem('aiwei_user', JSON.stringify(user));
+  },
+
   async resetPassword(id) {
     if (!this.isAdmin) throw new Error('无权限');
     const hash = await this._hash('88888888');
