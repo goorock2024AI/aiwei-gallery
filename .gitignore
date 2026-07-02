@@ -1,3 +1,8 @@
+# ===== 子仓库（各自独立管理）=====
+/aiwei-operations/
+/aiwei-planning/
+/aiwei-content/
+
 # ===== 二进制 & 媒体文件 =====
 *.psd
 *.ai

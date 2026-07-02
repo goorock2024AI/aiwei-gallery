@@ -84,21 +84,45 @@ const Store = {
     const dbRecord = this._toSnake(record);
     const { data, error } = await client.from(this._table(type)).insert(dbRecord).select().single();
     if (error) { this._handleError(error, '新增'); throw new Error(error.message); }
-    return data ? this._toCamel(data) : record;
+    const result = data ? this._toCamel(data) : record;
+    OperationLogger.log('create', type, result.id, result);
+    return result;
   },
 
   async update(type, id, updates) {
     const client = await this._ensureClient();
+    // 读取旧值（用于日志）
+    let oldRecord = null;
+    try {
+      const { data: oldData } = await client.from(this._table(type)).select('*').eq('id', id).single();
+      oldRecord = oldData;
+    } catch (_) { /* 旧值不存在不影响更新 */ }
+
     const dbUpdates = this._toSnake(updates);
     const { data, error } = await client.from(this._table(type)).update(dbUpdates).eq('id', id).select().single();
     if (error) { this._handleError(error, '更新'); throw new Error(error.message); }
-    return data ? this._toCamel(data) : null;
+    const result = data ? this._toCamel(data) : null;
+
+    OperationLogger.log('update', type, id, {
+      before: oldRecord ? this._toCamel(oldRecord) : null,
+      after: result
+    });
+    return result;
   },
 
   async delete(type, id) {
     const client = await this._ensureClient();
+    // 读取被删记录（用于日志）
+    let deletedRecord = null;
+    try {
+      const { data: oldData } = await client.from(this._table(type)).select('*').eq('id', id).single();
+      deletedRecord = oldData;
+    } catch (_) { /* 记录已不存在则跳过 */ }
+
     const { data, error } = await client.from(this._table(type)).delete().eq('id', id);
     if (error) { this._handleError(error, '删除'); throw new Error(error.message); }
+
+    OperationLogger.log('delete', type, id, deletedRecord ? this._toCamel(deletedRecord) : {});
   },
 
   async getByDateRange(type, startDate, endDate) {

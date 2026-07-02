@@ -4,7 +4,7 @@ const UI = {
   _editingExpenseId: null,
   _editingSpaceId: null,
   _editingGalleryId: null,
-  _revenueFilterMonth: '',
+  _revenueFilterDate: '',
   _expenseFilterMonth: '',
   _spaceFilterMonth: '',
   _galleryFilterMonth: '',
@@ -123,8 +123,6 @@ const UI = {
   async renderRevenuePage() {
     const page = $('#page-revenue');
     if (!Auth.hasModuleAccess('revenue')) { this._noAccess(page); return; }
-    const filter = this._revenueFilterMonth || todayStr().slice(0, 7);
-
     // —— 编辑模式下也用 POS 布局，只是预填数据 ——
     const editing = this._editingId;
 
@@ -211,12 +209,12 @@ const UI = {
             </div>
           </div>
 
-          <!-- 历史记录列表 -->
+          <!-- 收入记录列表 -->
           <div class="card">
             <div class="card-title">收入记录</div>
             <div class="filter-bar">
-              <div class="form-group"><label>筛选月份</label><select id="rev-filter-month" onchange="UI._filterRevenue()">${this._monthOptions()}</select></div>
-              <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rev-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterRevenue()">本月</button>
+              <div class="form-group"><label>筛选日期</label><input type="date" id="rev-filter-date" value="${this._revenueFilterDate || todayStr()}" onchange="UI._filterRevenue()"></div>
+              <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rev-filter-date').value='${todayStr()}'; UI._filterRevenue()">今天</button>
               <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="rev-count"></span>
             </div>
             <div id="revenue-list"><div class="loading-state"><div class="spinner"></div></div></div>
@@ -251,7 +249,8 @@ const UI = {
         </div>
       </div>`);
 
-    document.getElementById('rev-filter-month').value = filter;
+    const dateInput = document.getElementById('rev-filter-date');
+    if (dateInput && this._revenueFilterDate) dateInput.value = this._revenueFilterDate;
 
     // 编辑模式：预填数据
     if (editing) {
@@ -413,16 +412,19 @@ const UI = {
   _updatePOS() {
     const tItems = this._getTicketItems();
     const cItems = this._getCoffeeItems();
-    const ticketAmount = tItems.reduce((s, i) => s + i.amount, 0);
+    // 分离套票与普通票
+    const regularTicketAmount = tItems.filter(i => i.name !== '套票').reduce((s, i) => s + i.amount, 0);
+    const comboAmount = tItems.filter(i => i.name === '套票').reduce((s, i) => s + i.amount, 0);
     const coffeeAmount = cItems.reduce((s, i) => s + i.amount, 0);
     const oth = +($('#rev-other')?.value || 0);
 
     const workshopAmount = this._workshopItems.reduce((s, i) => s + i.amount, 0);
     const retailAmount = this._retailItems.reduce((s, i) => s + i.amount, 0);
-    const total = ticketAmount + coffeeAmount + workshopAmount + retailAmount + oth;
+    const total = regularTicketAmount + comboAmount + coffeeAmount + workshopAmount + retailAmount + oth;
 
     const s = id => document.getElementById(id);
-    if (s('s-ticket')) s('s-ticket').textContent = ticketAmount.toFixed(2);
+    if (s('s-ticket')) s('s-ticket').textContent = regularTicketAmount.toFixed(2);
+    if (s('s-combo')) s('s-combo').textContent = comboAmount.toFixed(2);
     if (s('s-coffee')) s('s-coffee').textContent = coffeeAmount.toFixed(2);
     if (s('s-workshop')) s('s-workshop').textContent = workshopAmount.toFixed(2);
     if (s('s-retail')) s('s-retail').textContent = retailAmount.toFixed(2);
@@ -469,11 +471,17 @@ const UI = {
 
     const tItems = this._getTicketItems();
     const cItems = this._getCoffeeItems();
+    // 分离套票与普通票，套票独立计入 combo 字段
+    const regularTicketItems = tItems.filter(i => i.name !== '套票');
+    const comboItems = tItems.filter(i => i.name === '套票');
 
     const data = {
       date: document.getElementById('rev-date').value,
-      ticketItems: tItems,
-      ticketAmount: tItems.reduce((s, i) => s + i.amount, 0),
+      ticketItems: regularTicketItems,
+      ticketAmount: regularTicketItems.reduce((s, i) => s + i.amount, 0),
+      comboQty: comboItems.reduce((s, i) => s + i.qty, 0),
+      comboAmount: comboItems.reduce((s, i) => s + i.amount, 0),
+      comboItems: comboItems,
       coffeeItems: cItems,
       coffeeAmount: cItems.reduce((s, i) => s + i.amount, 0),
       workshopItems: this._workshopItems.map(i => ({ ...i })),
@@ -606,13 +614,14 @@ const UI = {
     this.renderRevenuePage();
   },
 
-  // —— 收入记录列表 ——
+  // —— 收入记录列表（按日筛选） ——
   async _renderRevenueList() {
-    const filter = document.getElementById('rev-filter-month')?.value || todayStr().slice(0, 7);
     const el = $('#revenue-list');
     if (!el) return;
 
-    const records = await Store.getByMonth('revenue', filter);
+    const filter = document.getElementById('rev-filter-date')?.value || todayStr();
+    const all = await Store.getAll('revenue');
+    const records = all.filter(r => r.date === filter);
     const countEl = $('#rev-count');
     if (countEl) countEl.textContent = `${records.length} 条记录`;
 
@@ -649,16 +658,16 @@ const UI = {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   },
 
+  _filterRevenue() {
+    this._revenueFilterDate = document.getElementById('rev-filter-date').value;
+    this._renderRevenueList();
+  },
+
   async _deleteRevenue(id) {
     if (!confirm('确认删除此收入记录？')) return;
     await Store.delete('revenue', id);
     this.toast('已删除');
     await this._renderRevenueList();
-  },
-
-  _filterRevenue() {
-    this._revenueFilterMonth = document.getElementById('rev-filter-month').value;
-    this._renderRevenueList();
   },
 
   // === 场地租金待收款提醒（收银台顶部） ===
@@ -1309,6 +1318,139 @@ const UI = {
   _filterGallery() {
     this._galleryFilterMonth = document.getElementById('gal-filter-month').value;
     this._renderGalleryList();
+  },
+
+  // === 操作日志查看 ===
+  async renderLogsPage() {
+    const page = $('#page-logs');
+    if (!Auth.isAdmin) { this._noAccess(page); return; }
+
+    html(page, `
+      <div class="card">
+        <div class="card-title">📋 操作日志</div>
+        <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+          <div class="form-group"><label>开始日期</label><input type="date" id="log-start" style="width:140px"></div>
+          <div class="form-group"><label>结束日期</label><input type="date" id="log-end" style="width:140px"></div>
+          <div class="form-group"><label>操作</label>
+            <select id="log-action" style="width:90px">
+              <option value="">全部</option>
+              <option value="create">新增</option>
+              <option value="update">修改</option>
+              <option value="delete">删除</option>
+            </select>
+          </div>
+          <div class="form-group"><label>数据表</label>
+            <select id="log-table" style="width:100px">
+              <option value="">全部</option>
+              <option value="revenue">收入</option>
+              <option value="expense">支出</option>
+              <option value="space">空间使用</option>
+              <option value="gallery">画廊销售</option>
+              <option value="users">用户</option>
+            </select>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" onclick="UI._filterLogs()" style="margin-top:18px">查询</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._resetLogFilter()" style="margin-top:18px">重置</button>
+          <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="log-count"></span>
+        </div>
+        <div id="logs-list"><div class="loading-state" style="padding:40px"><div class="spinner"></div><span>加载日志...</span></div></div>
+      </div>
+    `);
+
+    await this._renderLogsList();
+  },
+
+  async _renderLogsList(append = false) {
+    const el = $('#logs-list');
+    if (!el) return;
+
+    const startDate = $('#log-start')?.value || '';
+    const endDate = $('#log-end')?.value || '';
+    const action = $('#log-action')?.value || '';
+    const tableName = $('#log-table')?.value || '';
+
+    if (!append) {
+      el.innerHTML = '<div class="loading-state" style="padding:40px"><div class="spinner"></div><span>加载日志...</span></div>';
+    }
+
+    const result = await OperationLogger.query({
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      action: action || undefined,
+      tableName: tableName || undefined,
+      offset: append ? this._logOffset : 0,
+      limit: 100
+    });
+
+    const countEl = $('#log-count');
+    if (countEl) countEl.textContent = `${result.total} 条记录`;
+
+    if (!result.records.length) {
+      if (!append) html(el, '<div class="empty-state"><div class="icon">📋</div>暂无操作日志</div>');
+      return;
+    }
+
+    const actionLabels = { create: '新增', update: '修改', delete: '删除' };
+    const tableLabels = { revenue: '收入', expense: '支出', space: '空间使用', gallery: '画廊销售', users: '用户' };
+    const actionColors = { create: 'tag-success', update: 'tag-info', delete: 'tag-danger' };
+
+    let h = append ? '' : '<div class="table-wrap"><table class="data-table"><thead><tr><th>时间</th><th>用户</th><th>操作</th><th>数据表</th><th>记录ID</th><th>详情</th></tr></thead><tbody>';
+    result.records.forEach(r => {
+      const details = this._formatLogDetails(r);
+      h += `<tr>
+        <td style="white-space:nowrap">${r.createdAt ? new Date(r.createdAt).toLocaleString('zh-CN') : '-'}</td>
+        <td>${r.userId ? r.userId.slice(0, 8) + '…' : '-'}</td>
+        <td><span class="tag ${actionColors[r.action] || 'tag-info'}">${actionLabels[r.action] || r.action}</span></td>
+        <td>${tableLabels[r.tableName] || r.tableName}</td>
+        <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis">${r.recordId || '-'}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--gray-500)">${details || '-'}</td>
+      </tr>`;
+    });
+    if (!append) h += '</tbody></table></div>';
+
+    if (append) {
+      el.insertAdjacentHTML('beforeend', h);
+    } else {
+      html(el, h);
+    }
+
+    this._logOffset = (this._logOffset || 0) + 100;
+  },
+
+  _formatLogDetails(r) {
+    if (!r.details || r.details === '{}') return '-';
+    const d = typeof r.details === 'string' ? JSON.parse(r.details) : r.details;
+    if (r.action === 'create') return '新增记录';
+    if (r.action === 'delete') return d.date ? `${d.date} ${d.paymentMethod || ''}`.trim() : '删除记录';
+    if (r.action === 'update') {
+      if (d.before && d.after) {
+        const changed = [];
+        for (const k of Object.keys(d.after)) {
+          const a = JSON.stringify(d.after[k]);
+          const b = JSON.stringify(d.before[k]);
+          if (a !== b) changed.push(k);
+        }
+        return `修改字段：${changed.join('、') || '无变化'}`;
+      }
+      return '修改记录';
+    }
+    return '-';
+  },
+
+  _logOffset: 0,
+
+  _filterLogs() {
+    this._logOffset = 0;
+    this._renderLogsList();
+  },
+
+  _resetLogFilter() {
+    ['log-start', 'log-end', 'log-action', 'log-table'].forEach(id => {
+      const el = $(`#${id}`);
+      if (el) el.value = '';
+    });
+    this._logOffset = 0;
+    this._renderLogsList();
   },
 
   // ===== 产品/资产管理 =====

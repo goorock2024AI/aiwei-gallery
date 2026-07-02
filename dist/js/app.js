@@ -38,6 +38,7 @@
         case 'manage': await UI.renderManagePage(); break;
         case 'products': await UI.renderProductPage(); break;
         case 'users': await UI.renderUsersPage(); break;
+        case 'logs': await UI.renderLogsPage(); break;
       }
     } catch (err) {
       console.error('渲染错误：', err);

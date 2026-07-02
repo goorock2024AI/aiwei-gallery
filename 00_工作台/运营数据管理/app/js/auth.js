@@ -177,6 +177,7 @@ const Auth = {
       manage:   ['admin'],
       products: ['admin'],
       users:    ['admin'],
+      logs:     ['admin'],
     };
     return (accessMap[moduleKey] || []).includes(role);
   },
