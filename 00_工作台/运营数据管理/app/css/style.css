@@ -360,6 +360,7 @@ table.data-table .tag {
   .sidebar-subtitle { display: none; }
   #sidebar-nav .tab-btn { padding: 12px 8px; font-size: 0; text-align: center; border-left: none; }
   #sidebar-nav .tab-btn::before { font-size: 16px; }
+  #sidebar-version { display: none; }
   #main-area { margin-left: 48px; }
   #main-content { padding: 12px; }
   .pos-fixed-bottom { margin: 0 -12px; padding: 10px 12px; }
@@ -881,6 +882,16 @@ table.data-table .tag {
   transition: background 0.2s;
 }
 .btn-logout:hover { background: rgba(255,255,255,0.1); }
+
+/* 侧边栏版本号 */
+#sidebar-version {
+  padding: 8px 16px 12px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  text-align: center;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  user-select: none;
+}
 
 /* 模态弹窗 */
 .modal-overlay {
