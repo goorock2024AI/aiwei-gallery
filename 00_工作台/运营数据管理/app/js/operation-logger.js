@@ -25,44 +25,42 @@ const OperationLogger = {
       created_at: new Date().toISOString()
     });
 
-    // 合并写入：50ms 内的操作合并为一次 INSERT
+    // 合并写入：50ms 内的操作合并为一次写入
     if (!this._timer) {
       this._timer = setTimeout(() => this._flush(), 50);
     }
   },
 
-  async _flush() {
+  _flush() {
     this._timer = null;
     const batch = this._batch.splice(0);
     if (!batch.length) return;
 
-    try {
-      const client = await Store._ensureClient();
-      const { error } = await client.from('operation_logs').insert(batch);
-      if (error) console.warn('操作日志写入失败（不影响主操作）：', error.message);
-    } catch (e) {
-      console.warn('操作日志写入异常（不影响主操作）：', e);
-    }
+    // 批量写入（不阻塞主流程）
+    Promise.all(batch.map(r =>
+      fetch(SUPABASE_CONFIG.url + '/rest/v1/operation_logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(r)
+      }).catch(() => {})
+    )).catch(() => {});
   },
 
   // 查询日志
   async query({ startDate, endDate, action, tableName, userId, offset = 0, limit = 200 } = {}) {
     try {
-      const client = await Store._ensureClient();
-      let query = client.from('operation_logs').select('*', { count: 'exact' });
+      const base = await Store._ensureClient();
+      let path = '/rest/v1/operation_logs?order=created_at.desc';
+      if (startDate) path += '&created_at=gte.' + startDate;
+      if (endDate) path += '&created_at=lte.' + endDate + 'T23:59:59Z';
+      if (action) path += '&action=eq.' + encodeURIComponent(action);
+      if (tableName) path += '&table_name=eq.' + encodeURIComponent(tableName);
+      if (userId) path += '&user_id=eq.' + encodeURIComponent(userId);
 
-      if (startDate) query = query.gte('created_at', startDate);
-      if (endDate) query = query.lte('created_at', endDate + 'T23:59:59Z');
-      if (action) query = query.eq('action', action);
-      if (tableName) query = query.eq('table_name', tableName);
-      if (userId) query = query.eq('user_id', userId);
-
-      const { data, error, count } = await query
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1);
-
-      if (error) throw error;
-      return { records: Store._toCamelList(data || []), total: count || 0 };
+      const res = await fetch(base + path + '&limit=' + limit + '&offset=' + offset);
+      const data = await res.json();
+      const records = Array.isArray(data) ? data : [];
+      return { records, total: records.length };
     } catch (e) {
       console.error('查询操作日志失败：', e);
       return { records: [], total: 0 };

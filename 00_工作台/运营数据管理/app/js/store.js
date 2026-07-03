@@ -1,135 +1,125 @@
-// store.js — Supabase 异步数据层（含 camelCase/snake_case 自动转换）
+// store.js — 后端 API 数据层（通过 fetch 调用自有 API，不再依赖 Supabase SDK）
 const Store = {
-  _supabase: null,
-  _clientPromise: null,
+  _apiBase: null,
 
   async _ensureClient() {
-    if (this._supabase) return this._supabase;
-    if (this._clientPromise) return this._clientPromise;
-    this._clientPromise = this._createClient();
-    return this._clientPromise;
-  },
-
-  async _createClient() {
-    if (typeof supabase === 'undefined') throw new Error('Supabase 客户端未加载，请检查网络连接后刷新页面');
-    this._supabase = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, { auth: { persistSession: false } });
-    this._ready = true;
-    return this._supabase;
-  },
-
-  // snake_case ↔ camelCase 转换
-  _toSnake(obj) {
-    if (!obj || typeof obj !== 'object') return obj;
-    const result = {};
-    for (const [key, val] of Object.entries(obj)) {
-      const snake = key.replace(/[A-Z]/g, m => '_' + m.toLowerCase());
-      result[snake] = val;
+    if (!this._apiBase) {
+      this._apiBase = (SUPABASE_CONFIG.url || '').replace(/\/+$/, '');
     }
-    return result;
+    if (!this._apiBase) throw new Error('API 地址未配置');
+    return this._apiBase;
   },
 
-  _toCamel(obj) {
-    if (!obj || typeof obj !== 'object') return obj;
-    const result = {};
-    for (const [key, val] of Object.entries(obj)) {
-      if (key === 'workshop_items' && Array.isArray(val)) {
-        result.workshopItems = val;
-        continue;
+  // ===== REST 请求封装 =====
+  async _request(method, path, body) {
+    const base = await this._ensureClient();
+    const url = base + path;
+    const opts = {
+      method,
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+    };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    if (!res.ok) {
+      let msg = '请求失败';
+      try { const e = await res.json(); msg = e.message || e.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    // 204 No Content
+    if (res.status === 204) return null;
+    const text = await res.text();
+    if (!text) return null;
+    return JSON.parse(text);
+  },
+
+  // ===== 查询构建 =====
+  _buildQuery(table, filters) {
+    let q = `/rest/v1/${table}`;
+    const params = [];
+    if (filters) {
+      for (const [key, val] of Object.entries(filters)) {
+        params.push(key + '=' + encodeURIComponent(val));
       }
-      const camel = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-      result[camel] = val;
     }
-    return result;
+    if (params.length) q += '?' + params.join('&');
+    return q;
   },
 
-  _toSnakeList(arr) { return (arr || []).map(o => this._toSnake(o)); },
-  _toCamelList(arr) { return (arr || []).map(o => this._toCamel(o)); },
-
-  _table(type) {
-    const name = TABLE_NAMES[type];
-    if (!name) throw new Error('未知数据类型：' + type);
-    return name;
-  },
-
-  _handleError(err, action) {
-    console.error('Supabase ' + action + ' 错误：', err);
-    if (!err) return;
-    const msg = err.message || String(err);
-    if (msg.includes('Failed to fetch')) {
-      UI.toast('网络连接失败，请检查网络后重试', 'error');
-    } else if (msg.includes('could not find') || msg.includes('relation') || msg.includes('does not exist')) {
-      UI.toast('数据库表结构异常，请确认已执行建表脚本', 'error');
-    } else {
-      UI.toast('操作失败：' + msg.slice(0, 80), 'error');
-    }
-  },
-
+  // ===== 通用 CRUD =====
   async getAll(type) {
-    const client = await this._ensureClient();
-    const { data, error } = await client.from(this._table(type)).select('*').order('date', { ascending: false }).limit(5000);
-    if (error) { this._handleError(error, '查询'); return []; }
-    return this._toCamelList(data);
+    try {
+      const table = this._table(type);
+      return await this._request('GET', `/rest/v1/${table}?order=date.desc&limit=5000`) || [];
+    } catch (e) {
+      this._handleError(e, '查询');
+      return [];
+    }
   },
 
   async getById(type, id) {
-    const client = await this._ensureClient();
-    const { data, error } = await client.from(this._table(type)).select('*').eq('id', id).single();
-    if (error) { this._handleError(error, '查询'); return null; }
-    return data ? this._toCamel(data) : null;
+    try {
+      const table = this._table(type);
+      const row = await this._request('GET', `/rest/v1/${table}?id=eq.${id}`);
+      return row || null;
+    } catch (e) {
+      this._handleError(e, '查询');
+      return null;
+    }
   },
 
   async add(type, record) {
-    const client = await this._ensureClient();
-    record.createdAt = record.createdAt || new Date().toISOString();
-    const dbRecord = this._toSnake(record);
-    const { data, error } = await client.from(this._table(type)).insert(dbRecord).select().single();
-    if (error) { this._handleError(error, '新增'); throw new Error(error.message); }
-    const result = data ? this._toCamel(data) : record;
-    OperationLogger.log('create', type, result.id, result);
-    return result;
+    try {
+      const table = this._table(type);
+      record.createdAt = record.createdAt || new Date().toISOString();
+      const result = await this._request('POST', `/rest/v1/${table}`, record);
+      OperationLogger.log('create', type, result.id, result);
+      return result;
+    } catch (e) {
+      this._handleError(e, '新增');
+      throw e;
+    }
   },
 
   async update(type, id, updates) {
-    const client = await this._ensureClient();
-    // 读取旧值（用于日志）
-    let oldRecord = null;
     try {
-      const { data: oldData } = await client.from(this._table(type)).select('*').eq('id', id).single();
-      oldRecord = oldData;
-    } catch (_) { /* 旧值不存在不影响更新 */ }
-
-    const dbUpdates = this._toSnake(updates);
-    const { data, error } = await client.from(this._table(type)).update(dbUpdates).eq('id', id).select().single();
-    if (error) { this._handleError(error, '更新'); throw new Error(error.message); }
-    const result = data ? this._toCamel(data) : null;
-
-    OperationLogger.log('update', type, id, {
-      before: oldRecord ? this._toCamel(oldRecord) : null,
-      after: result
-    });
-    return result;
+      const table = this._table(type);
+      // 读取旧值（用于日志）
+      let oldRecord = null;
+      try { oldRecord = await this.getById(type, id); } catch {}
+      const result = await this._request('PATCH', `/rest/v1/${table}?id=eq.${id}`, updates);
+      OperationLogger.log('update', type, id, {
+        before: oldRecord,
+        after: result
+      });
+      return result;
+    } catch (e) {
+      this._handleError(e, '更新');
+      throw e;
+    }
   },
 
   async delete(type, id) {
-    const client = await this._ensureClient();
-    // 读取被删记录（用于日志）
-    let deletedRecord = null;
     try {
-      const { data: oldData } = await client.from(this._table(type)).select('*').eq('id', id).single();
-      deletedRecord = oldData;
-    } catch (_) { /* 记录已不存在则跳过 */ }
-
-    const { data, error } = await client.from(this._table(type)).delete().eq('id', id);
-    if (error) { this._handleError(error, '删除'); throw new Error(error.message); }
-
-    OperationLogger.log('delete', type, id, deletedRecord ? this._toCamel(deletedRecord) : {});
+      const table = this._table(type);
+      // 读取被删记录（用于日志）
+      let oldRecord = null;
+      try { oldRecord = await this.getById(type, id); } catch {}
+      await this._request('DELETE', `/rest/v1/${table}?id=eq.${id}`);
+      OperationLogger.log('delete', type, id, oldRecord || {});
+    } catch (e) {
+      this._handleError(e, '删除');
+      throw e;
+    }
   },
 
   async getByDateRange(type, startDate, endDate) {
-    const client = await this._ensureClient();
-    const { data, error } = await client.from(this._table(type)).select('*').gte('date', startDate).lte('date', endDate).order('date', { ascending: false });
-    if (error) { this._handleError(error, '查询'); return []; }
-    return this._toCamelList(data);
+    try {
+      const table = this._table(type);
+      return await this._request('GET', `/rest/v1/${table}?date=gte.${startDate}&date=lte.${endDate}&order=date.desc`) || [];
+    } catch (e) {
+      this._handleError(e, '查询');
+      return [];
+    }
   },
 
   async getByMonth(type, yearMonth) {
@@ -141,20 +131,18 @@ const Store = {
   },
 
   async getByYear(type, year) {
-    const client = await this._ensureClient();
-    const { data, error } = await client.from(this._table(type)).select('*').gte('date', year + '-01-01').lte('date', year + '-12-31').order('date', { ascending: false });
-    if (error) { this._handleError(error, '查询'); return []; }
-    return this._toCamelList(data);
+    return this.getByDateRange(type, year + '-01-01', year + '-12-31');
   },
 
   async getByProject(type, projectName) {
-    const client = await this._ensureClient();
-    const table = this._table(type);
-    const field = type === 'expense' ? 'project' : 'project_name';
-    const camelField = type === 'expense' ? 'project' : 'projectName';
-    const { data, error } = await client.from(table).select('*').ilike(field, `%${projectName}%`);
-    if (error) { this._handleError(error, '查询'); return []; }
-    return this._toCamelList(data);
+    try {
+      const table = this._table(type);
+      const field = type === 'expense' ? 'project' : 'project_name';
+      return await this._request('GET', `/rest/v1/${table}?${field}=ilike.%25${encodeURIComponent(projectName)}%25`) || [];
+    } catch (e) {
+      this._handleError(e, '查询');
+      return [];
+    }
   },
 
   async getMonthlySummary(type, year) {
@@ -167,29 +155,26 @@ const Store = {
 
   async importData(type, records) {
     if (!records.length) return;
-    const client = await this._ensureClient();
-    const table = this._table(type);
-    const dbRecords = this._toSnakeList(records);
-    const batchSize = 100;
-    for (let i = 0; i < dbRecords.length; i += batchSize) {
-      const batch = dbRecords.slice(i, i + batchSize);
-      const { error } = await client.from(table).upsert(batch);
-      if (error) this._handleError(error, '导入');
+    for (const r of records) {
+      try { await this.add(type, r); } catch (e) { console.warn('导入失败:', e); }
     }
   },
 
   async clearAll(type) {
-    const client = await this._ensureClient();
-    const { error } = await client.from(this._table(type)).delete().neq('id', '_nonesuch_');
-    if (error) this._handleError(error, '清空');
+    try {
+      const table = this._table(type);
+      await this._request('DELETE', `/rest/v1/${table}?id=neq._nonesuch_`);
+    } catch (e) {
+      this._handleError(e, '清空');
+    }
   },
 
   async healthCheck() {
     try {
-      const client = await this._ensureClient();
-      const { data, error } = await client.from('revenue').select('*').limit(1);
-      if (error) throw error;
-      return { ok: true, message: '数据库连接正常' };
+      const base = await this._ensureClient();
+      const res = await fetch(base + '/rest/v1/revenue?limit=1');
+      if (res.ok) return { ok: true, message: '数据库连接正常' };
+      return { ok: false, message: '数据库连接失败：状态码 ' + res.status };
     } catch (e) {
       return { ok: false, message: '数据库连接失败：' + (e.message || e) };
     }
@@ -198,11 +183,8 @@ const Store = {
   // ===== 应用配置管理 =====
   async loadAppConfig() {
     try {
-      const client = await this._ensureClient();
-      const { data, error } = await client.from(CONFIG_TABLE).select('key, value');
-      if (error) throw error;
-      if (data && data.length > 0) {
-        // 更新 MODELS 中的动态配置
+      const data = await this._request('GET', '/rest/v1/app_config') || [];
+      if (data.length > 0) {
         data.forEach(row => {
           switch (row.key) {
             case 'ticket_products':
@@ -222,7 +204,6 @@ const Store = {
               break;
           }
         });
-        // 兼容旧代码的 COMBO_PRICE（ticket_products 第二项）
         if (MODELS.ticketProducts && MODELS.ticketProducts.length > 1) {
           MODELS.COMBO_PRICE = MODELS.ticketProducts[1].price;
         }
@@ -236,16 +217,40 @@ const Store = {
 
   async saveConfig(key, value) {
     try {
-      const client = await this._ensureClient();
-      const { error } = await client.from(CONFIG_TABLE).upsert(
-        { key, value, updated_at: new Date().toISOString() },
-        { onConflict: 'key' }
-      );
-      if (error) throw error;
+      const existing = await this._request('GET', `/rest/v1/app_config?key=eq.${key}`);
+      if (existing && existing.length > 0) {
+        await this._request('PATCH', `/rest/v1/app_config?key=eq.${key}`, { value, updated_at: new Date().toISOString() });
+      } else {
+        await this._request('POST', '/rest/v1/app_config', { key, value, updated_at: new Date().toISOString() });
+      }
       return true;
     } catch (e) {
       this._handleError(e, '保存配置');
       return false;
     }
-  }
+  },
+
+  // ===== 内部工具 =====
+  _table(type) {
+    const name = TABLE_NAMES[type];
+    if (!name) throw new Error('未知数据类型：' + type);
+    return name;
+  },
+
+  _handleError(err, action) {
+    console.error('API ' + action + ' 错误：', err);
+    if (!err) return;
+    const msg = err.message || String(err);
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      UI.toast('网络连接失败，请检查网络后重试', 'error');
+    } else {
+      UI.toast('操作失败：' + msg.slice(0, 80), 'error');
+    }
+  },
+
+  // 保留兼容性（camelCase 转换不再需要，后端已处理）
+  _toCamelList(arr) { return arr || []; },
+  _toSnakeList(arr) { return arr || []; },
+  _toCamel(o) { return o; },
+  _toSnake(o) { return o; }
 };

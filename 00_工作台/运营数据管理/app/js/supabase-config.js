@@ -1,16 +1,22 @@
-// supabase-config.js — Supabase 连接配置
+// supabase-config.js — API 连接配置（无 Supabase，直连自有后端）
 const SUPABASE_CONFIG = {
-  url: 'https://pyzitexdzfrbexwgoqpz.supabase.co',
-  anonKey: 'sb_publishable_wLj18C-NsgFqmjbk8QiAMg_bTuZCBOP'
+  url: 'http://122.51.56.50',
+  anonKey: 'aiwei_anon_key_public_2024'
 };
 
-// 表名映射
+// 表名映射（保持和 store.js 兼容）
 const TABLE_NAMES = {
   revenue: 'revenue',
   expense: 'expense',
   space: 'space_usage',
-  gallery: 'gallery_sales'
+  gallery: 'gallery_sales',
+  users: 'users',
+  operationLogs: 'operation_logs',
+  projectRegistry: 'project_registry',
+  inventory: 'inventory',
+  artworks: 'artworks',
+  partners: 'partners',
+  contentPosts: 'content_posts'
 };
 
-// app_config 表名（固定）
 const CONFIG_TABLE = 'app_config';
