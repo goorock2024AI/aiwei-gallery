@@ -222,6 +222,18 @@ table.data-table .tag {
 .tag-info { background: var(--blue-bg); color: var(--blue); }
 .tag-free { background: var(--gray-200); color: var(--gray-700); }
 
+/* 收入记录动态标签 */
+.rev-tag-group { display: flex; flex-wrap: wrap; gap: 4px; }
+.rev-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--green-100);
+  color: var(--green-900);
+  white-space: nowrap;
+}
+
 /* 概览仪表盘 */
 .stats-grid {
   display: grid;

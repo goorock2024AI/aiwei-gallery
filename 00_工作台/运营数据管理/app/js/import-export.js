@@ -24,16 +24,24 @@ const ImportExport = {
   },
 
   async exportCSV(type) {
-    const { start, end } = this._getExportDates();
-    const all = await Store.getAll(type);
-    const records = this._filterByDateRange(all, start, end);
-    if (!records.length) { UI.toast('没有数据可以导出' + (all.length ? '（所选范围内无数据）' : ''), 'error'); return; }
+    try {
+      const { start, end } = this._getExportDates();
+      const all = await Store.getAll(type);
+      const records = this._filterByDateRange(all, start, end);
+      if (!records.length) { UI.toast('没有数据可以导出' + (all.length ? '（所选范围内无数据）' : ''), 'error'); return; }
 
-    let headers, rows;
-    if (type === 'revenue') {
-      headers = ['日期','门票数量','门票金额','咖啡套票数量','咖啡套票金额','工坊金额','文创金额','场地金额','其他金额','其他说明','现金收款','账户收款','关联项目','经手人','备注','创建时间'];
-      rows = records.map(r => [r.date, r.ticketQty||0, r.ticketAmount||0, r.coffeeQty||0, r.coffeeAmount||0, r.workshopAmount||0, r.creativeAmount||0, r.venueAmount||0, r.otherAmount||0, r.otherDesc||'', r.cashAmount||0, r.accountAmount||0, r.projectName||'', r.handler||'', r.notes||'', r.createdAt||'']);
-    } else if (type === 'expense') {
+      let headers, rows;
+      if (type === 'revenue') {
+        headers = ['日期','门票数量','门票金额','咖啡套票数量','咖啡套票金额','工坊金额','工坊明细','文创金额','文创明细','场地金额','其他金额','其他说明','现金收款','账户收款','经手人','备注','创建时间'];
+        rows = records.map(r => {
+          const retailAmt = +(r.retailAmount || r.creativeAmount || 0);
+          const retailItems = Array.isArray(r.retailItems) ? r.retailItems : [];
+          const workshopItems = Array.isArray(r.workshopItems) ? r.workshopItems : [];
+          const retailDetail = retailItems.map(i => `${i.productName||''}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
+          const workshopDetail = workshopItems.map(i => `${i.name||''}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
+          return [r.date, r.ticketQty||0, r.ticketAmount||0, r.coffeeQty||0, r.coffeeAmount||0, r.workshopAmount||0, workshopDetail, retailAmt, retailDetail, r.venueAmount||0, r.otherAmount||0, r.otherDesc||'', r.cashAmount||0, r.accountAmount||0, r.handler||'', r.notes||'', r.createdAt||''];
+        });
+      } else if (type === 'expense') {
       headers = ['日期','类型','项目','类别','金额','内容说明','经手人','发票状态','凭证状态','关联活动','创建时间'];
       rows = records.map(r => [r.date, r.type, r.project, r.category, r.amount, r.description||'', r.handler||'', r.invoiceStatus, r.receiptStatus, r.relatedActivity||'', r.createdAt||'']);
     } else if (type === 'space') {
@@ -57,6 +65,7 @@ const ImportExport = {
     link.click();
     URL.revokeObjectURL(link.href);
     UI.toast(`${typeNames[type]}数据已导出`);
+    } catch (e) { console.error('导出失败', e); UI.toast('导出失败：' + e.message, 'error'); }
   },
 
   async exportAllJSON() {

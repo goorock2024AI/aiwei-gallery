@@ -492,6 +492,7 @@ const UI = {
       otherDesc: $('#rev-other-desc')?.value || '',
       paymentMethod,
       projectName: '',
+      handler: Auth.currentUser?.displayName || '',
       notes: $('#rev-notes')?.value || '',
       cashAmount: paymentMethod === '扫码支付' || paymentMethod === '对公转账' ? 0 : total,
       accountAmount: paymentMethod !== '扫码支付' && paymentMethod !== '对公转账' ? 0 : total
@@ -586,11 +587,11 @@ const UI = {
     });
 
     // 工坊
-    this._workshopItems = (r.workshopItems || []).map(i => ({ ...i }));
+    this._workshopItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(i => ({ ...i }));
     this._renderWorkshopList();
 
     // 文创
-    this._retailItems = (r.retailItems || []).map(i => ({ ...i }));
+    this._retailItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(i => ({ ...i }));
     this._renderRetailList();
 
     // 其他
@@ -627,23 +628,33 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">💰</div>暂无收入记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>普通票</th><th>套票</th><th>咖啡</th><th>工坊</th><th>文创</th><th>其他</th><th>合计</th><th>收款方式</th><th>项目</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>收入明细</th><th>合计</th><th>收款方式</th><th>收款人</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
-      const total = (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0);
+      const tags = [];
+      if ((r.ticketAmount || 0) > 0) tags.push(`🎫 普通票 ${r.ticketQty||0}张 ¥${this._fmt(r.ticketAmount)}`);
+      if ((r.comboAmount || 0) > 0) tags.push(`🎟️ 套票 ${r.comboQty||0}张 ¥${this._fmt(r.comboAmount)}`);
+      if ((r.coffeeAmount || 0) > 0) tags.push(`☕ 咖啡 ${r.coffeeQty||0}杯 ¥${this._fmt(r.coffeeAmount)}`);
+      if ((r.workshopAmount || 0) > 0) tags.push(`🔧 工坊 ¥${this._fmt(r.workshopAmount)}`);
+      const retail = r.retailAmount || r.creativeAmount || 0;
+      if (retail > 0) tags.push(`🛒 文创 ¥${this._fmt(retail)}`);
+      if ((r.venueAmount || 0) > 0) tags.push(`🏛 场地 ¥${this._fmt(r.venueAmount)}`);
+      if ((r.otherAmount || 0) > 0) {
+        const desc = r.otherDesc ? `(${r.otherDesc})` : '';
+        tags.push(`📝 其他${desc} ¥${this._fmt(r.otherAmount)}`);
+      }
+
+      const total = (r.ticketAmount||0)+(r.comboAmount||0)+(r.coffeeAmount||0)+(r.workshopAmount||0)+(r.retailAmount||r.creativeAmount||0)+(r.venueAmount||0)+(r.otherAmount||0);
       h += `<tr>
         <td>${r.date}</td>
-        <td>${r.ticketQty||0}张 / ${this._fmt(r.ticketAmount)}</td>
-        <td>${r.comboQty||0}张 / ${this._fmt(r.comboAmount)}</td>
-        <td>${r.coffeeQty||0}杯 / ${this._fmt(r.coffeeAmount)}</td>
-        <td>${this._fmt(r.workshopAmount)}</td>
-        <td>${this._fmt(r.retailAmount || r.creativeAmount)}</td>
-        <td>${r.otherDesc ? r.otherDesc + ' ' : ''}${this._fmt(r.otherAmount)}</td>
-        <td><strong>${this._fmt(total)}</strong></td>
+        <td><div class="rev-tag-group">${tags.map(t => `<span class="rev-tag">${t}</span>`).join('')}</div></td>
+        <td><strong>¥${this._fmt(total)}</strong></td>
         <td><span class="tag tag-info">${r.paymentMethod || '—'}</span></td>
-        <td>${r.projectName || '-'}</td>
-        <td class="row-actions">
-          <button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>
-          <button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>
+        <td>${r.handler || '—'}</td>
+        <td class="action-cell">
+          <div class="row-actions">
+            <button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>
+            <button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>
+          </div>
         </td>
       </tr>`;
     });
