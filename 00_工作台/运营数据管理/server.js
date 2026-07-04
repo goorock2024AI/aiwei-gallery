@@ -5,12 +5,13 @@ const path = require('path');
 const url = require('url');
 const crypto = require('crypto');
 
+const DB_HOST = process.env.DB_HOST || '127.0.0.1';
 const DB_PASS = process.env.DB_PASS || 'Aiwei2024Gallery';
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = '/var/www/aiwei';
 
 const pool = new Pool({
-  host: '127.0.0.1',
+  host: DB_HOST,
   port: 5432,
   user: 'postgres',
   password: DB_PASS,
@@ -18,24 +19,33 @@ const pool = new Pool({
   max: 10
 });
 
-// snake_case to camelCase
+// snake_case to camelCase（NUMERIC 类型转数字）
 function toCamel(row) {
   if (!row) return row;
+  const NUMERIC_COLS = new Set([
+    'ticket_amount','combo_amount','coffee_amount','workshop_amount',
+    'creative_amount','venue_amount','other_amount','cash_amount','account_amount',
+    'retail_amount','price','commission','receivable_amount','received_amount',
+    'amount'
+  ]);
   const o = {};
   for (let k of Object.keys(row)) {
     let ck = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-    o[ck] = row[k];
+    let v = row[k];
+    if (NUMERIC_COLS.has(k) && typeof v === 'string') v = parseFloat(v) || 0;
+    o[ck] = v;
   }
   return o;
 }
 
-// camelCase to snake_case
+// camelCase to snake_case (递归支持数组)
 function toSnake(obj) {
-  if (!obj) return obj;
+  if (Array.isArray(obj)) return obj.map(v => toSnake(v));
+  if (obj === null || typeof obj !== 'object') return obj;
   const o = {};
   for (let k of Object.keys(obj)) {
     let sk = k.replace(/[A-Z]/g, m => '_' + m.toLowerCase());
-    o[sk] = obj[k];
+    o[sk] = toSnake(obj[k]);
   }
   return o;
 }
@@ -52,18 +62,69 @@ function parsePath(reqUrl) {
 }
 
 function sendJSON(res, status, data, count) {
-  res.writeHead(status, {
+  const headers = {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': '*'
-  });
-  if (count !== undefined) res.setHeader('Content-Range', `0-${data.length}/${count}`);
+  };
+  if (count !== undefined) headers['Content-Range'] = `0-${data.length}/${count}`;
+  res.writeHead(status, headers);
   res.end(JSON.stringify(data));
 }
 
 function sendError(res, status, msg) {
   sendJSON(res, status, { error: msg, message: msg });
+}
+
+// --- POST /rest/v1/login --- 服务端密码校验
+async function handleLogin(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', async () => {
+    try {
+      const { username, password } = JSON.parse(body);
+      if (!username || !password) return sendError(res, 400, '请输入用户名和密码');
+      const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+      const user = result.rows[0];
+      if (!user) return sendError(res, 401, '用户不存在');
+      if (!user.is_active) return sendError(res, 403, '账号已被禁用，请联系管理员');
+
+      const stored = user.password_hash || '';
+      let needChange = false;
+      let actualHash = stored;
+      if (stored.startsWith('__need_change__:')) {
+        needChange = true;
+        actualHash = stored.slice('__need_change__:'.length);
+      }
+      const inputHash = sha256(password);
+      if (inputHash !== actualHash) return sendError(res, 401, '密码错误');
+
+      // 更新 last_login_at
+      await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+      sendJSON(res, 200, {
+        id: user.id, username: user.username,
+        displayName: user.display_name || user.username,
+        role: user.role, needPasswordChange: needChange
+      });
+    } catch (e) { sendError(res, 400, e.message); }
+  });
+}
+
+// --- POST /rest/v1/change-password --- 修改密码
+async function handleChangePassword(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', async () => {
+    try {
+      const { userId, newPassword } = JSON.parse(body);
+      if (!userId || !newPassword) return sendError(res, 400, '参数不完整');
+      if (newPassword.length < 6) return sendError(res, 400, '密码长度至少 6 位');
+      const hash = sha256(newPassword);
+      await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, userId]);
+      sendJSON(res, 200, { success: true });
+    } catch (e) { sendError(res, 400, e.message); }
+  });
 }
 
 // --- REST API ---
@@ -96,22 +157,25 @@ async function handleREST(req, res, urlInfo) {
       // Handle id=eq.{id}
       for (let k of Object.keys(query)) {
         if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset') continue;
-        let v = query[k];
-        if (v.startsWith('eq.')) {
-          conditions.push(`"${k}" = $${paramIdx++}`);
-          params.push(v.slice(3));
-        } else if (v.startsWith('neq.')) {
-          conditions.push(`"${k}" <> $${paramIdx++}`);
-          params.push(v.slice(4));
-        } else if (v.startsWith('gte.')) {
-          conditions.push(`"${k}" >= $${paramIdx++}`);
-          params.push(v.slice(4));
-        } else if (v.startsWith('lte.')) {
-          conditions.push(`"${k}" <= $${paramIdx++}`);
-          params.push(v.slice(4));
-        } else if (v.startsWith('ilike.')) {
-          conditions.push(`"${k}" ILIKE $${paramIdx++}`);
-          params.push(v.slice(6));
+        let vals = query[k];
+        if (!Array.isArray(vals)) vals = [vals];
+        for (let v of vals) {
+          if (v.startsWith('eq.')) {
+            conditions.push(`"${k}" = $${paramIdx++}`);
+            params.push(v.slice(3));
+          } else if (v.startsWith('neq.')) {
+            conditions.push(`"${k}" <> $${paramIdx++}`);
+            params.push(v.slice(4));
+          } else if (v.startsWith('gte.')) {
+            conditions.push(`"${k}" >= $${paramIdx++}`);
+            params.push(v.slice(4));
+          } else if (v.startsWith('lte.')) {
+            conditions.push(`"${k}" <= $${paramIdx++}`);
+            params.push(v.slice(4));
+          } else if (v.startsWith('ilike.')) {
+            conditions.push(`"${k}" ILIKE $${paramIdx++}`);
+            params.push(v.slice(6));
+          }
         }
       }
 
@@ -280,7 +344,13 @@ const server = http.createServer((req, res) => {
   }
 
   if (parts[0] === 'rest' && parts[1] === 'v1') {
-    handleREST(req, res, urlInfo);
+    if (parts[2] === 'login' && req.method === 'POST') {
+      handleLogin(req, res);
+    } else if (parts[2] === 'change-password' && req.method === 'POST') {
+      handleChangePassword(req, res);
+    } else {
+      handleREST(req, res, urlInfo);
+    }
   } else {
     serveStatic(req, res, pathname);
   }

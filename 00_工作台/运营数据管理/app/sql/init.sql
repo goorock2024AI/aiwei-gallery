@@ -1,15 +1,8 @@
--- 艾维美术馆运营数据管理系统 - 数据库初始化
--- 注意：使用 snake_case 字段名，store.js 会自动与 JS camelCase 互转
+-- 艾维美术馆运营数据管理系统 · 数据库初始化
+-- 用于 Docker 首次启动时自动建表
 
--- 先删除旧表
-DROP TABLE IF EXISTS revenue CASCADE;
-DROP TABLE IF EXISTS expense CASCADE;
-DROP TABLE IF EXISTS space_usage CASCADE;
-DROP TABLE IF EXISTS gallery_sales CASCADE;
-DROP TABLE IF EXISTS app_config CASCADE;
-
--- 1. 收入表（兼容 POS 收银全部字段）
-CREATE TABLE revenue (
+-- 1. 收入表
+CREATE TABLE IF NOT EXISTS revenue (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
   ticket_qty INTEGER DEFAULT 0,
@@ -36,11 +29,10 @@ CREATE TABLE revenue (
   notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX idx_revenue_date ON revenue(date);
+CREATE INDEX IF NOT EXISTS idx_revenue_date ON revenue(date);
 
 -- 2. 支出表
-CREATE TABLE expense (
+CREATE TABLE IF NOT EXISTS expense (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
   type TEXT DEFAULT '备用金支出',
@@ -54,11 +46,10 @@ CREATE TABLE expense (
   related_activity TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX idx_expense_date ON expense(date);
+CREATE INDEX IF NOT EXISTS idx_expense_date ON expense(date);
 
 -- 3. 空间使用表
-CREATE TABLE space_usage (
+CREATE TABLE IF NOT EXISTS space_usage (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
   end_date TEXT DEFAULT '',
@@ -73,11 +64,10 @@ CREATE TABLE space_usage (
   notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX idx_space_usage_date ON space_usage(date);
+CREATE INDEX IF NOT EXISTS idx_space_usage_date ON space_usage(date);
 
 -- 4. 画廊销售表
-CREATE TABLE gallery_sales (
+CREATE TABLE IF NOT EXISTS gallery_sales (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
   artwork_name TEXT DEFAULT '',
@@ -92,35 +82,126 @@ CREATE TABLE gallery_sales (
   notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX idx_gallery_sales_date ON gallery_sales(date);
+CREATE INDEX IF NOT EXISTS idx_gallery_sales_date ON gallery_sales(date);
 
 -- 5. 应用配置表
-CREATE TABLE app_config (
+CREATE TABLE IF NOT EXISTS app_config (
   key TEXT PRIMARY KEY,
   value JSONB DEFAULT '{}',
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 关闭 RLS
+-- 6. 用户表
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  display_name TEXT DEFAULT '',
+  password_hash TEXT NOT NULL,
+  role TEXT DEFAULT 'editor',
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_login_at TIMESTAMPTZ
+);
+
+-- 7. 操作日志表
+CREATE TABLE IF NOT EXISTS operation_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  record_id TEXT DEFAULT '',
+  details JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_operation_logs_created ON operation_logs(created_at);
+
+-- 8. 项目注册表
+CREATE TABLE IF NOT EXISTS project_registry (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  repository TEXT DEFAULT '',
+  status TEXT DEFAULT 'active',
+  tags JSONB DEFAULT '[]',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 9. 库存表
+CREATE TABLE IF NOT EXISTS inventory (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  category TEXT DEFAULT '',
+  quantity INTEGER DEFAULT 0,
+  unit TEXT DEFAULT '个',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 10. 艺术品表
+CREATE TABLE IF NOT EXISTS artworks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  artist TEXT DEFAULT '',
+  year TEXT DEFAULT '',
+  medium TEXT DEFAULT '',
+  dimensions TEXT DEFAULT '',
+  location TEXT DEFAULT '',
+  status TEXT DEFAULT '在库',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 11. 合作伙伴表
+CREATE TABLE IF NOT EXISTS partners (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT DEFAULT '',
+  contact TEXT DEFAULT '',
+  phone TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 12. 内容发布表
+CREATE TABLE IF NOT EXISTS content_posts (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  platform TEXT DEFAULT '',
+  publish_date TEXT DEFAULT '',
+  status TEXT DEFAULT '草稿',
+  url TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 关闭 RLS（兼容当前认证方案）
 ALTER TABLE revenue DISABLE ROW LEVEL SECURITY;
 ALTER TABLE expense DISABLE ROW LEVEL SECURITY;
 ALTER TABLE space_usage DISABLE ROW LEVEL SECURITY;
 ALTER TABLE gallery_sales DISABLE ROW LEVEL SECURITY;
 ALTER TABLE app_config DISABLE ROW LEVEL SECURITY;
+ALTER TABLE users DISABLE ROW LEVEL SECURITY;
+ALTER TABLE operation_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE project_registry DISABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory DISABLE ROW LEVEL SECURITY;
+ALTER TABLE artworks DISABLE ROW LEVEL SECURITY;
+ALTER TABLE partners DISABLE ROW LEVEL SECURITY;
+ALTER TABLE content_posts DISABLE ROW LEVEL SECURITY;
 
 -- 种子配置数据
 INSERT INTO app_config (key, value) VALUES
 ('ticket_products', '[{"name":"普通票","price":10},{"name":"套票","price":25}]'),
 ('coffee_products', '[{"name":"手冲咖啡","price":15}]'),
 ('workshop_products', '[{"name":"果壳风铃","price":128},{"name":"豆荚娃娃","price":118},{"name":"迷你冰箱贴","price":35},{"name":"木刻杯垫","price":88},{"name":"A5木刻","price":168},{"name":"A4木刻","price":198},{"name":"拓印体验","price":38}]'),
-('spaces', '[{"name":"1号厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"2号厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"美学空间","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"多功能厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"六楼综合空间","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"走廊画廊","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"户外露台","dailyPrice":0,"halfDayPrice":0,"desc":""}]');
+('spaces', '[{"name":"1号厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"2号厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"美学空间","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"多功能厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"六楼综合空间","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"走廊画廊","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"户外露台","dailyPrice":0,"halfDayPrice":0,"desc":""}]')
+ON CONFLICT (key) DO NOTHING;
 
--- 验证
-SELECT 'revenue' AS table_name, count(*)::int AS row_count FROM revenue
-UNION ALL
-SELECT 'expense', count(*) FROM expense
-UNION ALL
-SELECT 'space_usage', count(*) FROM space_usage
-UNION ALL
-SELECT 'gallery_sales', count(*) FROM gallery_sales;
+-- 默认管理员（密码: admin888）
+INSERT INTO users (id, username, display_name, password_hash, role, is_active) VALUES
+('usr_admin_init', 'admin', '管理员', '__need_change__:9f6e6800cfae7749eb6c8036192359176c43e0f113492473ac8c9535bdb7e7f8', 'admin', true)
+ON CONFLICT (username) DO NOTHING;
