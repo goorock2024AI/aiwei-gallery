@@ -19,10 +19,18 @@
 ## 启动流程
 1. 读 INDEX.md 了解总览。
 2. 根据任务确定所属子仓库，只在该仓内工作。
-3. 跨仓库数据通过 Supabase 查询，不跨仓读文件。
+3. 跨仓库数据通过**腾讯云 API** 查询（`http://122.51.56.50/rest/v1/{table}`），不跨仓读文件。
 
 ## 数据管理
-- 项目注册表在 registry/，同时写入 Supabase project_registry 表。
-- 财务数据从 Supabase 实时获取，不从文档读取。
+- 项目注册表在 registry/，同时写入腾讯云 API（原 Supabase project_registry 表）。
+- 财务数据从**腾讯云 API** 实时获取，不从文档读取。
 - 项目状态以 registry/*.md 为准。
+
+## 运营数据系统信息
+- 访问地址：http://122.51.56.50
+- 管理员账号：admin / admin888
+- 部署方式：腾讯云轻量服务器 Docker（Nginx + Node.js API + PostgreSQL 17）
+- 仓库位置：`00_工作台/运营数据管理/`（核心文件：server.js + app/）
+- 开发日志：`00_工作台/运营数据管理/POS收银台开发日志.md`
+- 详细运维：`00_工作台/运营数据管理/艾维美术馆运营数据管理系统-部署方案.md`
 

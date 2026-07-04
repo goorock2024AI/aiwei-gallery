@@ -16,7 +16,9 @@
 | 全馆整体评估 | 查 Supabase + 读 INDEX.md |
 
 ## 数据规则
-- 财务数据从 Supabase 实时获取，不从文档获取
+- 财务数据从**腾讯云自建 API** 实时获取（不再使用 Supabase）
+- API 地址：`http://122.51.56.50/rest/v1/{table}`
+- 旧 Supabase 实例（`pyzitexdzfrbexwgoqpz.supabase.co`）已停止使用
 - 项目状态以 registry/*.md 为准
 - 更新项目状态时同时更新 registry 文件和 Supabase project_registry 表
 - 所有业务的"项目名称"在录入时保持与 registry 中 ops_project_name 一致

@@ -1,12 +1,12 @@
 # 艾维美术馆 — 系统索引
 
-更新时间：2026-06-28
+更新时间：2026-07-04
 
 ## 子仓库
 
 | 仓库 | 路径 | 说明 |
 |------|------|------|
-| **aiwei-operations** | ./aiwei-operations/ | 运营数据管理系统（Supabase + 前端） |
+| **aiwei-operations** | ./aiwei-operations/ | 运营数据管理系统（腾讯云 Docker 部署） |
 | **aiwei-planning** | ./aiwei-planning/ | 规划文档 + 项目注册表 |
 | **aiwei-content** | ./aiwei-content/ | 自媒体内容排期与发布记录 |
 
@@ -15,9 +15,19 @@
 - 运营系统开发 → 进入 aiwei-operations/
 - 展览策划/项目跟踪 → 进入 aiwei-planning/registry/
 - 写推文/内容排期 → 进入 aiwei-content/
-- 查数据 → 查 Supabase（revenue / expense / space_usage / gallery_sales / project_registry）
-- 全馆整体情况 → 读本 INDEX.md + 查全表
+- 查数据 → 查腾讯云 API（http://122.51.56.50/rest/v1/{table}）
+- 全馆整体情况 → 读本 INDEX.md + 查 API
 -->
+
+## 运营数据管理系统
+
+| 项目 | 内容 |
+|------|------|
+| 访问地址 | http://122.51.56.50 |
+| 管理员账号 | admin / admin888 |
+| 部署方式 | 腾讯云轻量服务器 + Docker Compose 3 容器 |
+| 技术栈 | Nginx + Node.js API + PostgreSQL 17 |
+| Git 仓库 | https://github.com/goorock/aiwei-gallery.git |
 
 ## 活跃项目
 

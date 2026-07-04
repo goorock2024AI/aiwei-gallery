@@ -1,4 +1,4 @@
-// supabase-config.js — API 连接配置（无 Supabase，直连自有后端）
+// supabase-config.js — API 连接配置（指向自有后端，不再使用 Supabase）
 const SUPABASE_CONFIG = {
   url: 'http://122.51.56.50',
   anonKey: 'aiwei_anon_key_public_2024'
