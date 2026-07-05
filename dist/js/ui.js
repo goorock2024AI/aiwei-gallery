@@ -372,7 +372,7 @@ const UI = {
     let listHtml = available.map(p => `
       <div class="cp-select-item" onclick="UI._fillCreativeFromPOS('${p.id}')" style="cursor:pointer;padding:8px 12px;border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center">
         <span><strong>${p.name}</strong> <span style="color:var(--gray-500);font-size:12px">${p.sku || ''}</span></span>
-        <span style="color:var(--green-700)">¥${(p.retailPrice||0).toFixed(2)} <span style="color:var(--gray-500);font-size:12px">库存:${p.stock||0}${p.unit||'个'}</span></span>
+        <span style="color:var(--green-700)">¥${(+p.retailPrice||0).toFixed(2)} <span style="color:var(--gray-500);font-size:12px">库存:${p.stock||0}${p.unit||'个'}</span></span>
       </div>`).join('') || '<div style="padding:20px;text-align:center;color:var(--gray-500)">无可用产品</div>';
     overlay.innerHTML = `
       <div class="modal-card" style="min-width:400px;max-height:80vh;overflow-y:auto">
@@ -404,7 +404,7 @@ const UI = {
       const p = overlay._cpList.find(x => x.id === id);
       if (p) {
         document.getElementById('rt-name').value = p.name;
-        document.getElementById('rt-price').value = p.retailPrice || 0;
+        document.getElementById('rt-price').value = +p.retailPrice || 0;
         document.getElementById('rt-qty').value = 1;
       }
       overlay.remove();
@@ -551,7 +551,7 @@ const UI = {
     // 主记录：门票 + 咖啡 + 其他
     const mainRecord = {
       ...baseRecord,
-      ticketItems: tItems,  // 合入套票一起存 ticket_items
+      ticketItems: tItems,  // 合人套票一起存 ticket_items（combo 明细不入独立列）
       ticketQty: tItems.reduce((s, i) => s + i.qty, 0),
       ticketAmount: regularTicketItems.reduce((s, i) => s + i.amount, 0),
       comboQty: comboItems.reduce((s, i) => s + i.qty, 0),
@@ -2079,7 +2079,7 @@ const UI = {
     const headers = ['产品名称','SKU','供应商','进货价','零售价','库存','单位','备注'];
     const rows = this._creativeProducts.map(p => [
       p.name || '', p.sku || '', p.supplier || '',
-      (p.costPrice || 0).toFixed(2), (p.retailPrice || 0).toFixed(2),
+      (+p.costPrice || 0).toFixed(2), (+p.retailPrice || 0).toFixed(2),
       p.stock || 0, p.unit || '个', p.notes || ''
     ]);
     this._downloadCSV(headers, rows, '文创产品列表');

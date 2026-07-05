@@ -20,11 +20,18 @@ try {
 }
 
 // 获取 git commit 短哈希作为缓存标记
+// 如果工作区有未提交修改，改用时间戳确保缓存失效
 let cacheBust = '';
 try {
-  cacheBust = execSync('git rev-parse --short HEAD', { cwd: ROOT }).toString().trim();
+  const status = execSync('git status --porcelain', { cwd: ROOT }).toString().trim();
+  if (status.length > 0) {
+    cacheBust = Date.now().toString(36);
+    console.log('[build-version] ⚠️ 工作区有未提交修改，使用时间戳作为缓存标记');
+  } else {
+    cacheBust = execSync('git rev-parse --short HEAD', { cwd: ROOT }).toString().trim();
+  }
 } catch {
-  console.error('[build-version] 错误：无法获取 git commit，使用时间戳');
+  console.error('[build-version] 错误：无法获取 git 信息，使用时间戳');
   cacheBust = Date.now().toString(36);
 }
 
