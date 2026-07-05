@@ -49,7 +49,7 @@ const Store = {
   async getAll(type) {
     try {
       const table = this._table(type);
-      return await this._request('GET', `/rest/v1/${table}?order=date.desc&limit=5000`) || [];
+      return await this._request('GET', `/rest/v1/${table}?order=created_at.desc&limit=5000`) || [];
     } catch (e) {
       this._handleError(e, '查询');
       return [];
@@ -115,7 +115,7 @@ const Store = {
   async getByDateRange(type, startDate, endDate) {
     try {
       const table = this._table(type);
-      return await this._request('GET', `/rest/v1/${table}?date=gte.${startDate}&date=lte.${endDate}&order=date.desc`) || [];
+      return await this._request('GET', `/rest/v1/${table}?date=gte.${startDate}&date=lte.${endDate}&order=created_at.desc`) || [];
     } catch (e) {
       this._handleError(e, '查询');
       return [];

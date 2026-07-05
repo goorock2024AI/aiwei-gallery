@@ -54,10 +54,11 @@ mkdir -p deploy-pkg
 # 复制必需文件
 cp Dockerfile docker-compose.yml nginx.conf server.js package.json deploy-pkg/
 cp -r app deploy-pkg/app
-# 删除不需要的文件（lib 中的 supabase SDK 可保留但不会被使用，sql 目录由 init.sql 挂载）
+# 删除不需要的文件（lib 中的 supabase SDK）
 rm -f deploy-pkg/app/lib/supabase.umd.min.js
-
-# 创建 .env 文件（不包含敏感信息提交到版本控制）
+# 构建注入：版本号 + JS/CSS 缓存标记
+node scripts/build-version.js
+# 创建 .env 文件
 echo "DB_PASSWORD=$DB_PASSWORD" > deploy-pkg/.env
 
 # 打包
@@ -115,7 +116,6 @@ info "  Docker Compose: $(docker compose version)"
 # 加载环境变量
 set -a; source "$APP_DIR/.env"; set +a
 
-# 登录到 Docker Hub（非必需，postgres/nginx 使用公共镜像）
 # 构建并启动全部服务
 info "  构建并启动 Docker 服务..."
 cd "$APP_DIR"

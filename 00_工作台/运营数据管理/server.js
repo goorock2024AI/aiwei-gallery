@@ -19,6 +19,22 @@ const pool = new Pool({
   max: 10
 });
 
+// JSONB 列名（用于序列化数组为 JSON 字符串，避免 pg 错误序列化为 PG 数组字面量）
+const JSONB_COLS = new Set([
+  'ticket_items','coffee_items','workshop_items','retail_items'
+]);
+
+// 各表实际存在的列（用于过滤前端传入的非法列名）
+const TABLE_COLS = {
+  revenue: new Set([
+    'id','date','ticket_qty','ticket_amount','combo_qty','combo_amount',
+    'coffee_qty','coffee_amount','ticket_items','coffee_items','workshop_items',
+    'workshop_amount','retail_items','retail_amount','creative_amount',
+    'venue_amount','other_amount','other_desc','cash_amount','account_amount',
+    'payment_method','project_name','handler','notes','created_at'
+  ]),
+};
+
 // snake_case to camelCase（NUMERIC 类型转数字）
 function toCamel(row) {
   if (!row) return row;
@@ -139,7 +155,8 @@ async function handleREST(req, res, urlInfo) {
     'gallery_sales': 'gallery_sales', 'app_config': 'app_config',
     'users': 'users', 'operation_logs': 'operation_logs',
     'project_registry': 'project_registry', 'inventory': 'inventory',
-    'artworks': 'artworks', 'partners': 'partners', 'content_posts': 'content_posts'
+    'artworks': 'artworks', 'partners': 'partners', 'content_posts': 'content_posts',
+    'creative_products': 'creative_products'
   };
   const dbTable = tableMap[table];
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);
@@ -223,9 +240,15 @@ async function handleREST(req, res, urlInfo) {
           let data = JSON.parse(body);
           data = toSnake(data);
           if (!data.created_at) data.created_at = new Date().toISOString();
+          // 过滤不存在的列（防御前端发送不存在的字段）
+          const allowed = TABLE_COLS[dbTable];
+          if (allowed) {
+            Object.keys(data).forEach(k => { if (!allowed.has(k)) delete data[k]; });
+          }
 
+          // JSON.stringify JSONB 数组，否则 pg 会错误序列化为 PG 数组字面量
           const cols = Object.keys(data);
-          const vals = Object.values(data);
+          const vals = cols.map(k => JSONB_COLS.has(k) && Array.isArray(data[k]) ? JSON.stringify(data[k]) : data[k]);
           const placeholders = vals.map((_, i) => `$${i + 1}`);
           const sql = `INSERT INTO "${dbTable}" (${cols.map(c => '"' + c + '"').join(',')}) VALUES (${placeholders.join(',')}) RETURNING *`;
           const result = await pool.query(sql, vals);
@@ -254,8 +277,14 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
-          const setClauses = Object.keys(data).map((k, i) => `"${k}" = $${i + 1}`);
-          const vals = Object.values(data);
+          // 过滤不存在的列（防御前端发送不存在的字段）
+          const allowed = TABLE_COLS[dbTable];
+          if (allowed) {
+            Object.keys(data).forEach(k => { if (!allowed.has(k)) delete data[k]; });
+          }
+          const keys = Object.keys(data);
+          const vals = keys.map(k => JSONB_COLS.has(k) && Array.isArray(data[k]) ? JSON.stringify(data[k]) : data[k]);
+          const setClauses = keys.map((k, i) => `"${k}" = $${i + 1}`);
           vals.push(idVal);
           const sql = `UPDATE "${dbTable}" SET ${setClauses.join(',')} WHERE "id" = $${vals.length} RETURNING *`;
           const result = await pool.query(sql, vals);

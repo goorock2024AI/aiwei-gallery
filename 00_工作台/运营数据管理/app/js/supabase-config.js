@@ -16,7 +16,8 @@ const TABLE_NAMES = {
   inventory: 'inventory',
   artworks: 'artworks',
   partners: 'partners',
-  contentPosts: 'content_posts'
+  contentPosts: 'content_posts',
+  creativeProducts: 'creative_products'
 };
 
 const CONFIG_TABLE = 'app_config';

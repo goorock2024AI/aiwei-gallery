@@ -81,7 +81,7 @@ function calcWorkshopTotal(items) {
     const qty = +item.qty || 0;
     const price = +item.unitPrice || 0;
     const disc = +item.discount || 0;
-    return sum + qty * price * (1 - disc / 100);
+    return sum + Math.max(0, qty * price - disc);
   }, 0);
 }
 
@@ -181,6 +181,30 @@ function createGallerySale(data = {}) {
 
 function calcGalleryNet(price, commission) {
   return (+price || 0) - (+commission || 0);
+}
+
+// 文创产品
+function createCreativeProduct(data = {}) {
+  return {
+    id: data.id || createId(),
+    name: data.name || '',
+    sku: data.sku || '',
+    supplier: data.supplier || '',
+    costPrice: +data.costPrice || +data.cost_price || 0,
+    retailPrice: +data.retailPrice || +data.retail_price || 0,
+    stock: +data.stock || 0,
+    unit: data.unit || '个',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+    updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()
+  };
+}
+
+function validateCreativeProduct(d) {
+  const errs = [];
+  if (!d.name) errs.push('请输入产品名称');
+  if (!d.retailPrice || d.retailPrice < 0) errs.push('请输入有效零售价');
+  return errs;
 }
 
 function validateGallerySale(d) {

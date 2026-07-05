@@ -47,6 +47,17 @@ const UI = {
 
   _fmt(n) { return Number(n || 0).toFixed(2); },
 
+  // UTC ISO 时间转北京时间 MM-DD HH:mm
+  _fmtBeijingTime(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}-${dd} ${hh}:${mi}`;
+  },
+
   _todayBtn(inputId) {
     return `<button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('${inputId}').value='${todayStr()}'; this.blur()">今天</button>`;
   },
@@ -180,6 +191,7 @@ const UI = {
                     <div class="form-group"><label>单价</label><input type="number" id="rt-price" min="0" step="0.01" placeholder="0.00" style="width:80px"></div>
                     <div class="form-group"><label>数量</label><input type="number" id="rt-qty" min="1" value="1" style="width:60px"></div>
                     <div class="form-group"><label>产品名</label><input type="text" id="rt-name" placeholder="产品名称" style="width:120px"></div>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="UI._selectCreativeFromPOS()" title="从产品库选择" style="margin-bottom:1px;font-size:16px">📋</button>
                     <button type="button" class="btn btn-sm btn-primary" onclick="UI._addRetailItem()" style="margin-bottom:1px">+ 添加</button>
                   </div>
                   <div id="rt-list" class="pos-item-list"></div>
@@ -197,7 +209,7 @@ const UI = {
                         </select>
                       </div>
                       <div class="form-group"><label>次数</label><input type="number" id="ws-qty" min="1" value="1" style="width:60px"></div>
-                      <div class="form-group"><label>折扣%</label><input type="number" id="ws-discount" min="0" max="100" value="0" style="width:60px"></div>
+                      <div class="form-group"><label>优惠额</label><input type="number" id="ws-discount" min="0" value="0" step="0.01" style="width:80px"></div>
                       <button type="button" class="btn btn-sm btn-primary" onclick="UI._addWorkshopItem()" style="margin-bottom:1px">+ 添加</button>
                     </div>
                     <div id="ws-preview" style="font-size:12px;color:var(--gray-500);min-height:20px"></div>
@@ -310,7 +322,7 @@ const UI = {
     const price = +priceStr;
     const qty = +qtyInput.value || 1;
     const discount = +discInput.value || 0;
-    const amount = qty * price * (1 - discount / 100);
+    const amount = Math.max(0, qty * price - discount);
 
     this._workshopItems.push({ name, qty, unitPrice: price, discount, amount });
     this._renderWorkshopList();
@@ -329,7 +341,7 @@ const UI = {
     let total = 0;
     this._workshopItems.forEach((item, idx) => {
       total += item.amount;
-      const discText = item.discount > 0 ? ` (${item.discount}%off)` : '';
+      const discText = item.discount > 0 ? ` (优惠¥${item.discount})` : '';
       h += `<div class="pos-item-row">
         <span class="pos-item-name">${item.name} × ${item.qty}${discText}</span>
         <span class="pos-item-amount">¥${item.amount.toFixed(2)}</span>
@@ -344,6 +356,59 @@ const UI = {
     this._workshopItems.splice(idx, 1);
     this._renderWorkshopList();
     this._updatePOS();
+  },
+
+  // —— 从文创产品库选择 ——
+  async _selectCreativeFromPOS() {
+    const products = await Store.getAll('creativeProducts') || [];
+    if (!products.length) { this.toast('请先在产品管理中录入文创产品', 'error'); return; }
+    // 过滤有库存且零售价 > 0 的产品
+    const available = products.filter(p => (p.stock || 0) > 0 && (p.retailPrice || 0) > 0);
+    if (!available.length) { this.toast('没有库存充足的产品可选', 'error'); return; }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    let listHtml = available.map(p => `
+      <div class="cp-select-item" onclick="UI._fillCreativeFromPOS('${p.id}')" style="cursor:pointer;padding:8px 12px;border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center">
+        <span><strong>${p.name}</strong> <span style="color:var(--gray-500);font-size:12px">${p.sku || ''}</span></span>
+        <span style="color:var(--green-700)">¥${(p.retailPrice||0).toFixed(2)} <span style="color:var(--gray-500);font-size:12px">库存:${p.stock||0}${p.unit||'个'}</span></span>
+      </div>`).join('') || '<div style="padding:20px;text-align:center;color:var(--gray-500)">无可用产品</div>';
+    overlay.innerHTML = `
+      <div class="modal-card" style="min-width:400px;max-height:80vh;overflow-y:auto">
+        <div class="modal-title">📦 选择文创产品</div>
+        <div style="margin-bottom:10px"><input type="text" id="cp-search-pos" placeholder="搜索产品..." style="width:100%;padding:6px 10px" oninput="UI._filterCPSearch(this.value)"></div>
+        <div id="cp-select-list">${listHtml}</div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+        </div>
+      </div>`;
+    // 存储供搜索过滤
+    overlay._cpList = available;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  },
+
+  _filterCPSearch(val) {
+    const list = document.getElementById('cp-select-list');
+    const items = document.querySelectorAll('.cp-select-item');
+    const q = val.toLowerCase().trim();
+    items.forEach(el => {
+      el.style.display = (!q || el.textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+  },
+
+  _fillCreativeFromPOS(id) {
+    const overlay = document.querySelector('.modal-overlay');
+    if (overlay && overlay._cpList) {
+      const p = overlay._cpList.find(x => x.id === id);
+      if (p) {
+        document.getElementById('rt-name').value = p.name;
+        document.getElementById('rt-price').value = p.retailPrice || 0;
+        document.getElementById('rt-qty').value = 1;
+      }
+      overlay.remove();
+    }
   },
 
   // —— 添加文创产品 ——
@@ -447,7 +512,7 @@ const UI = {
       if (sel && sel.value && qtyIpt) {
         const [, ps] = sel.value.split(':');
         const p = +ps, q = +qtyIpt.value || 0, d = +(discIpt?.value || 0);
-        preview.textContent = q > 0 ? `¥${p} × ${q} ${d > 0 ? `(${d}% off) ` : ''}= ¥${(q * p * (1 - d / 100)).toFixed(2)}` : '';
+        preview.textContent = q > 0 ? `¥${p} × ${q} ${d > 0 ? `(优惠¥${d}) ` : ''}= ¥${(q * p - d).toFixed(2)}` : '';
       } else {
         preview.textContent = '';
       }
@@ -475,35 +540,89 @@ const UI = {
     const regularTicketItems = tItems.filter(i => i.name !== '套票');
     const comboItems = tItems.filter(i => i.name === '套票');
 
-    const data = {
+    const baseRecord = {
       date: document.getElementById('rev-date').value,
-      ticketItems: regularTicketItems,
+      paymentMethod,
+      projectName: '',
+      handler: Auth.currentUser?.displayName || '',
+      notes: $('#rev-notes')?.value || '',
+    };
+
+    // 主记录：门票 + 咖啡 + 其他
+    const mainRecord = {
+      ...baseRecord,
+      ticketItems: tItems,  // 合入套票一起存 ticket_items
+      ticketQty: tItems.reduce((s, i) => s + i.qty, 0),
       ticketAmount: regularTicketItems.reduce((s, i) => s + i.amount, 0),
       comboQty: comboItems.reduce((s, i) => s + i.qty, 0),
       comboAmount: comboItems.reduce((s, i) => s + i.amount, 0),
-      comboItems: comboItems,
       coffeeItems: cItems,
+      coffeeQty: cItems.reduce((s, i) => s + i.qty, 0),
       coffeeAmount: cItems.reduce((s, i) => s + i.amount, 0),
-      workshopItems: this._workshopItems.map(i => ({ ...i })),
-      workshopAmount: this._workshopItems.reduce((s, i) => s + i.amount, 0),
-      retailItems: this._retailItems.map(i => ({ productName: i.productName, qty: i.qty, unitPrice: i.unitPrice, amount: i.amount })),
-      retailAmount: this._retailItems.reduce((s, i) => s + i.amount, 0),
+      workshopItems: [],
+      workshopAmount: 0,
+      retailItems: [],
+      retailAmount: 0,
       otherAmount: +($('#rev-other')?.value || 0),
       otherDesc: $('#rev-other-desc')?.value || '',
-      paymentMethod,
-      projectName: '',
-      notes: $('#rev-notes')?.value || '',
-      cashAmount: paymentMethod === '扫码支付' || paymentMethod === '对公转账' ? 0 : total,
-      accountAmount: paymentMethod !== '扫码支付' && paymentMethod !== '对公转账' ? 0 : total
     };
+    // 主记录金额（不含工坊/文创）
+    const mainTotal = (mainRecord.ticketAmount||0) + (mainRecord.comboAmount||0) + (mainRecord.coffeeAmount||0) + (mainRecord.otherAmount||0);
+    const isCash = paymentMethod !== '扫码支付' && paymentMethod !== '对公转账';
+    mainRecord.cashAmount = isCash ? mainTotal : 0;
+    mainRecord.accountAmount = isCash ? 0 : mainTotal;
 
     try {
       if (this._editingId) {
-        await Store.update('revenue', this._editingId, data);
+        // 编辑模式：保存完整数据（含工坊/文创，不拆分）
+        const editData = {
+          ...baseRecord,
+          ticketItems: tItems,  // 合入套票，不单独传 comboItems
+          ticketQty: tItems.reduce((s, i) => s + i.qty, 0),
+          ticketAmount: regularTicketItems.reduce((s, i) => s + i.amount, 0),
+          comboQty: comboItems.reduce((s, i) => s + i.qty, 0),
+          comboAmount: comboItems.reduce((s, i) => s + i.amount, 0),
+          coffeeItems: cItems,
+          coffeeQty: cItems.reduce((s, i) => s + i.qty, 0),
+          coffeeAmount: cItems.reduce((s, i) => s + i.amount, 0),
+          workshopItems: this._workshopItems.map(i => ({ ...i })),
+          workshopAmount: this._workshopItems.reduce((s, i) => s + i.amount, 0),
+          retailItems: this._retailItems.map(i => ({ productName: i.productName, qty: i.qty, unitPrice: i.unitPrice, amount: i.amount })),
+          retailAmount: this._retailItems.reduce((s, i) => s + i.amount, 0),
+          otherAmount: +($('#rev-other')?.value || 0),
+          otherDesc: $('#rev-other-desc')?.value || '',
+          cashAmount: isCash ? total : 0,
+          accountAmount: isCash ? 0 : total,
+        };
+        await Store.update('revenue', this._editingId, editData);
         this.toast('收入记录已更新');
         this._editingId = null;
       } else {
-        await Store.add('revenue', createRevenue(data));
+        // 先保存主记录
+        if (mainTotal > 0) {
+          await Store.add('revenue', createRevenue(mainRecord));
+        }
+        // 每个工坊商品拆为独立记录
+        for (const item of this._workshopItems) {
+          await Store.add('revenue', createRevenue({
+            ...baseRecord,
+            workshopItems: [{ ...item }],
+            workshopAmount: item.amount,
+            cashAmount: isCash ? item.amount : 0,
+            accountAmount: isCash ? 0 : item.amount,
+          }));
+        }
+        // 每个文创商品拆为独立记录
+        for (const item of this._retailItems) {
+          const amt = item.qty * item.unitPrice;
+          await Store.add('revenue', createRevenue({
+            ...baseRecord,
+            retailItems: [{ productName: item.productName, qty: item.qty, unitPrice: item.unitPrice, amount: amt }],
+            retailAmount: amt,
+            cashAmount: isCash ? amt : 0,
+            accountAmount: isCash ? 0 : amt,
+          }));
+        }
         this.toast('收款成功 ¥' + total.toFixed(2));
       }
     } catch (e) {
@@ -586,11 +705,11 @@ const UI = {
     });
 
     // 工坊
-    this._workshopItems = (r.workshopItems || []).map(i => ({ ...i }));
+    this._workshopItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(i => ({ ...i }));
     this._renderWorkshopList();
 
     // 文创
-    this._retailItems = (r.retailItems || []).map(i => ({ ...i }));
+    this._retailItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(i => ({ ...i }));
     this._renderRetailList();
 
     // 其他
@@ -627,23 +746,34 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">💰</div>暂无收入记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>普通票</th><th>套票</th><th>咖啡</th><th>工坊</th><th>文创</th><th>其他</th><th>合计</th><th>收款方式</th><th>项目</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>收入明细</th><th>合计</th><th>收款方式</th><th>收款人</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
-      const total = (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0);
+      const tags = [];
+      if ((r.ticketAmount || 0) > 0) tags.push(`🎫 普通票 ${r.ticketQty||0}张 ¥${this._fmt(r.ticketAmount)}`);
+      if ((r.comboAmount || 0) > 0) tags.push(`🎟️ 套票 ${r.comboQty||0}张 ¥${this._fmt(r.comboAmount)}`);
+      if ((r.coffeeAmount || 0) > 0) tags.push(`☕ 咖啡 ${r.coffeeQty||0}杯 ¥${this._fmt(r.coffeeAmount)}`);
+      if ((r.workshopAmount || 0) > 0) tags.push(`🔧 工坊 ¥${this._fmt(r.workshopAmount)}`);
+      const retail = r.retailAmount || r.creativeAmount || 0;
+      if (retail > 0) tags.push(`🛒 文创 ¥${this._fmt(retail)}`);
+      if ((r.venueAmount || 0) > 0) tags.push(`🏛 场地 ¥${this._fmt(r.venueAmount)}`);
+      if ((r.otherAmount || 0) > 0) {
+        const desc = r.otherDesc ? `(${r.otherDesc})` : '';
+        tags.push(`📝 其他${desc} ¥${this._fmt(r.otherAmount)}`);
+      }
+
+      const total = (r.ticketAmount||0)+(r.comboAmount||0)+(r.coffeeAmount||0)+(r.workshopAmount||0)+(r.retailAmount||r.creativeAmount||0)+(r.venueAmount||0)+(r.otherAmount||0);
+      const timeStr = r.createdAt ? UI._fmtBeijingTime(r.createdAt) : r.date;
       h += `<tr>
-        <td>${r.date}</td>
-        <td>${r.ticketQty||0}张 / ${this._fmt(r.ticketAmount)}</td>
-        <td>${r.comboQty||0}张 / ${this._fmt(r.comboAmount)}</td>
-        <td>${r.coffeeQty||0}杯 / ${this._fmt(r.coffeeAmount)}</td>
-        <td>${this._fmt(r.workshopAmount)}</td>
-        <td>${this._fmt(r.retailAmount || r.creativeAmount)}</td>
-        <td>${r.otherDesc ? r.otherDesc + ' ' : ''}${this._fmt(r.otherAmount)}</td>
-        <td><strong>${this._fmt(total)}</strong></td>
+        <td>${timeStr}</td>
+        <td><div class="rev-tag-group">${tags.map(t => `<span class="rev-tag">${t}</span>`).join('')}</div></td>
+        <td><strong>¥${this._fmt(total)}</strong></td>
         <td><span class="tag tag-info">${r.paymentMethod || '—'}</span></td>
-        <td>${r.projectName || '-'}</td>
-        <td class="row-actions">
-          <button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>
-          <button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>
+        <td>${r.handler || '—'}</td>
+        <td class="action-cell">
+          <div class="row-actions">
+            <button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>
+            <button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>
+          </div>
         </td>
       </tr>`;
     });
@@ -1485,7 +1615,20 @@ const UI = {
         <div id="prod-space-table">${this._renderEditableList(spItems, 'space', ['空间名', '日价', '半天价', '说明'], ['name', 'dailyPrice', 'halfDayPrice', 'desc'])}</div>
         <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px" onclick="UI._addConfigItem('space')">+ 新增空间</button>
       </div>
+      <div class="card">
+        <div class="card-title">📦 文创产品管理</div>
+        <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+          <button type="button" class="btn btn-sm btn-primary" onclick="UI._addCreativeProduct()">+ 新增产品</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._importCreativeProducts()">📥 导入库存</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._downloadImportTemplate()">📋 下载导入模板</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品列表</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 导出文创销售清单</button>
+          <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="cp-count"></span>
+        </div>
+        <div id="prod-creative-table"><div class="loading-state"><div class="spinner"></div></div></div>
+      </div>
     `);
+    this._renderCreativeProductList();
   },
 
   _renderEditableList(items, type, headers, fields) {
@@ -1600,6 +1743,406 @@ const UI = {
     Store.saveConfig(dbKey, items);
     this.toast('已删除');
     this.renderProductPage();
+  },
+
+  // ===== 文创产品管理 =====
+  _creativeProducts: [],
+  _cpFilterSupplier: '',
+  _cpPage: 0,
+  _CP_PAGE_SIZE: 40,
+
+  async _loadCreativeProducts() {
+    try {
+      this._creativeProducts = await Store.getAll('creativeProducts') || [];
+    } catch (e) {
+      this._creativeProducts = [];
+    }
+    return this._creativeProducts;
+  },
+
+  /** 获取去重后的供应商列表 */
+  _cpSuppliers() {
+    const s = new Set();
+    this._creativeProducts.forEach(p => { if (p.supplier) s.add(p.supplier); });
+    return [...s].sort();
+  },
+
+  /** 根据当前筛选条件获取产品子集 */
+  _cpFiltered() {
+    let list = this._creativeProducts;
+    if (this._cpFilterSupplier) {
+      list = list.filter(p => p.supplier === this._cpFilterSupplier);
+    }
+    return list;
+  },
+
+  /** 当前页的产品 */
+  _cpPageItems() {
+    const filtered = this._cpFiltered();
+    const start = this._cpPage * this._CP_PAGE_SIZE;
+    return filtered.slice(start, start + this._CP_PAGE_SIZE);
+  },
+
+  async _renderCreativeProductList() {
+    const el = document.getElementById('prod-creative-table');
+    if (!el) return;
+    await this._loadCreativeProducts();
+    const suppliers = this._cpSuppliers();
+    const filtered = this._cpFiltered();
+    const totalPages = Math.max(1, Math.ceil(filtered.length / this._CP_PAGE_SIZE));
+
+    // 修正越界页码
+    if (this._cpPage >= totalPages) this._cpPage = totalPages - 1;
+
+    const countEl = $('#cp-count');
+    if (countEl) countEl.textContent = `${filtered.length} 个产品（共 ${this._creativeProducts.length} 个）`;
+
+    const pageItems = this._cpPageItems();
+
+    if (!this._creativeProducts.length) {
+      el.innerHTML = '<div class="empty-state" style="padding:24px"><div class="icon">📦</div>暂无文创产品，请新增或导入</div>';
+      return;
+    }
+
+    // —— 供应商筛选 + 分页控件 ——
+    let toolbarHtml = `<div class="cp-toolbar">
+      <div class="form-group" style="margin-bottom:0">
+        <label style="display:inline;font-size:12px">供应商</label>
+        <select id="cp-supplier-filter" onchange="UI._cpOnFilterChange()" style="padding:4px 8px;font-size:13px">
+          <option value="">全部供应商</option>
+          ${suppliers.map(s => `<option value="${s}"${this._cpFilterSupplier === s ? ' selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+      <div class="cp-pagination">
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(0)" ${this._cpPage === 0 ? 'disabled' : ''}>首页</button>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${this._cpPage - 1})" ${this._cpPage === 0 ? 'disabled' : ''}>‹ 上一页</button>
+        <span class="cp-page-info">第 ${this._cpPage + 1}/${totalPages} 页</span>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${this._cpPage + 1})" ${this._cpPage >= totalPages - 1 ? 'disabled' : ''}>下一页 ›</button>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${totalPages - 1})" ${this._cpPage >= totalPages - 1 ? 'disabled' : ''}>末页</button>
+      </div>
+    </div>`;
+
+    let h = toolbarHtml;
+    h += '<div class="table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>SKU</th><th>供应商</th><th>进货价</th><th>零售价</th><th>库存</th><th>单位</th><th>备注</th><th style="width:90px">操作</th></tr></thead><tbody>';
+
+    if (!pageItems.length && filtered.length > 0) {
+      h += `<tr><td colspan="9" style="text-align:center;color:var(--gray-500)">当前页无数据</td></tr>`;
+    }
+
+    pageItems.forEach((p) => {
+      h += `<tr>
+        <td>${p.name || '-'}</td>
+        <td>${p.sku || '-'}</td>
+        <td>${p.supplier || '-'}</td>
+        <td>¥${this._fmt(p.costPrice)}</td>
+        <td><strong>¥${this._fmt(p.retailPrice)}</strong></td>
+        <td><span class="tag ${(p.stock || 0) <= 0 ? 'tag-danger' : 'tag-success'}">${p.stock || 0}</span></td>
+        <td>${p.unit || '个'}</td>
+        <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis">${p.notes || '-'}</td>
+        <td class="row-actions">
+          <button class="btn btn-sm btn-secondary" onclick="UI._editCreativeProduct('${p.id}')">编辑</button>
+          <button class="btn btn-sm btn-danger" onclick="UI._deleteCreativeProduct('${p.id}')">删除</button>
+        </td>
+      </tr>`;
+    });
+    h += '</tbody></table></div>';
+
+    // 底部再放一次分页
+    if (totalPages > 1) {
+      h += `<div class="cp-toolbar" style="margin-top:8px">
+        <div></div>
+        <div class="cp-pagination">
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(0)" ${this._cpPage === 0 ? 'disabled' : ''}>首页</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${this._cpPage - 1})" ${this._cpPage === 0 ? 'disabled' : ''}>‹ 上一页</button>
+          <span class="cp-page-info">第 ${this._cpPage + 1}/${totalPages} 页</span>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${this._cpPage + 1})" ${this._cpPage >= totalPages - 1 ? 'disabled' : ''}>下一页 ›</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${totalPages - 1})" ${this._cpPage >= totalPages - 1 ? 'disabled' : ''}>末页</button>
+        </div>
+      </div>`;
+    }
+
+    el.innerHTML = h;
+  },
+
+  _cpOnFilterChange() {
+    this._cpFilterSupplier = document.getElementById('cp-supplier-filter')?.value || '';
+    this._cpPage = 0;
+    this._renderCreativeProductList();
+  },
+
+  _cpGoToPage(page) {
+    const filtered = this._cpFiltered();
+    const totalPages = Math.max(1, Math.ceil(filtered.length / this._CP_PAGE_SIZE));
+    if (page < 0 || page >= totalPages) return;
+    this._cpPage = page;
+    this._renderCreativeProductList();
+  },
+
+  _showCreativeProductModal(data, isEdit) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    const d = data || {};
+    overlay.innerHTML = `
+      <div class="modal-card" style="min-width:480px">
+        <div class="modal-title">${isEdit ? '编辑文创产品' : '新增文创产品'}</div>
+        <div class="form-grid">
+          <div class="form-group"><label>产品名称 *</label><input type="text" id="cp-name" value="${d.name || ''}" placeholder="必填"></div>
+          <div class="form-group"><label>SKU/编码</label><input type="text" id="cp-sku" value="${d.sku || ''}" placeholder="选填"></div>
+          <div class="form-group"><label>供应商</label><input type="text" id="cp-supplier" value="${d.supplier || ''}" placeholder="选填"></div>
+          <div class="form-group"><label>进货价</label><input type="number" id="cp-cost" min="0" step="0.01" value="${d.costPrice || 0}" placeholder="0.00"></div>
+          <div class="form-group"><label>零售价 *</label><input type="number" id="cp-retail" min="0" step="0.01" value="${d.retailPrice || 0}" placeholder="0.00"></div>
+          <div class="form-group"><label>库存数量</label><input type="number" id="cp-stock" min="0" step="1" value="${d.stock || 0}" placeholder="0"></div>
+          <div class="form-group"><label>单位</label><select id="cp-unit">
+            ${['个','件','套','只','对','盒','包'].map(u => `<option value="${u}"${(d.unit||'个') === u ? ' selected' : ''}>${u}</option>`).join('')}
+          </select></div>
+          <div class="form-group full"><label>备注</label><input type="text" id="cp-notes" value="${d.notes || ''}" placeholder="选填"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button class="btn btn-primary" id="cp-save-btn">${isEdit ? '保存修改' : '创建产品'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    overlay.querySelector('#cp-save-btn').addEventListener('click', async () => {
+      const name = overlay.querySelector('#cp-name').value.trim();
+      if (!name) { UI.toast('请输入产品名称', 'error'); return; }
+      const record = {
+        name,
+        sku: overlay.querySelector('#cp-sku').value.trim(),
+        supplier: overlay.querySelector('#cp-supplier').value.trim(),
+        costPrice: +overlay.querySelector('#cp-cost').value || 0,
+        retailPrice: +overlay.querySelector('#cp-retail').value || 0,
+        stock: +overlay.querySelector('#cp-stock').value || 0,
+        unit: overlay.querySelector('#cp-unit').value,
+        notes: overlay.querySelector('#cp-notes').value.trim()
+      };
+      try {
+        if (isEdit && d.id) {
+          await Store.update('creativeProducts', d.id, record);
+          UI.toast('产品已更新');
+        } else {
+          await Store.add('creativeProducts', createCreativeProduct(record));
+          UI.toast('产品已新增');
+        }
+        overlay.remove();
+        await UI._renderCreativeProductList();
+      } catch (e) {
+        UI.toast('保存失败：' + (e.message || e), 'error');
+      }
+    });
+  },
+
+  async _addCreativeProduct() {
+    this._showCreativeProductModal(null, false);
+  },
+
+  async _editCreativeProduct(id) {
+    const p = this._creativeProducts.find(x => x.id === id);
+    if (!p) { this.toast('产品不存在', 'error'); return; }
+    this._showCreativeProductModal(p, true);
+  },
+
+  async _deleteCreativeProduct(id) {
+    const p = this._creativeProducts.find(x => x.id === id);
+    if (!confirm(`确认删除产品「${p ? p.name : id}」？`)) return;
+    await Store.delete('creativeProducts', id);
+    this.toast('已删除');
+    await this._renderCreativeProductList();
+  },
+
+  async _importCreativeProducts() {
+    // 创建隐藏 file input
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv,.xlsx';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const data = await this._parseCreativeImportFile(file);
+        if (!data || !data.length) { this.toast('未解析到有效数据', 'error'); return; }
+        let imported = 0;
+        for (const row of data) {
+          try {
+            await Store.add('creativeProducts', createCreativeProduct(row));
+            imported++;
+          } catch (err) {
+            console.warn('导入失败:', row, err);
+          }
+        }
+        this.toast(`导入完成：共 ${imported} 个产品`);
+        await this._renderCreativeProductList();
+      } catch (err) {
+        this.toast('导入失败：' + (err.message || err), 'error');
+      }
+    };
+    input.click();
+  },
+
+  _parseCreativeImportFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const content = e.target.result;
+          if (file.name.endsWith('.xlsx')) {
+            // 使用 SheetJS (xlsx.full.min.js) — 用 array 模式代替 deprecated binary 模式
+            if (typeof XLSX === 'undefined') { reject(new Error('缺少 xlsx 库')); return; }
+            const wb = XLSX.read(content, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            resolve(rows.map(r => {
+              const nameVal = this._getCPField(r, ['产品名称','产品名','名称','name','Name','商品名','商品名称']);
+              return {
+                name: String(nameVal || '').trim(),
+                sku: String(this._getCPField(r, ['SKU','sku','Sku','编码','编号','货号']) || '').trim(),
+                supplier: String(this._getCPField(r, ['供应商','supplier','Supplier','供货商']) || '').trim(),
+                costPrice: +(+this._getCPField(r, ['进货价','costPrice','cost_price','进价','成本价']) || 0),
+                retailPrice: +(+this._getCPField(r, ['零售价','retailPrice','retail_price','售价','单价','价格']) || 0),
+                stock: +(+this._getCPField(r, ['库存','stock','库存数量','quantity','数量']) || 0),
+                unit: String(this._getCPField(r, ['单位','unit','Unit']) || '个').trim(),
+                notes: String(this._getCPField(r, ['备注','notes','备注说明']) || '').trim()
+              };
+            }).filter(r => r.name));
+          } else {
+            // CSV 解析
+            const lines = content.replace(/^﻿/, '').split('\n').filter(l => l.trim());
+            if (lines.length < 2) { reject(new Error('CSV 为空或只有表头')); return; }
+            const headers = this._parseCSVLine(lines[0]);
+            const results = [];
+            for (let i = 1; i < lines.length; i++) {
+              const vals = this._parseCSVLine(lines[i]);
+              if (vals.length < 2) continue;
+              const row = {};
+              headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
+              const nameVal = this._getCPField(row, ['产品名称','产品名','名称','name','Name','商品名','商品名称']);
+              if (!nameVal) continue;
+              results.push({
+                name: String(nameVal || '').trim(),
+                sku: String(this._getCPField(row, ['SKU','sku','Sku','编码','编号','货号']) || '').trim(),
+                supplier: String(this._getCPField(row, ['供应商','supplier','Supplier','供货商']) || '').trim(),
+                costPrice: +(+this._getCPField(row, ['进货价','costPrice','cost_price','进价','成本价']) || 0),
+                retailPrice: +(+this._getCPField(row, ['零售价','retailPrice','retail_price','售价','单价','价格']) || 0),
+                stock: +(+this._getCPField(row, ['库存','stock','库存数量','quantity','数量']) || 0),
+                unit: String(this._getCPField(row, ['单位','unit','Unit']) || '个').trim(),
+                notes: String(this._getCPField(row, ['备注','notes','备注说明']) || '').trim()
+              });
+            }
+            resolve(results);
+          }
+        } catch (err) { reject(err); }
+      };
+      if (file.name.endsWith('.xlsx')) {
+        reader.readAsArrayBuffer(file);
+      } else {
+        reader.readAsText(file, 'UTF-8');
+      }
+    });
+  },
+
+  // 按候选名称列表从行数据中取第一个有效值
+  _getCPField(row, candidates) {
+    for (const key of candidates) {
+      if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
+        return row[key];
+      }
+    }
+    return '';
+  },
+
+  _parseCSVLine(line) {
+    const result = [];
+    let current = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+        else if (ch === '"') inQuotes = false;
+        else current += ch;
+      } else {
+        if (ch === '"') inQuotes = true;
+        else if (ch === ',') { result.push(current); current = ''; }
+        else current += ch;
+      }
+    }
+    result.push(current);
+    return result;
+  },
+
+  async _exportCreativeProducts() {
+    await this._loadCreativeProducts();
+    if (!this._creativeProducts.length) { this.toast('没有产品可导出', 'error'); return; }
+    const headers = ['产品名称','SKU','供应商','进货价','零售价','库存','单位','备注'];
+    const rows = this._creativeProducts.map(p => [
+      p.name || '', p.sku || '', p.supplier || '',
+      (p.costPrice || 0).toFixed(2), (p.retailPrice || 0).toFixed(2),
+      p.stock || 0, p.unit || '个', p.notes || ''
+    ]);
+    this._downloadCSV(headers, rows, '文创产品列表');
+  },
+
+  async _exportCreativeSales() {
+    const { start, end } = ImportExport._getExportDates();
+    const all = await Store.getAll('revenue');
+    let records = ImportExport._filterByDateRange(all, start, end);
+    // 只筛选有文创产品的记录
+    records = records.filter(r => {
+      const items = Array.isArray(r.retailItems) ? r.retailItems : [];
+      return items.length > 0;
+    });
+    if (!records.length) { this.toast('所选范围内无文创销售记录', 'error'); return; }
+
+    // 展开每条 retailItems
+    const headers = ['日期','产品名称','数量','单价','金额','收款方式','经手人','备注','创建时间'];
+    const rows = [];
+    records.forEach(r => {
+      const items = Array.isArray(r.retailItems) ? r.retailItems : [];
+      items.forEach(item => {
+        rows.push([
+          r.date,
+          item.productName || '',
+          item.qty || 1,
+          (item.unitPrice || 0).toFixed(2),
+          (item.amount || 0).toFixed(2),
+          r.paymentMethod || '',
+          r.handler || '',
+          r.notes || '',
+          r.createdAt || ''
+        ]);
+      });
+    });
+    this._downloadCSV(headers, rows, '文创销售清单');
+  },
+
+  _downloadCSV(headers, rows, label) {
+    const csvContent = '﻿' + headers.join(',') + '\n' + rows.map(row => row.map(v => {
+      const s = String(v !== undefined && v !== null ? v : '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `艾维美术馆_${label}_${todayStr()}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast(`${label}已导出`);
+  },
+
+  _downloadImportTemplate() {
+    const headers = ['产品名称','SKU','供应商','进货价','零售价','库存','单位','备注'];
+    const example = ['示例文创笔记本','CP-001','示例供应商','15','38','100','个','首批进货'];
+    const csvContent = '﻿' + headers.join(',') + '\n' + example.join(',') + '\n';
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `艾维美术馆_文创产品导入模板_${todayStr()}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast('导入模板已下载，请按表头格式填写后导入');
   },
 
   // === 用户管理 ===

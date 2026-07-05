@@ -1,3 +1,167 @@
+## 2026-07-05 第九期：文创产品管理模块（独立录入/表格导入/库存联动/筛选分页）
+
+### 工作内容
+
+#### 1. 文创产品数据库
+
+| 改动 | 说明 |
+|------|------|
+| `app/sql/init.sql` | 新增 `creative_products` 表（名称/SKU/供应商/进货价/零售价/库存/单位/备注）|
+| `server.js` | 表映射注册 `creative_products` |
+| 服务器 | Docker 容器重建 + `CREATE TABLE` 执行 |
+
+#### 2. 产品管理页面 — 文创产品管理区块
+
+位于票务/咖啡/工坊/经营空间下方，独立的「📦 文创产品管理」卡片：
+
+- **逐一录入** — 弹窗表单：产品名称（必填）、SKU、供应商、进货价、零售价（必填）、库存数量、单位（下拉）、备注
+- **表格导入** — 支持 CSV 和 Excel（.xlsx）两种格式，自动识别中英文列名（优先：`产品名称>name>Name`、`SKU>sku>编码`、`供应商>supplier`、`进货价>costPrice>cost_price`、`零售价>retailPrice>retail_price`、`库存>stock>库存数量`、`单位>unit`、`备注>notes`）
+- **下载导入模板** — 一键下载含表头和示例数据的 CSV 模板
+- **导出产品列表** — 当前全部产品导出为 CSV
+- **导出文创销售清单** — 按日期范围筛选 revenue 表中含 retailItems 的记录，逐条展开为独立行（产品名×数量×单价×金额）
+
+#### 3. 供应商筛选
+
+表格顶部下拉框，自动收集所有供应商去重排序。选择后只显示该供应商的产品，页数和页码自动重新计算。
+
+#### 4. 分页
+
+每页 40 条，表格上下均放置分页控件（首页/上一页/页码信息/下一页/末页），产品数不足 40 时隐藏分页栏。
+
+#### 5. POS 收银台联动
+
+文创零售输入行新增 📋 按钮，点击弹出产品库选择器，显示产品名/零售价/库存，支持搜索过滤，选中后自动填入名称和单价。
+
+### 修复记录
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| 导入提示"未解析到有效数据" | `readAsBinaryString` 已废弃 + 列名匹配不够宽容 | 改为 `readAsArrayBuffer` + `_getCPField()` 多候选匹配 |
+| 后端 `Table not found` | 首次部署后 Docker 镜像缓存旧 `server.js` | `--no-cache` 强制重建 |
+| 浏览器持续报旧错 | `index.html` 版本号缓存标记未更新，浏览器加载旧文件 | 重启 dev server + 清除 Service Worker 缓存 |
+
+### 涉及文件
+
+| 文件 | 改动 |
+|------|------|
+| `app/js/ui.js` | 文创产品 CRUD + 表格导入/导出 + 供应商筛选 + 分页 + POS 产品库选择器 |
+| `app/js/models.js` | 新增 `createCreativeProduct()` / `validateCreativeProduct()` |
+| `app/js/supabase-config.js` | 注册 `creativeProducts: 'creative_products'` |
+| `server.js` | 表映射添加 `creative_products` |
+| `app/css/style.css` | `.cp-select-item` / `.cp-toolbar` / `.cp-pagination` / `.cp-page-info` |
+| `app/sql/init.sql` | 新增 `creative_products` 建表语句 |
+
+### 服务器操作
+
+```bash
+# 前端文件同步
+scp app/js/ui.js root@122.51.56.50:/opt/aiwei/app/js/
+scp app/css/style.css root@122.51.56.50:/opt/aiwei/app/css/
+
+# API 重建
+scp server.js root@122.51.56.50:/opt/aiwei/
+ssh root@122.51.56.50 "cd /opt/aiwei && docker compose build --no-cache api && docker compose up -d api"
+
+# 建表
+ssh root@122.51.56.50 "docker compose exec -T db psql -U postgres -c \"CREATE TABLE IF NOT EXISTS creative_products (...)\""
+```
+
+### 数据库状态
+
+| 表 | 记录数 | 说明 |
+|----|-------:|------|
+| revenue | 175+ | 含文创拆分记录 |
+| creative_products | 0 | **新增** 已清空待导入 |
+
+### 待办 / 后续计划
+
+- [ ] POS 收款后文创库存自动扣减
+- [ ] 采购入库记录（进货批次管理）
+- [ ] 供应商管理模块（联系方式/账期）
+- [ ] 库存预警（低于安全库存时提示）
+
+---
+
+
+
+### 工作内容
+
+#### 1. 收入记录列表优化
+- 表格从固定列（普通票/套票/咖啡/工坊/文创/其他）改为**动态标签**显示，只展示金额 > 0 的项
+- 新增「收款人」列，保存时自动记录操作人
+- 新增「收款人」字段入参，旧数据显示 `—`
+
+#### 2. CSV 导出修复
+- 文创金额字段从 `creativeAmount` 改为 `retailAmount || creativeAmount`，兼容新旧数据
+- 新增「工坊明细」「文创明细」列，导出时展开 JSONB 数组为可读文本
+- 移除废弃的「关联项目」列
+
+#### 3. JSONB 类型防御（Array.isArray）
+- 历史数据中存在 `retailItems: {}` 的脏数据，`(x || [])` 无法防御
+- 导出函数 `import-export.js` 和编辑回填 `ui.js` 全部改用 `Array.isArray(x) ? x : []`
+- 触发的具体报错：「(r.retailItems || []).map is not a function」
+
+#### 4. pg JSONB 数组序列化修复
+- 发现 pg 参数化查询会把 JS 数组序列化为 PG 数组字面量（如 `'{"(普通票,10)"}'`），JSONB 列无法解析
+- `server.js` 的 POST 和 PATCH 中对 JSONB 列做 `JSON.stringify()`，确保传入 `JSON.stringify(data[k])`
+- 新增全局常量 `JSONB_COLS`（`ticket_items` / `coffee_items` / `workshop_items` / `retail_items` / `combo_items`）
+- 触发的具体报错：「invalid input syntax for type json」
+
+#### 5. 工坊/文创拆分独立记录
+- 收银台确认收款时，门票+咖啡+其他保留为一条主记录
+- **工坊每个商品**拆为独立 revenue 记录
+- **文创每个商品**拆为独立 revenue 记录
+- 编辑模式保持合并不拆分
+- 导出 CSV 时每个商品自然成为一行
+
+#### 6. 排序与时间显示
+- 排序从 `order=date.desc` 改为 `order=created_at.desc`，同一天按录入顺序排列
+- 日期列从纯日期改为北京时间 `MM-DD HH:mm`（源自 `createdAt` UTC 转 CST）
+- 新增 `_fmtBeijingTime()` 工具函数
+- 服务器确认时区为 `Asia/Shanghai (CST, +0800)`
+
+### 涉及文件
+
+| 文件 | 改动 |
+|------|------|
+| `app/js/ui.js` | 收入记录动态标签 + 收款人列 + 拆分保存 + 编辑回填 Array.isArray + 北京时间显示 |
+| `app/js/import-export.js` | CSV 导出文创金额/明细 + Array.isArray 防御 + try/catch |
+| `app/js/store.js` | 排序改为 `created_at.desc` |
+| `server.js` | POST/PATCH JSONB 列 `JSON.stringify()` + 全局 `JSONB_COLS`（需重建 Docker）|
+| `app/css/style.css` | `.rev-tag` / `.rev-tag-group` 样式 |
+| `app/index.html` | 版本号递增（css/v2, ui/v9, store/v5, import-export/v5, app/v6）|
+
+### 服务器操作
+
+```bash
+# 前端文件（Nginx 挂载，上传即生效）
+scp app/js/*.js root@122.51.56.50:/opt/aiwei/app/js/
+scp app/css/style.css root@122.51.56.50:/opt/aiwei/app/css/
+scp app/index.html root@122.51.56.50:/opt/aiwei/app/
+
+# API 文件（需重建容器）
+scp server.js root@122.51.56.50:/opt/aiwei/
+ssh root@122.51.56.50 "cd /opt/aiwei && docker compose build api && docker compose up -d api"
+```
+
+### 数据库状态
+
+| 表 | 记录数 | 说明 |
+|----|-------:|------|
+| revenue | 175+ | 含今日工坊/文创拆分新增的多条记录 |
+| expense | 0 | 待录入 |
+| space_usage | 0 | 待录入 |
+| gallery_sales | 0 | 待录入 |
+
+### 沉淀的经验（memory）
+
+- [x] JSONB 数组防御用 `Array.isArray()` 而非 `(x || [])`
+- [x] 排查修改前正常的功能出问题，优先只看变更文件
+- [x] 问题处理六步流程：分析→设计→执行→验证→复盘→继续发现
+- [x] `pg` 参数化查询会将 JS 数组序列化为 PG 数组字面量，JSONB 列需手动 `JSON.stringify()`
+
+---
+
 ## 2026-07-04 第七期：腾讯云服务器上线部署 + Git 版本管理
 
 ### 背景

@@ -35,9 +35,20 @@ var Charts = {
         <div class="chart-box"><div class="chart-title">月度支出趋势</div><canvas id="chart-expense-trend"></canvas></div>
       </div>
     `);
+    // 当月日收入趋势放在收入总览下方
+    const oldDaily = page.querySelector('.rpt-daily-trend');
+    if (oldDaily) oldDaily.remove();
+    const overview = page.querySelector('.rpt-overview');
+    if (overview) {
+      const dailyDiv = document.createElement('div');
+      dailyDiv.className = 'chart-box full rpt-daily-trend';
+      dailyDiv.innerHTML = '<div class="chart-title">当月日收入趋势</div><canvas id="chart-daily-revenue"></canvas>';
+      overview.insertAdjacentElement('afterend', dailyDiv);
+    }
     // 延迟一帧让 canvas 元素创建完毕
     await new Promise(r => setTimeout(r, 100));
     await this.renderRevenueTrend(year);
+    await this.renderDailyRevenueTrend();
     await this.renderRevenueStructure();
     await this.renderWorkshopRank();
     await this.renderExpenseCategory();
@@ -206,6 +217,101 @@ var Charts = {
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-trend'] = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: '门票', data: ticketData, backgroundColor: '#4a8c5c' },
+          { label: '咖啡套票', data: comboData, backgroundColor: '#57a86a' },
+          { label: '咖啡', data: coffeeData, backgroundColor: '#7ab88a' },
+          { label: '工坊', data: workshopData, backgroundColor: '#b8863a' },
+          { label: '文创', data: creativeData, backgroundColor: '#c5c0b5' },
+          { label: '场地', data: venueData, backgroundColor: '#2c6b9e' },
+          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: {
+            callbacks: {
+              afterBody: function(context) {
+                const idx = context[0].dataIndex;
+                const total = totalData[idx];
+                return '合计: ¥' + (total || 0).toFixed(2);
+              }
+            }
+          }
+        },
+        scales: {
+          x: { stacked: true },
+          y: { stacked: true, beginAtZero: true, ticks: { callback: v => '¥' + v } }
+        }
+      }
+    });
+  },
+
+  async renderDailyRevenueTrend() {
+    const canvas = $('#chart-daily-revenue');
+    if (!canvas) return;
+    this._destroy('daily-revenue');
+
+    const { year, month } = this._getYM();
+    // 如果没有选月份，默认使用当前月份
+    const targetMonth = month || todayStr().slice(5, 7);
+    const ym = year + '-' + targetMonth;
+    const lastDay = new Date(+year, +targetMonth, 0).getDate();
+
+    // 获取当月所有收入数据
+    const revenues = await Store.getByMonth('revenue', ym);
+    const galleryAll = await Store.getByMonth('gallery', ym);
+    const spaceAll = await Store.getByMonth('space', ym);
+
+    const labels = [];
+    const ticketData = [];
+    const comboData = [];
+    const coffeeData = [];
+    const workshopData = [];
+    const creativeData = [];
+    const venueData = [];
+    const galleryData = [];
+
+    for (let d = 1; d <= lastDay; d++) {
+      const ds = ym + '-' + String(d).padStart(2, '0');
+      labels.push(d + '日');
+      const dayRev = revenues.filter(r => r.date === ds);
+      const dayGal = galleryAll.filter(r => r.date === ds);
+      const daySpace = spaceAll.filter(r => r.date === ds && r.rentalType === '付费');
+
+      let t = 0, cb = 0, c = 0, w = 0, cr = 0, v = 0, g = 0;
+      dayRev.forEach(r => {
+        t += r.ticketAmount || 0;
+        cb += r.comboAmount || 0;
+        c += r.coffeeAmount || 0;
+        w += r.workshopAmount || 0;
+        cr += (r.retailAmount || 0) + (r.creativeAmount || 0);
+        v += r.venueAmount || 0;
+      });
+      dayGal.forEach(r => { g += (r.price || 0) - (r.commission || 0); });
+      daySpace.forEach(r => { v += r.receivedAmount || 0; });
+      ticketData.push(t);
+      comboData.push(cb);
+      coffeeData.push(c);
+      workshopData.push(w);
+      creativeData.push(cr);
+      venueData.push(v);
+      galleryData.push(g);
+    }
+
+    // 每日合计
+    const totalData = labels.map((_, i) =>
+      ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i]
+    );
+
+    const ctx = canvas.getContext('2d');
+    this._charts['daily-revenue'] = new Chart(ctx, {
       type: 'bar',
       data: {
         labels,

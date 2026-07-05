@@ -940,3 +940,8 @@ table.data-table .tag {
   justify-content: flex-end;
   margin-top: 20px;
 }
+.cp-select-item:hover { background: var(--gray-100); }
+.cp-select-item:last-child { border-bottom: none !important; }
+.cp-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.cp-pagination { display: flex; align-items: center; gap: 6px; }
+.cp-page-info { font-size: 13px; color: var(--gray-500); white-space: nowrap; padding: 0 4px; }
