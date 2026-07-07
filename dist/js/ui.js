@@ -819,15 +819,41 @@ const UI = {
     const today = todayStr();
     const all = await Store.getAll('revenue');
     const todayRecords = all.filter(r => r.date === today);
+
     const ticketQty = todayRecords.reduce((s, r) => s + (r.ticketQty || 0), 0);
-    const totalAmount = todayRecords.reduce((s, r) => {
-      return s + (r.ticketAmount||0) + (r.coffeeAmount||0) + (r.comboAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0);
-    }, 0);
-    el.innerHTML = `
-      <div class="today-stat-item"><span class="today-stat-label">今日门票</span><span class="today-stat-value">${ticketQty} 张</span></div>
-      <div class="today-stat-divider"></div>
-      <div class="today-stat-item"><span class="today-stat-label">今日实收</span><span class="today-stat-value">¥${this._fmt(totalAmount)}</span></div>
+    const ticketAmt = todayRecords.reduce((s, r) => s + (r.ticketAmount || 0), 0);
+    const comboAmt = todayRecords.reduce((s, r) => s + (r.comboAmount || 0), 0);
+    const coffeeAmt = todayRecords.reduce((s, r) => s + (r.coffeeAmount || 0), 0);
+    const workshopAmt = todayRecords.reduce((s, r) => s + (r.workshopAmount || 0), 0);
+    const retailAmt = todayRecords.reduce((s, r) => s + (r.retailAmount || r.creativeAmount || 0), 0);
+    const venueAmt = todayRecords.reduce((s, r) => s + (r.venueAmount || 0), 0);
+    const otherAmt = todayRecords.reduce((s, r) => s + (r.otherAmount || 0), 0);
+    const totalAmount = ticketAmt + comboAmt + coffeeAmt + workshopAmt + retailAmt + venueAmt + otherAmt;
+
+    const item = (label, value, isTotal) => `
+      <div class="today-stat-item${isTotal ? ' today-stat-total' : ''}">
+        <span class="today-stat-label">${label}</span>
+        <span class="today-stat-value">¥${this._fmt(value)}</span>
+      </div>
     `;
+
+    el.innerHTML = [
+      `<div class="today-stat-item"><span class="today-stat-label">今日门票</span><span class="today-stat-value">${ticketQty} 张</span></div>`,
+      `<div class="today-stat-divider"></div>`,
+      item('门票', ticketAmt),
+      `<div class="today-stat-divider"></div>`,
+      item('套票', comboAmt),
+      `<div class="today-stat-divider"></div>`,
+      item('咖啡', coffeeAmt),
+      `<div class="today-stat-divider"></div>`,
+      item('文创', retailAmt),
+      `<div class="today-stat-divider"></div>`,
+      item('工坊', workshopAmt),
+      `<div class="today-stat-divider"></div>`,
+      item('其他', otherAmt + venueAmt),
+      `<div class="today-stat-divider"></div>`,
+      item('合计', totalAmount, true),
+    ].join('');
   },
 
   _goToSpaceTab() {

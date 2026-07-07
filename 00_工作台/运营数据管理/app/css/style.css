@@ -491,6 +491,20 @@ table.data-table .tag {
   height: 20px;
   background: var(--green-300);
 }
+.today-stat-total {
+  background: var(--green-100);
+  padding: 4px 10px;
+  border-radius: 6px;
+  margin-left: 4px;
+}
+.today-stat-total .today-stat-label {
+  color: var(--green-900);
+  font-weight: 700;
+}
+.today-stat-total .today-stat-value {
+  color: var(--green-900);
+  font-size: 16px;
+}
 
 /* 票务/咖啡按钮 */
 .pos-ticket-area {
