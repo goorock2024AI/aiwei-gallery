@@ -185,6 +185,7 @@ var Charts = {
     const creativeData = [];
     const venueData = [];
     const galleryData = [];
+    const otherData = [];
 
     for (let m = 1; m <= 12; m++) {
       const ms = String(m).padStart(2, '0');
@@ -192,7 +193,7 @@ var Charts = {
       const recs = months[ms];
       const grecs = galleryMonths[ms];
       const spRecs = spaceAll.filter(r => (r.date||'').startsWith(year + '-' + ms) && r.rentalType === '付费');
-      let t = 0, cb = 0, c = 0, w = 0, cr = 0, v = 0, g = 0;
+      let t = 0, cb = 0, c = 0, w = 0, cr = 0, v = 0, g = 0, o = 0;
       recs.forEach(r => {
         t += r.ticketAmount || 0;
         cb += r.comboAmount || 0;
@@ -200,6 +201,7 @@ var Charts = {
         w += r.workshopAmount || 0;
         cr += r.creativeAmount || 0;
         v += r.venueAmount || 0;
+        o += r.otherAmount || 0;
       });
       grecs.forEach(r => { g += (r.price||0) - (r.commission||0); });
       spRecs.forEach(r => { v += r.receivedAmount || 0; });
@@ -210,10 +212,11 @@ var Charts = {
       creativeData.push(cr);
       venueData.push(v);
       galleryData.push(g);
+      otherData.push(o);
     }
 
     // 每月合计金额
-    const totalData = labels.map((_, i) => ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i]);
+    const totalData = labels.map((_, i) => ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i] + otherData[i]);
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-trend'] = new Chart(ctx, {
@@ -227,7 +230,8 @@ var Charts = {
           { label: '工坊', data: workshopData, backgroundColor: '#b8863a' },
           { label: '文创', data: creativeData, backgroundColor: '#c5c0b5' },
           { label: '场地', data: venueData, backgroundColor: '#2c6b9e' },
-          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' }
+          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' },
+          { label: '其他', data: otherData, backgroundColor: '#888888' }
         ]
       },
       options: {
@@ -277,6 +281,7 @@ var Charts = {
     const creativeData = [];
     const venueData = [];
     const galleryData = [];
+    const otherData = [];
 
     for (let d = 1; d <= lastDay; d++) {
       const ds = ym + '-' + String(d).padStart(2, '0');
@@ -285,7 +290,7 @@ var Charts = {
       const dayGal = galleryAll.filter(r => r.date === ds);
       const daySpace = spaceAll.filter(r => r.date === ds && r.rentalType === '付费');
 
-      let t = 0, cb = 0, c = 0, w = 0, cr = 0, v = 0, g = 0;
+      let t = 0, cb = 0, c = 0, w = 0, cr = 0, v = 0, g = 0, o = 0;
       dayRev.forEach(r => {
         t += r.ticketAmount || 0;
         cb += r.comboAmount || 0;
@@ -293,6 +298,7 @@ var Charts = {
         w += r.workshopAmount || 0;
         cr += (r.retailAmount || 0) + (r.creativeAmount || 0);
         v += r.venueAmount || 0;
+        o += r.otherAmount || 0;
       });
       dayGal.forEach(r => { g += (r.price || 0) - (r.commission || 0); });
       daySpace.forEach(r => { v += r.receivedAmount || 0; });
@@ -303,11 +309,12 @@ var Charts = {
       creativeData.push(cr);
       venueData.push(v);
       galleryData.push(g);
+      otherData.push(o);
     }
 
     // 每日合计
     const totalData = labels.map((_, i) =>
-      ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i]
+      ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i] + otherData[i]
     );
 
     const ctx = canvas.getContext('2d');
@@ -322,7 +329,8 @@ var Charts = {
           { label: '工坊', data: workshopData, backgroundColor: '#b8863a' },
           { label: '文创', data: creativeData, backgroundColor: '#c5c0b5' },
           { label: '场地', data: venueData, backgroundColor: '#2c6b9e' },
-          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' }
+          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' },
+          { label: '其他', data: otherData, backgroundColor: '#888888' }
         ]
       },
       options: {
