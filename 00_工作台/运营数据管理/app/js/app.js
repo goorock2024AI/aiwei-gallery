@@ -9,6 +9,13 @@
     if (el) el.innerHTML = content;
   };
 
+  // 版本号填充（硬编码常量，发布时人工递增）
+  const APP_VERSION = '1.1.0';
+  (function fillVersion() {
+    const el = document.getElementById('sidebar-version');
+    if (el) el.textContent = 'v' + APP_VERSION;
+  })();
+
   // Tab 切换
   document.addEventListener('click', async function(e) {
     const btn = e.target.closest('.tab-btn');
