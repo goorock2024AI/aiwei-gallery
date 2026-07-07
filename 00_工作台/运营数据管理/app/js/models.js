@@ -50,8 +50,8 @@ function createRevenue(data = {}) {
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
-    ticketQty: hasTicketItems ? ticketItems.reduce((s, i) => s + (+i.qty || 0), 0) : (+data.ticketQty || 0),
-    ticketAmount: hasTicketItems ? ticketItems.reduce((s, i) => s + i.amount, 0) : (+data.ticketQty * MODELS.TICKET_PRICE || 0),
+    ticketQty: hasTicketItems ? ticketItems.filter(i => i.name !== '套票').reduce((s, i) => s + (+i.qty || 0), 0) : (+data.ticketQty || 0),
+    ticketAmount: hasTicketItems ? ticketItems.filter(i => i.name !== '套票').reduce((s, i) => s + i.amount, 0) : (+data.ticketQty * MODELS.TICKET_PRICE || 0),
     ticketItems: data.ticketItems || [],
     comboQty: +data.comboQty || 0,
     comboAmount: +data.comboAmount || 0,

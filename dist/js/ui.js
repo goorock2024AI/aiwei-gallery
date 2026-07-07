@@ -551,8 +551,8 @@ const UI = {
     // 主记录：门票 + 咖啡 + 其他
     const mainRecord = {
       ...baseRecord,
-      ticketItems: tItems,  // 合人套票一起存 ticket_items（combo 明细不入独立列）
-      ticketQty: tItems.reduce((s, i) => s + i.qty, 0),
+      ticketItems: tItems,  // 合入套票一起存 ticket_items（combo 明细不入独立列）
+      ticketQty: regularTicketItems.reduce((s, i) => s + i.qty, 0),
       ticketAmount: regularTicketItems.reduce((s, i) => s + i.amount, 0),
       comboQty: comboItems.reduce((s, i) => s + i.qty, 0),
       comboAmount: comboItems.reduce((s, i) => s + i.amount, 0),
@@ -578,7 +578,7 @@ const UI = {
         const editData = {
           ...baseRecord,
           ticketItems: tItems,  // 合入套票，不单独传 comboItems
-          ticketQty: tItems.reduce((s, i) => s + i.qty, 0),
+          ticketQty: regularTicketItems.reduce((s, i) => s + i.qty, 0),
           ticketAmount: regularTicketItems.reduce((s, i) => s + i.amount, 0),
           comboQty: comboItems.reduce((s, i) => s + i.qty, 0),
           comboAmount: comboItems.reduce((s, i) => s + i.amount, 0),
