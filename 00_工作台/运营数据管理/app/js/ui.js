@@ -183,9 +183,9 @@ const UI = {
                 </div>
               </div>
 
-              <!-- 右列：文创零售 + 工坊 -->
+              <!-- 右列：文创/零售 + 工坊 -->
               <div>
-                <div class="pos-section-title">🛒 文创零售</div>
+                <div class="pos-section-title">🛒 文创/零售</div>
                 <div class="pos-retail-area">
                   <div class="pos-input-row">
                     <div class="form-group"><label>单价</label><input type="number" id="rt-price" min="0" step="0.01" placeholder="0.00" style="width:80px"></div>
@@ -748,24 +748,53 @@ const UI = {
 
     let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>收入明细</th><th>合计</th><th>收款方式</th><th>收款人</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
-      const tags = [];
-      if ((r.ticketAmount || 0) > 0) tags.push(`🎫 普通票 ${r.ticketQty||0}张 ¥${this._fmt(r.ticketAmount)}`);
-      if ((r.comboAmount || 0) > 0) tags.push(`🎟️ 套票 ${r.comboQty||0}张 ¥${this._fmt(r.comboAmount)}`);
-      if ((r.coffeeAmount || 0) > 0) tags.push(`☕ 咖啡 ${r.coffeeQty||0}杯 ¥${this._fmt(r.coffeeAmount)}`);
-      if ((r.workshopAmount || 0) > 0) tags.push(`🔧 工坊 ¥${this._fmt(r.workshopAmount)}`);
+      // 明细数组字段名兼容：录入路径用驼峰（unitPrice/productName），历史/手动 SQL 可能用蛇形（unit_price/product_name）
+      const itemName = i => i.productName ?? i.product_name ?? i.name ?? '';
+      const itemPrice = i => i.unitPrice ?? i.unit_price ?? i.price ?? 0;
+      const lines = [];
+      // 普通票 + 套票明细（ticketItems 里混在一起，套票的 name==='套票'）
+      const tItems = Array.isArray(r.ticketItems) ? r.ticketItems : [];
+      const regularTickets = tItems.filter(i => itemName(i) !== '套票');
+      const comboItems = tItems.filter(i => itemName(i) === '套票');
+      const fmtItem = (icon, qty, name, unitPrice) => `${icon} ${qty}×${name} ¥${this._fmt(unitPrice)}`;
+      regularTickets.forEach(i => lines.push(fmtItem('🎫', i.qty || 0, itemName(i) || '普通票', itemPrice(i))));
+      comboItems.forEach(i => lines.push(fmtItem('🎟️', i.qty || 0, itemName(i) || '套票', itemPrice(i))));
+      // 咖啡明细
+      const cItems = Array.isArray(r.coffeeItems) ? r.coffeeItems : [];
+      cItems.forEach(i => lines.push(fmtItem('☕', i.qty || 0, itemName(i) || '咖啡', itemPrice(i))));
+      // 工坊明细
+      const wItems = Array.isArray(r.workshopItems) ? r.workshopItems : [];
+      wItems.forEach(i => lines.push(fmtItem('🔧', i.qty || 0, itemName(i) || '工坊', itemPrice(i))));
+      // 文创明细
+      const retItems = Array.isArray(r.retailItems) ? r.retailItems : [];
+      retItems.forEach(i => lines.push(fmtItem('🛒', i.qty || 0, itemName(i) || '文创', itemPrice(i))));
+
+      // 兜底 tag：金额>0 但明细数组为空（历史旧数据），保留旧版汇总式显示
+      const fallbackTags = [];
+      if ((r.ticketAmount || 0) > 0 && regularTickets.length === 0) fallbackTags.push(`🎫 普通票 ${r.ticketQty||0}张 ¥${this._fmt(r.ticketAmount)}`);
+      if ((r.comboAmount || 0) > 0 && comboItems.length === 0) fallbackTags.push(`🎟️ 套票 ${r.comboQty||0}张 ¥${this._fmt(r.comboAmount)}`);
+      if ((r.coffeeAmount || 0) > 0 && cItems.length === 0) fallbackTags.push(`☕ 咖啡 ${r.coffeeQty||0}杯 ¥${this._fmt(r.coffeeAmount)}`);
+      if ((r.workshopAmount || 0) > 0 && wItems.length === 0) fallbackTags.push(`🔧 工坊 ¥${this._fmt(r.workshopAmount)}`);
       const retail = r.retailAmount || r.creativeAmount || 0;
-      if (retail > 0) tags.push(`🛒 文创 ¥${this._fmt(retail)}`);
-      if ((r.venueAmount || 0) > 0) tags.push(`🏛 场地 ¥${this._fmt(r.venueAmount)}`);
+      if (retail > 0 && retItems.length === 0) fallbackTags.push(`🛒 文创 ¥${this._fmt(retail)}`);
+      if ((r.venueAmount || 0) > 0) fallbackTags.push(`🏛 场地 ¥${this._fmt(r.venueAmount)}`);
       if ((r.otherAmount || 0) > 0) {
         const desc = r.otherDesc ? `(${r.otherDesc})` : '';
-        tags.push(`📝 其他${desc} ¥${this._fmt(r.otherAmount)}`);
+        fallbackTags.push(`📝 其他${desc} ¥${this._fmt(r.otherAmount)}`);
       }
+
+      const detailHtml = lines.length
+        ? lines.map(t => `<div class="rev-detail-row">${t}</div>`).join('')
+        : fallbackTags.map(t => `<span class="rev-tag">${t}</span>`).join('');
+      const detailGroupHtml = lines.length
+        ? `<div class="rev-detail-group">${detailHtml}</div>`
+        : `<div class="rev-tag-group">${detailHtml}</div>`;
 
       const total = (r.ticketAmount||0)+(r.comboAmount||0)+(r.coffeeAmount||0)+(r.workshopAmount||0)+(r.retailAmount||r.creativeAmount||0)+(r.venueAmount||0)+(r.otherAmount||0);
       const timeStr = r.createdAt ? UI._fmtBeijingTime(r.createdAt) : r.date;
       h += `<tr>
         <td>${timeStr}</td>
-        <td><div class="rev-tag-group">${tags.map(t => `<span class="rev-tag">${t}</span>`).join('')}</div></td>
+        <td>${detailGroupHtml}</td>
         <td><strong>¥${this._fmt(total)}</strong></td>
         <td><span class="tag tag-info">${r.paymentMethod || '—'}</span></td>
         <td>${r.handler || '—'}</td>
@@ -810,6 +839,18 @@ const UI = {
     const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
     el.style.display = 'block';
     el.innerHTML = `⚠️ 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔），请前往 <a href="#" onclick="UI._goToSpaceTab();return false">🏛 空间使用</a> 核对到账`;
+  },
+
+  // === 空间页顶部待收款汇总卡片（独立实现，不抽公共方法）===
+  async _loadSpaceRentSummary() {
+    const el = document.getElementById('space-rent-summary');
+    if (!el) return;
+    const all = await Store.getAll('space');
+    const unpaid = all.filter(s => s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
+    if (!unpaid.length) { el.style.display = 'none'; return; }
+    const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
+    el.style.display = 'block';
+    el.innerHTML = `💰 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔）<span class="srh-hint">请滚动到底部核对到账情况</span>`;
   },
 
   // === 当日销售统计（收银台顶部） ===
@@ -1025,6 +1066,7 @@ const UI = {
     });
 
     html(page, `
+      <div id="space-rent-summary" class="space-rent-summary" style="display:none"></div>
       <div class="card">
         <div class="card-title">🏛 空间使用看板</div>
         <div class="space-dashboard" id="space-dashboard-cards">
@@ -1076,6 +1118,7 @@ const UI = {
       if (r) this._fillSpaceForm(r);
     }
     await this._renderSpaceList();
+    await this._loadSpaceRentSummary();
   },
 
   _renderSpaceDashboardCards(spaceStatuses) {
@@ -1121,6 +1164,26 @@ const UI = {
       amountGroup.style.display = '';
       receivedGroup.style.display = '';
     }
+    this._bindSpaceAmountValidation();
+  },
+
+  _bindSpaceAmountValidation() {
+    const rInput = $('#sp-receivable');
+    const rvInput = $('#sp-received');
+    if (!rInput || !rvInput) return;
+    const handler = () => {
+      const receivable = +(rInput.value || 0);
+      const received = +(rvInput.value || 0);
+      if (received > receivable && receivable >= 0) {
+        rvInput.classList.add('invalid');
+        rInput.classList.add('invalid');
+      } else {
+        rvInput.classList.remove('invalid');
+        rInput.classList.remove('invalid');
+      }
+    };
+    rInput.oninput = handler;
+    rvInput.oninput = handler;
   },
 
   _quickSelectSpace(space) {
@@ -1142,6 +1205,12 @@ const UI = {
     $('#sp-received').value = r.receivedAmount || 0;
     $('#sp-notes').value = r.notes || '';
     this._toggleRentalType();
+    // 编辑回填后立刻校验一次（若旧数据已收>应收，要标红提醒）
+    const rInput = $('#sp-receivable');
+    const rvInput = $('#sp-received');
+    if (rInput && rvInput) {
+      rInput.dispatchEvent(new Event('input'));
+    }
   },
 
   async _renderSpaceList() {
@@ -1200,6 +1269,15 @@ const UI = {
     };
 
     if (!data.projectName) { this.toast('请输入项目/活动名称', 'error'); if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; } return; }
+
+    // 校验：已收金额不能大于应收金额
+    if (rentalType !== '免费' && data.receivedAmount > data.receivableAmount) {
+      this.toast(`已收金额（¥${this._fmt(data.receivedAmount)}）不能大于应收金额（¥${this._fmt(data.receivableAmount)}）`, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; }
+      const rInput = $('#sp-received');
+      if (rInput) { rInput.classList.add('invalid'); rInput.focus(); }
+      return;
+    }
 
     // 检查时间冲突
     if (['已确认','进行中'].includes(data.status)) {
@@ -2125,14 +2203,18 @@ const UI = {
     // 展开每条 retailItems
     const headers = ['日期','产品名称','数量','单价','金额','收款方式','经手人','备注','创建时间'];
     const rows = [];
+    // 字段名兼容：服务端 toCamel 不递归 JSONB 数组，所以读出来时是 snake（product_name/unit_price）；
+    // 少数旧数据可能保留录入时的 camel（productName/unitPrice）。两种都要支持。
+    const itemName = i => i.productName ?? i.product_name ?? '';
+    const itemPrice = i => i.unitPrice ?? i.unit_price ?? 0;
     records.forEach(r => {
       const items = Array.isArray(r.retailItems) ? r.retailItems : [];
       items.forEach(item => {
         rows.push([
           r.date,
-          item.productName || '',
+          itemName(item),
           item.qty || 1,
-          (item.unitPrice || 0).toFixed(2),
+          (+itemPrice(item)).toFixed(2),
           (item.amount || 0).toFixed(2),
           r.paymentMethod || '',
           r.handler || '',

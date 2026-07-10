@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const DB_HOST = process.env.DB_HOST || '127.0.0.1';
 const DB_PASS = process.env.DB_PASS || 'Aiwei2024Gallery';
 const PORT = process.env.PORT || 3000;
-const STATIC_DIR = '/var/www/aiwei';
+const STATIC_DIR = process.env.STATIC_DIR || '/var/www/aiwei';
 
 const pool = new Pool({
   host: DB_HOST,

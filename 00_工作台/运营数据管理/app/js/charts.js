@@ -110,7 +110,7 @@ var Charts = {
           <div class="stat-card"><div class="stat-label">咖啡套票</div><div class="stat-value">¥${_fmt(comboTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">咖啡</div><div class="stat-value">¥${_fmt(coffeeTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">工坊</div><div class="stat-value">¥${_fmt(workshopTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">文创零售</div><div class="stat-value">¥${_fmt(creativeTotal)}</div></div>
+          <div class="stat-card"><div class="stat-label">文创/零售</div><div class="stat-value">¥${_fmt(creativeTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">场地</div><div class="stat-value">¥${_fmt(venueTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">画廊</div><div class="stat-value">¥${_fmt(galleryTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">其他</div><div class="stat-value">¥${_fmt(otherTotal)}</div></div>

@@ -1,3 +1,219 @@
+## 2026-07-10 第十二期：本地预览走通 + 收入明细展开 + 文创导出修复 + 标题微调
+
+### 工作内容
+
+#### 1. 本地预览服务走通（preview.js）
+
+> **解决了从第七期起一直没修的老问题**：本机 `cmd serve` 走不通、PG 连不上、API 不代理，所有 UI 修改都要靠「改 → scp 云端 → 浏览器刷新云端」链路。
+
+写了一个 ~60 行的 `preview.js`（`00_工作台/运营数据管理/preview.js`），纯 Node 0 依赖：
+- 静态文件从 `app/` 直接读取（**不走 `dist/`**，消除镜像漂移）
+- `/rest/*` 路由用 Node 内置 `fetch` 反代到 `http://122.51.56.50`（绕开本机 PG 不通）
+- 环境变量 `PORT`（默认 3000）和 `UPSTREAM`（默认云端 API）可改
+
+`.claude/launch.json` 从 `cmd serve`（命令不存在，从未工作过）改为 `node 00_工作台/运营数据管理/preview.js`，preview 工具自动接管。
+
+**验证**：
+- 5 个静态资源 HTTP 200（直接服务 `app/`，无 scp 延迟）
+- 3 个 API 端点 HTTP 200（反代云端，数据真实）
+- 改 `app/index.html` title 一行，curl 立刻拿到新内容 —— **即时生效**
+
+**部署说明**：本预览服务只用于开发期浏览器手动验证。**生产环境仍需 scp 到 122.51.56.50**（用户访问的是云端，不是 localhost）。
+
+> ⚠️ `dist/` 目录**不归本预览管**，是 `scripts/deploy.sh` 复制给 Cloudflare Pages 用的另一条部署路径，**不能混淆**。
+
+#### 2. 收银台「收入明细」展开为数量×品名×单价
+
+**问题**：收入记录表里「收入明细」列只显示 `🛒 文创 ¥15.00` 这种汇总 tag，对用户来说看不到具体买了什么、单价多少。
+
+**改造**：把 ticketItems / coffeeItems / workshopItems / retailItems 4 个明细数组按行展开，每条记录渲染为「🎫 2×普通票 ¥10.00」这种格式。无明细数组的历史数据保留原 tag 形式（兜底兼容）。
+
+**关键技术点 — 字段名兼容 helper**：
+
+```js
+const itemName  = i => i.productName ?? i.product_name ?? i.name ?? '';
+const itemPrice = i => i.unitPrice ?? i.unit_price ?? i.price ?? 0;
+```
+
+> ⚠️ 真实坑：服务端 `toCamel` 函数**不递归 JSONB 数组**（server.js:47-54 只遍历顶层 key），但 `toSnake` 函数**会递归**（server.js:58-66）。所以录入路径用驼峰 `productName`，读出来时 key 是蛇形 `product_name`。直接读 `item.productName` 拿到 undefined → CSV/UI 全空。
+
+**CSS**：新增 `.rev-detail-group`（纵向布局）+ `.rev-detail-row`（小号灰色文字）。
+
+#### 3. 修复「导出文创销售清单」产品名全为空
+
+**问题**：自 7-5 第九期上线文创模块起，「导出文创销售清单」CSV 里产品名全是空字符串。
+
+**根因**：`_exportCreativeSales` 函数（ui.js:2204-2225）读 `item.productName || ''`，但 API 实际返回的是 `product_name`（蛇形），所以全 undefined → 全空。**这与第 2 项是同一根因**。
+
+**修复**：用与第 2 项相同的 helper 兼容两种 key。
+
+#### 4. 「继续发现」同步修复 import-export.js 同类 bug
+
+修复第 3 项后主动 grep 找同类问题：
+- `import-export.js:40-41` 导出收入记录的「工坊明细」「文创明细」列也是 `i.productName||''` → CSV 里也全空
+- 同样用 helper 兼容修复
+
+**容器内 Node E2E 验证**：5 条样本（含一条 2 个产品明细）全部正确显示产品名。
+
+#### 5. 收银台 + 概览仪表盘标题「文创零售」→「文创/零售」
+
+`ui.js:188` 收银台区块标题 + `charts.js:113` 概览仪表盘 stat-label，全部从「文创零售」改为「文创/零售」。HTML 注释里的「右列：文创零售 + 工坊」也顺手改为「右列：文创/零售 + 工坊」保持一致。
+
+#### 6. CLAUDE.md 沉淀「云端服务器配置」+ 部署纪律
+
+把 7-10 核实的云端配置（主机 / 3 个容器 / 端口 / 数据库 13 张表 / 路径映射 / scp 命令）写入根 `CLAUDE.md` 的「运营数据系统信息 → 云端服务器配置」章节。**核心目的**：未来任何 session 启动时自动加载这些硬约束，避免重复踩 scp 多文件静默跳过 / Node 12 vs Node 20 / `app/` 路径陷阱。
+
+新章节包含 6 个子节：
+- 主机（IP / OS / 内存 / 磁盘）
+- Docker 容器（端口 + 资源占用）
+- 路径映射（宿主机 ↔ 容器内 ↔ 浏览器 URL）
+- 部署运维操作清单（前端 scp / server.js rebuild / nginx restart / 数据库结构）
+- 部署后必做验证（4 步：ls -la / curl / docker logs / API 端点）
+- 不要做的事（6 条历史踩坑）
+
+### 涉及文件
+
+| 文件 | 改动 |
+|---|---|
+| `00_工作台/运营数据管理/preview.js` | **新建** — 60 行 Node 预览服务（静态 + /rest/* 反代）|
+| `00_工作台/运营数据管理/app/js/ui.js` | `_renderRevenueList` 收入明细展开 + 字段名兼容 helper；`_exportCreativeSales` 修复产品名；收银台标题「文创零售」→「文创/零售」 |
+| `00_工作台/运营数据管理/app/js/charts.js` | 概览仪表盘 stat-label「文创零售」→「文创/零售」 |
+| `00_工作台/运营数据管理/app/js/import-export.js` | 收入记录导出工坊/文创明细列字段兼容修复 |
+| `00_工作台/运营数据管理/app/css/style.css` | 新增 `.rev-detail-group` + `.rev-detail-row` |
+| `00_工作台/运营数据管理/app/index.html` | cache-bust token `rev-detail-expand-20260710` |
+| `.claude/launch.json` | `cmd serve` → `node preview.js` |
+| `CLAUDE.md` | 新增「云端服务器配置」「本地预览」两节 |
+
+### 部署
+
+按 `CLAUDE.md` 「部署后必做验证」4 步走 —— 每个文件单独 scp，scp 后立即 `ls -la` 验证 mtime：
+
+| 部署 | 改动文件 | 验证方式 |
+|---|---|---|
+| 1 | `app/js/ui.js` 收入明细展开 + helper | mtime + 文件大小 + E2E 渲染 13 条历史数据 |
+| 2 | `app/css/style.css` `.rev-detail-*` | mtime + 200 |
+| 3 | `app/index.html` cache-bust token | mtime + grep token |
+| 4 | `app/js/ui.js` 标题微调 + `app/js/charts.js` | mtime + grep 残留 |
+| 5 | `app/js/ui.js` 文创清单产品名修复 | mtime + E2E 模拟导出 13 条 |
+| 6 | `app/js/import-export.js` 同类 bug 修复 | mtime + E2E 模拟导出 5 条 |
+
+### 数据库状态
+
+| 表 | 记录数 | 变化 |
+||----|-------:|------|
+| revenue | 209 | 7-10 新增 3 条（admin 测试套票 50 元 + 其他水费 2 元 + admin 其他 2 元）|
+| operation_logs | 238 | 同步增长 |
+| 其他 11 张表 | 不变 | — |
+
+### 沉淀的经验（memory）
+
+- [x] **debug_jsonb_snake_vs_camel_trap**：API JSONB 数组里对象的 key 永远是 snake；前端读取必须用 helper 兼容；同类 bug 一天内修了 3 次（收入明细 / 文创清单 / import-export），根因是 `toCamel` 不递归
+- [x] **feedback_cloud_deploy_traps**：app/ 路径陷阱 + scp 多文件静默跳过 + Node 12 vs Node 20
+- [x] **feedback_preview_serverjs_blocked**：标记 resolved-2026-07-10；旧 `cmd serve` 从未工作过
+- [x] **CLAUDE.md 云端服务器配置**：未来 session 启动时自动加载，避免重复踩坑
+
+---
+
+## 2026-07-07 第十期：录入 bug 修复 + 统计可视化扩展 + 版本号修正
+
+### 工作内容
+
+#### 1. 套票录入重复计算 bug
+
+录入 4 张套票时，系统会同时记 4 张普通票（按标准票计费），导致套票收入和普通票收入同时翻倍。
+
+**根因**：`models.js` 的 `createRevenue()` 函数用 `ticketItems.reduce(...)` 推导 `ticketQty`/`ticketAmount`，但 `ticketItems` 数组里同时含普通票和套票，套票被错误地算进普通票字段。`ui.js` 主记录和编辑记录构造逻辑也有同源问题（虽然金额已正确分离，张数未分离）。
+
+**修复**：
+- `models.js:createRevenue()`：reduce 前先 `filter(i => i.name !== '套票')` 排除套票
+- `ui.js` 主记录和编辑记录两处：`ticketQty` 改用 `regularTicketItems.reduce(...)`
+
+**验证**：三种场景（4 张套票 / 3 张普通票+2 张套票 / 5 张普通票）张数与金额全部正确。
+
+#### 2. 收银台顶部实时统计扩展
+
+原顶部只显示「今日门票 X 张」和「今日实收 ¥Y」两项，信息密度太低。新版拆为 7 项金额 + 合计：
+
+- 今日门票 X 张
+- 门票 / 套票 / 咖啡 / 文创 / 工坊 / 其他 6 项分项
+- 合计（浅绿背景高亮）
+
+**实现细节**：
+- 8 个独立 reduce 求和（`ticketQty` / `ticketAmt` / `comboAmt` / `coffeeAmt` / `workshopAmt` / `retailAmt` / `venueAmt` / `otherAmt`）
+- 文创金额用 `retailAmount || creativeAmount` 兜底兼容旧数据
+- 「其他」项把 `venueAmount` + `otherAmount` 合并展示（与用户要求的 6 项分项列表一致）
+
+**样式**（`style.css`）：新增 `.today-stat-total` 规则，浅绿背景 + 深绿文字 + 圆角，让合计项视觉突出。项目 green 系列只到 100/300/500/700/900，初次用了不存在的 `--green-800` 已修正为 `--green-900`。
+
+#### 3. 收入趋势图表补「其他」项目
+
+「当月日收入趋势」和「月度收入趋势」两个图表在统计和展示时都漏掉了 `otherAmount` 字段，导致录入「其他」收入时该日/当月总额偏少，图表上也看不到这一类收入的占比。
+
+两处都按对称方式补 5 处改动：
+- 数组声明加 `const otherData = []`
+- 累加变量加 `o = 0`
+- 累加逻辑加 `o += r.otherAmount || 0`
+- push 数据
+- 合计金额加 `+ otherData[i]`
+- datasets 末尾加 `{ label: '其他', data: otherData, backgroundColor: '#888888' }`
+
+**验证**：
+- 日趋势 7月7日 otherAmount=88 → 「其他」当日=88，合计=268 ✅
+- 月度 7月 otherAmount=66 → 「其他」7月=66，合计=216 ✅
+
+#### 4. 侧边栏版本号显示修复
+
+`index.html` 第 60 行硬编码占位符 `__APP_VERSION__`，但前端从未有任何 JS 替换——历史提交 `d71ab81` 添加版本号 UI 时只搭了占位符，没接上实际值。结果页面上始终显示 `__APP_VERSION__` 字面字符串。
+
+**修复**：在 `app.js` 启动 IIFE 顶部加 `APP_VERSION = '1.1.0'` 常量（与 VERSION 文件一致）+ IIFE 立即执行 `fillVersion()` 把版本号写入 `#sidebar-version` 元素的 `textContent`。
+
+**已知债**：版本号硬编码在 app.js，未来发版需要手动同步两处（VERSION 文件 + app.js 的 APP_VERSION）。可考虑后端 `/version` 端点或 deploy.sh sed 替换。
+
+### 涉及文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/js/models.js` | `createRevenue()` 过滤套票后再求和 |
+| `app/js/ui.js` | 主记录/编辑记录 ticketQty 改用 regularTicketItems；`_loadTodayStats` 扩展为 7 项分项 + 合计 |
+| `app/js/charts.js` | `renderDailyRevenueTrend` / `renderRevenueTrend` 补「其他」dataset |
+| `app/js/app.js` | 新增 `APP_VERSION` 常量 + `fillVersion()` |
+| `app/css/style.css` | 新增 `.today-stat-total` 规则 |
+| `app/index.html` | 多个 JS/CSS 文件的版本号递增 |
+
+### 部署
+
+5 次增量部署到腾讯云服务器，全部用版本号递增防止浏览器缓存：
+
+| 部署 | 改动文件 | 版本号 token |
+|---|---|---|
+| 1 | ui.js / models.js / index.html | `tkt-combo-fix-20260707` |
+| 2 | charts.js / index.html | `daily-trend-other-20260707` |
+| 3 | ui.js / style.css / index.html | `today-stats-detail-20260707` |
+| 4 | app.js / index.html | `version-fix-20260707` |
+
+### 数据库状态
+
+| 表 | 记录数 | 说明 |
+||----|-------:|------|
+| revenue | 175+ | 不变 |
+| expense | 0 | 待录入 |
+| space_usage | 0 | 待录入 |
+| gallery_sales | 0 | 待录入 |
+| creative_products | 0 | 待导入 |
+
+### 沉淀的经验（memory）
+
+- [x] 问题处理六步流程：分析→设计→执行→验证→复盘→继续发现
+- [x] test4 测试数据纪律（只录入不删非测试账号数据）
+- [x] 启动 preview 前完整同步全部文件到运行时目录
+- [x] git push 网络失败时放宽 git 超时阈值重试，不陷入网络调试
+- [x] 调试优先看浏览器控制台 JS 错误
+- [x] 排查范围：先看变更文件
+- [x] JSONB 数组防御用 Array.isArray()
+- [x] CSS 引用变量前先 grep `--xxx-` 确认变量存在（避免 fallback 到默认色）
+
+---
+
 ## 2026-07-05 第九期：文创产品管理模块（独立录入/表格导入/库存联动/筛选分页）
 
 ### 工作内容

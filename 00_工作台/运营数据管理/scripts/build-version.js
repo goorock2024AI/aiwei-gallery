@@ -64,4 +64,22 @@ const replaced = html
 
 // 写回
 fs.writeFileSync(htmlPath, replaced, 'utf-8');
-console.log(`[build-version] ✅ 版本号: v${appVersion}  缓存标记: ${cacheBust}`);
+console.log(`[build-version] ✅ index.html 版本号: v${appVersion}  缓存标记: ${cacheBust}`);
+
+// 注入 app.js 中的 APP_VERSION 常量
+const jsPath = path.join(path.dirname(htmlPath), 'js', 'app.js');
+try {
+  let js = fs.readFileSync(jsPath, 'utf-8');
+  const newJs = js.replace(
+    /const APP_VERSION\s*=\s*['"][^'"]*['"]\s*;/,
+    `const APP_VERSION = '${appVersion}';`
+  );
+  if (newJs === js) {
+    console.warn('[build-version] ⚠️ app.js 中未找到 APP_VERSION 常量声明，跳过注入');
+  } else {
+    fs.writeFileSync(jsPath, newJs, 'utf-8');
+    console.log(`[build-version] ✅ app.js APP_VERSION 注入: ${appVersion}`);
+  }
+} catch (e) {
+  console.warn('[build-version] ⚠️ app.js 注入失败：' + e.message);
+}

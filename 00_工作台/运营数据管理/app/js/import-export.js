@@ -37,8 +37,10 @@ const ImportExport = {
           const retailAmt = +(r.retailAmount || r.creativeAmount || 0);
           const retailItems = Array.isArray(r.retailItems) ? r.retailItems : [];
           const workshopItems = Array.isArray(r.workshopItems) ? r.workshopItems : [];
-          const retailDetail = retailItems.map(i => `${i.productName||''}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
-          const workshopDetail = workshopItems.map(i => `${i.name||''}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
+          // 字段名兼容：服务端 toCamel 不递归 JSONB 数组，读出来时 key 是 snake
+          const itName = i => i.productName ?? i.product_name ?? i.name ?? '';
+          const retailDetail = retailItems.map(i => `${itName(i)}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
+          const workshopDetail = workshopItems.map(i => `${itName(i)}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
           return [r.date, r.ticketQty||0, r.ticketAmount||0, r.coffeeQty||0, r.coffeeAmount||0, r.workshopAmount||0, workshopDetail, retailAmt, retailDetail, r.venueAmount||0, r.otherAmount||0, r.otherDesc||'', r.cashAmount||0, r.accountAmount||0, r.handler||'', r.notes||'', r.createdAt||''];
         });
       } else if (type === 'expense') {
