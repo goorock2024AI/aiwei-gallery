@@ -812,6 +812,18 @@ const UI = {
     el.innerHTML = `⚠️ 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔），请前往 <a href="#" onclick="UI._goToSpaceTab();return false">🏛 空间使用</a> 核对到账`;
   },
 
+  // === 空间页顶部待收款汇总卡片（独立实现，不抽公共方法）===
+  async _loadSpaceRentSummary() {
+    const el = document.getElementById('space-rent-summary');
+    if (!el) return;
+    const all = await Store.getAll('space');
+    const unpaid = all.filter(s => s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
+    if (!unpaid.length) { el.style.display = 'none'; return; }
+    const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
+    el.style.display = 'block';
+    el.innerHTML = `💰 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔）<span class="srh-hint">请滚动到底部核对到账情况</span>`;
+  },
+
   // === 当日销售统计（收银台顶部） ===
   async _loadTodayStats() {
     const el = document.getElementById('pos-today-stats');
@@ -1025,6 +1037,7 @@ const UI = {
     });
 
     html(page, `
+      <div id="space-rent-summary" class="space-rent-summary" style="display:none"></div>
       <div class="card">
         <div class="card-title">🏛 空间使用看板</div>
         <div class="space-dashboard" id="space-dashboard-cards">
@@ -1076,6 +1089,7 @@ const UI = {
       if (r) this._fillSpaceForm(r);
     }
     await this._renderSpaceList();
+    await this._loadSpaceRentSummary();
   },
 
   _renderSpaceDashboardCards(spaceStatuses) {
@@ -1121,6 +1135,26 @@ const UI = {
       amountGroup.style.display = '';
       receivedGroup.style.display = '';
     }
+    this._bindSpaceAmountValidation();
+  },
+
+  _bindSpaceAmountValidation() {
+    const rInput = $('#sp-receivable');
+    const rvInput = $('#sp-received');
+    if (!rInput || !rvInput) return;
+    const handler = () => {
+      const receivable = +(rInput.value || 0);
+      const received = +(rvInput.value || 0);
+      if (received > receivable && receivable >= 0) {
+        rvInput.classList.add('invalid');
+        rInput.classList.add('invalid');
+      } else {
+        rvInput.classList.remove('invalid');
+        rInput.classList.remove('invalid');
+      }
+    };
+    rInput.oninput = handler;
+    rvInput.oninput = handler;
   },
 
   _quickSelectSpace(space) {
@@ -1142,6 +1176,12 @@ const UI = {
     $('#sp-received').value = r.receivedAmount || 0;
     $('#sp-notes').value = r.notes || '';
     this._toggleRentalType();
+    // 编辑回填后立刻校验一次（若旧数据已收>应收，要标红提醒）
+    const rInput = $('#sp-receivable');
+    const rvInput = $('#sp-received');
+    if (rInput && rvInput) {
+      rInput.dispatchEvent(new Event('input'));
+    }
   },
 
   async _renderSpaceList() {
@@ -1200,6 +1240,15 @@ const UI = {
     };
 
     if (!data.projectName) { this.toast('请输入项目/活动名称', 'error'); if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; } return; }
+
+    // 校验：已收金额不能大于应收金额
+    if (rentalType !== '免费' && data.receivedAmount > data.receivableAmount) {
+      this.toast(`已收金额（¥${this._fmt(data.receivedAmount)}）不能大于应收金额（¥${this._fmt(data.receivableAmount)}）`, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; }
+      const rInput = $('#sp-received');
+      if (rInput) { rInput.classList.add('invalid'); rInput.focus(); }
+      return;
+    }
 
     // 检查时间冲突
     if (['已确认','进行中'].includes(data.status)) {
