@@ -1,4 +1,28 @@
 
+## 2026-07-16（午后）当月日收入趋势图改造
+
+**改动**：数据统计页「当月日收入趋势」从堆叠柱状图改为折线图，**默认展示每天总收入（黑色"合计"线）**，8 项分项（门票 / 咖啡套票 / 咖啡 / 工坊 / 文创 / 场地 / 画廊 / 其他）通过点击底部图例切换显示/隐藏。
+
+**技术细节**：
+- `type: 'bar'` → `'line'`，去掉 `x.stacked / y.stacked`
+- 每条线 `tension: 0.3` + `pointRadius: 2~3` + `fill: false`（避免重叠填色）
+- 「合计」dataset 用 `#222222` 黑色 + `pointRadius: 3` + `borderWidth: 2.5` 突出
+- 8 项分项 `hidden: true` 默认隐藏
+- 加 `interaction: { mode: 'index', intersect: false }`：hover 一天同时显示所有可见线 + 底部合计行
+- Chart.js 默认 `legend.onClick` 已自动绑 `setDatasetVisibility`，无需写自定义 click handler
+- 完整的 `totalData` 数组复用（本来就为了 tooltip 算好合计，现在变成可见线本身）
+
+**为什么折线更合适**：折线传达趋势，柱状传达结构 — 月度 31 天数据按日看趋势是核心诉求。8 项分项保留为可切换维度。「合计」最显眼，解答"哪天收入高"的最常见问题。
+
+**涉及文件**：仅 `app/js/charts.js`（renderDailyRevenueTrend 函数改 1 处）
+
+**沉淀**：
+- 新 memory `debug_chartjs_v3_legend_toggle`（调试期切 dataset 用 `setDatasetVisibility(i, true).update()`，不要用 `inst.show(label)`）
+- renderRevenueTrend（月度）保持堆叠柱状 — 12 个月×多分类，柱状堆叠更直观看结构；用户未要求改月度
+- 后续若加新分项字段（如赞助收入），两个图需同步改 — 候选：抽 `_buildRevenueDatasets()` 工厂函数（本轮不重构）
+
+---
+
 ## 2026-07-16 第十五期：整体部署 — 项目清单页 + 8 模块一次落地
 
 > **本期定位**：把 0710-0714 期间累积未提交的 8 模块 / 14 文件改动**一次性整体部署到云端**。同时为「📋 项目清单」独立页面修复了一个关键 bug（accessMap 漏登记）。

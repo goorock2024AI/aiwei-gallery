@@ -348,23 +348,25 @@ var Charts = {
 
     const ctx = canvas.getContext('2d');
     this._charts['daily-revenue'] = new Chart(ctx, {
-      type: 'bar',
+      type: 'line',
       data: {
         labels,
         datasets: [
-          { label: '门票', data: ticketData, backgroundColor: '#4a8c5c' },
-          { label: '咖啡套票', data: comboData, backgroundColor: '#57a86a' },
-          { label: '咖啡', data: coffeeData, backgroundColor: '#7ab88a' },
-          { label: '工坊', data: workshopData, backgroundColor: '#b8863a' },
-          { label: '文创', data: creativeData, backgroundColor: '#c5c0b5' },
-          { label: '场地', data: venueData, backgroundColor: '#2c6b9e' },
-          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' },
-          { label: '其他', data: otherData, backgroundColor: '#888888' }
+          { label: '合计', data: totalData, borderColor: '#222222', backgroundColor: '#222222', borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 5, tension: 0.3, fill: false, order: 0 },
+          { label: '门票', data: ticketData, borderColor: '#4a8c5c', backgroundColor: '#4a8c5c', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '咖啡套票', data: comboData, borderColor: '#57a86a', backgroundColor: '#57a86a', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '咖啡', data: coffeeData, borderColor: '#7ab88a', backgroundColor: '#7ab88a', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '工坊', data: workshopData, borderColor: '#b8863a', backgroundColor: '#b8863a', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '文创', data: creativeData, borderColor: '#c5c0b5', backgroundColor: '#c5c0b5', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '场地', data: venueData, borderColor: '#2c6b9e', backgroundColor: '#2c6b9e', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '画廊', data: galleryData, borderColor: '#8e44ad', backgroundColor: '#8e44ad', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '其他', data: otherData, borderColor: '#888888', backgroundColor: '#888888', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
           tooltip: {
@@ -378,8 +380,8 @@ var Charts = {
           }
         },
         scales: {
-          x: { stacked: true },
-          y: { stacked: true, beginAtZero: true, ticks: { callback: v => '¥' + v } }
+          x: { beginAtZero: true },
+          y: { beginAtZero: true, ticks: { callback: v => '¥' + v } }
         }
       }
     });

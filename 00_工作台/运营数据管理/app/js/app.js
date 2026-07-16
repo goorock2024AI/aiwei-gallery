@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-  const APP_VERSION = '1.1.0';
-  const LAST_UPDATE = '2026-07-07 16:30';
+  const APP_VERSION = '1.2.0';
+  const LAST_UPDATE = '2026-07-16 17:30';
   (function fillVersion() {
     const el = document.getElementById('sidebar-version');
     if (el) el.textContent = 'v' + APP_VERSION;
