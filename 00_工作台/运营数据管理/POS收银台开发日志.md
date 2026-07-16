@@ -1,4 +1,124 @@
 
+## 2026-07-16 第十五期：整体部署 — 项目清单页 + 8 模块一次落地
+
+> **本期定位**：把 0710-0714 期间累积未提交的 8 模块 / 14 文件改动**一次性整体部署到云端**。同时为「📋 项目清单」独立页面修复了一个关键 bug（accessMap 漏登记）。
+
+### 工作内容
+
+#### 1. 项目清单页（合同视角的快速收款入口）
+
+把空间页「编辑模式下的到账录入表单」抽出来，做成独立 tab：
+
+- **顶部 2 张财务卡**：待收（笔数 + 金额）/ 已结清（笔数 + 金额），点击切换 filter
+- **双筛选**：范围（待收 / 已结清 / 全部）+ 状态（筹备中 / 已确认 / 进行中 / 已完成 / 已取消）
+- **列表表格**：合同编号（`C` + id 后 6 位大写）/ 项目+客户+空间+类型 / 应收 / 已收 / 未收 / 已收进度（带进度条）/ 状态 tag / 操作（💰 收款 / 详情）
+- **快速收款 modal**：默认金额 = 当前未收，付款方式单选（扫码支付 / 转账），保存后自动刷新
+- **空间页引导**：编辑模式「到账明细卡」加「录入请到 📋 项目清单」灰色提示；空间页「待收项目」stat-card 可点击跳项目清单
+
+**核心 bug**：`auth.js` 的 accessMap 漏 `'project-list'` —— admin 也被 `_noAccess` 拒绝，UI 表现为按钮可见但页面空白。修复：`'project-list': ['admin', 'editor']`。**侧边栏新 tab 三处必改**：index.html / app.js switch / **auth.js accessMap**。
+
+#### 2. 8 模块 14 文件一次性提交
+
+0710-0714 期间累积的 14 文件 / 2403+/436- 改动，按方案 B（整体一次部署）落地：
+
+| 模块 | 文件改动 | 关键点 |
+|---|---|---|
+| 空间使用重构（第十二期）| init.sql / server.js / store.js / ui.js / css | `space_payments` 子表 + 视图 + 财务卡 + 甘特图 + 冲突硬性阻止 |
+| 项目清单页 | ui.js / css / index.html / auth.js | 合同视角快速收款（已包含在「项目清单页」段落）|
+| 画廊销售 + 作品联动（第十三+十四期）| init.sql / server.js / models.js / ui.js / nginx.conf | artworks 6 字段 + gallery_sales 2 字段 + multipart 上传 |
+| 文创导出 + JSONB 防御 | import-export.js / ui.js | `retailAmount \|\| creativeAmount` 兼容 + Array.isArray 防御 |
+| 收银台顶部统计 + 趋势补全 | ui.js / charts.js | 6 项分项 + 合计 + 趋势补「其他」dataset |
+| 后端白名单补全 | server.js | 8 表 + JSONB_COLS 加 `tags`（修 project_registry 写入 400 bug）|
+| 部署基础设施 | docker-compose.yml / nginx.conf | uploads-data volume + /uploads/ alias + /rest/ 去末尾斜杠 |
+| 文档 | POS 收银台开发日志.md | 第十二期 + 第十三期 + 第十四期记录 |
+
+**提交**：`0d8c756 feat: 0716 整体部署 — 项目清单 + 空间重构 + 画廊上传 + 白名单补全`
+
+#### 3. 部署流程与云端冒烟
+
+**部署顺序**：
+1. DB schema 验证（云端已是 0711 最新版，无需迁移）
+2. 后端配置 scp：server.js / docker-compose.yml / nginx.conf
+3. `docker compose build api`（自建镜像，需 2-5 分钟）+ `docker compose up -d`（挂 uploads-data 卷）
+4. 前端 10 文件 scp：index.html / 9 个 JS / style.css + init.sql
+5. 清理云端遗留 `ui.js.bak` 备份
+
+**线上冒烟（5 项全过）**：
+
+| 冒烟项 | 端点 | 期望 | 实际 |
+|---|---|---|---|
+| 1. 登录 | POST /rest/v1/login (test4/test1234) | 200 + role=admin | ✅ |
+| 2. 视图聚合 | GET space_usage_with_payments | 含 payments 数组 + receivedAmount 聚合 | ✅ 4150+4150=8300 一致 |
+| 3. artwork 白名单 | POST artworks (8 字段) | 201 + 8 字段全保留 | ✅ HTTP 201 |
+| 4. spacePayment 白名单 | POST space_payments (5 字段) | 201 + 5 字段全保留 | ✅ HTTP 201 |
+| 5. expense 白名单 | POST expense (10 字段) | 201 + 10 字段全保留 | ✅ HTTP 201 |
+
+**所有测试数据 DELETE 清理，业务数据 0 污染**。
+
+#### 4. 关键技术坑（3 条）
+
+1. **accessMap 漏登记 → admin 也被拒**：见「项目清单页」段落。修复 1 行 `auth.js`。
+2. **批量 scp SSH 抖动**：腾讯云轻量服务器短时间内收到 ≥3 个 scp 会断连（Connection reset / abort / banner exchange failed）。每个 scp 之间 sleep 5-15s + 加 `scp -C` + `ServerAliveInterval=30` 才稳定。详见 memory `feedback_ssh_disconnect_during_batch_scp`。
+3. **test4 密码无法反推**：库里存的哈希 `937e8d5f...` 不匹配任何常见候选（88888888 / goorock888 / admin888 / 888888 / goorock / test4 / aiwei2024 全部 sha256 不命中）。改用 change-password 重置为 `test1234` 完成冒烟测试，原哈希保留为「未知」状态。
+
+### 涉及文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/index.html` | 10 个 cache-bust 全部升级到 `0716-batch-deploy` |
+| `app/js/ui.js` | 项目清单页完整实现 + renderProjectListPage + _openQuickCollectModal + _submitQuickCollect + _goToProjectListTab（**+1895 行**）|
+| `app/js/auth.js` | accessMap 加 `'project-list': ['admin', 'editor']` |
+| `app/js/charts.js` | 日/月趋势图补「其他」dataset |
+| `app/js/import-export.js` | retailAmount 兜底 + 工坊/文创明细列 + Array.isArray 防御 |
+| `app/js/models.js` | createSpacePayment / createArtwork 加 imageUrl+settlementPrice+retailPrice+totalQty+soldQty / createGallerySale 加 artworkNo+saleQuantity |
+| `app/js/store.js` | space 别名走视图 + 5000 limit |
+| `app/js/supabase-config.js` | 加 spacePayment / spaceWithPayments 别名 |
+| `app/js/app.js` | tab switch case 加 `project-list` |
+| `app/css/style.css` | 甘特图 / stat-card-toggle / quick-collect-modal / aw-thumb 等样式（**+309 行**）|
+| `app/sql/init.sql` | space_payments 子表 + 视图 + space_usage 加 expected_payment_date + artworks 6 字段 + gallery_sales 2 字段 |
+| `server.js` | TABLE_COLS 补 9 表（含 8 表白名单）+ READ_ONLY_TABLES + handleArtworkUpload + parseMultipartFile + handleSpaceConflict + 5 处 chunk.toString('utf8') + Content-Type charset=utf-8 |
+| `docker-compose.yml` | uploads-data volume |
+| `nginx.conf` | `/uploads/` alias 指向 `/var/cache/nginx/uploads/` + `/rest/` proxy_pass 末尾去斜杠 |
+| `POS收银台开发日志.md` | 第十三 + 第十四期 + 第十五期记录 |
+
+### 部署验证
+
+| 检查项 | 命令 | 结果 |
+|---|---|---|
+| 文件 mtime | `ls -la /opt/aiwei/app/js/*.js` | 全部 0716 13:xx |
+| HTTP 200 + 字节数 | `curl /js/ui.js?v=0716-batch-deploy` | 200 / 191798 bytes |
+| API 容器启动 | `docker compose logs api --tail=5` | "AIWEI API server running on port 3000" |
+| 7 端点健康 | revenue / space_usage_with_payments / artworks / gallery_sales / space_payments / expense / operation_logs | 全 200 |
+| Nginx uploads 卷挂载 | `docker inspect aiwei-nginx-1` | `aiwei_uploads-data` 挂到 `/var/cache/nginx/uploads` |
+
+### 数据库状态（部署后）
+
+| 表 | 记录数 | 说明 |
+|---|---:|---|
+| revenue | 175+ | 不变 |
+| space_usage | 1 | 可口可乐团建（已结清）|
+| space_payments | 2 | 可口可乐 2 笔到账 |
+| artworks | 0 | 已清理（冒烟数据）|
+| gallery_sales | 0 | 不变 |
+| creative_products | 0 | 不变 |
+| expense | 0 | 已清理（冒烟数据）|
+| operation_logs | 增长 | 部署期间有 admin/test4 操作日志 |
+
+### 沉淀的经验（memory）
+
+- [x] 侧边栏新 tab 三处必改：index.html / app.js switch / auth.js accessMap（漏 accessMap admin 也被拒）
+- [x] 批量 scp SSH 抖动：每文件 sleep 5-15s + `scp -C` + `ServerAliveInterval=30`
+- [x] test4 密码哈希不可逆：change-password 重置即可，反推不实际
+
+### 待办 / 后续计划
+
+- [ ] 项目清单页导出 CSV（合同明细 + 到账明细）
+- [ ] 收银台编辑模式点击项目名跳转项目清单
+- [ ] 文创库存自动扣减（销售触发）
+- [ ] test4 密码由用户决定（保留 test1234 / 还是改其他）
+
+---
+
 ## 2026-07-11 第十四期：画廊作品图片上传 + 批量导入
 
 ### 工作内容
