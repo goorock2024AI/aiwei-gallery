@@ -23,6 +23,77 @@
 
 ---
 
+## 2026-07-16（傍晚）补云端 VERSION 缺失债 + SSH 抖动根因识别
+
+### 背景
+
+第十六期（v1.2.0 部署）升号时，本地 VERSION 文件已写入 1.2.0 并 commit（`ba3d9e3`），但 scp 上云端的 3 文件清单里**没有 VERSION** —— 一时疏忽。事后冒烟时发现云端 `/opt/aiwei/VERSION` 不存在，运营侧读不到真值。
+
+### 工作内容
+
+#### 1. scp 本地 VERSION=1.2.0 → /opt/aiwei/VERSION
+
+```bash
+scp -C -o ServerAliveInterval=30 -o ConnectTimeout=15 \
+  VERSION root@122.51.56.50:/opt/aiwei/VERSION
+```
+
+云端落地验证：
+- `ls -la /opt/aiwei/VERSION` → `-rw-r--r-- 1 root root 6 Jul 16 16:03`
+- `cat /opt/aiwei/VERSION` → `1.2.0`
+- mtime 与本地一致 ✅
+
+#### 2. CLAUDE.md 两处同步更新（债变规范）
+
+- **路径映射表**加 `./VERSION` 一行：标注为「（无容器内映射，元数据）当前云端值 1.2.0；不是 nginx / api 容器内文件」
+- **新增「修改 VERSION」章节**列入部署清单：每次升级 `APP_VERSION` 时**必须同步** scp，云端基线 2026-07-16 = 1.2.0
+
+> **为什么单独写一节而不是只在第九期沉淀**？CLAUDE.md 是 AI 工作规范，**复用频率远高于任何 memory**。把它写进 CLAUDE.md 比放 memory 更不易丢。
+
+#### 3. 主动发现 — SSH 抖动根因识别
+
+本轮 ssh/scp 共 4 次尝试，**前 3 次全部 `Connection reset`**：
+
+```
+debug1: kex_exchange_identification: banner line 0: Exceeded MaxStartups
+kex_exchange_identification: Connection closed by remote host
+```
+
+**根因**：`/etc/ssh/sshd_config` 默认 `MaxStartups 10:30:100` —— 未认证连接累计 10 个后服务端主动拒绝。即使 sleep 5-15s 也来不及回收被拒的 startup slot。连续重试只会反复 reset。
+
+**新 memory 规则 8**：触发 `Exceeded MaxStartups` 后 **sleep ≥30s**；等待期间可用 **curl 兜底**验证文件落地（HTTP 不受 SSH 限制）。同步更新 memory `feedback_ssh_disconnect_during_batch_scp`。
+
+**HTTP 验证手段确认**：触发 SSH 拒绝时 curl 仍正常返回 200，证明服务器进程未宕，是 SSH 链路独立限流。这是重要的**兜底诊断技巧**。
+
+### 关键技术坑（本期加深）
+
+1. **SSH MaxStartups** 是真正的限流机制，不是网络抖动；反复重试反而加剧
+2. 云端 `VERSION` 在 14 期迭代中**从未** scp 上过云端，长期无人识别
+3. **AI 工作规范分层原则**：规范类债 → CLAUDE.md；经验教训 → memory；项目进度 → 日志。三者不混用
+
+### 未做的同类债（按"不超出任务"原则识别）
+
+- **build-version.js 占位符机制切换**：CLAUDE.md 注释里已标待办，但需同时改 ① index.html 10 处 token ② 跑 build-version.js 流程 ③ 团队人工维护变自动。**本轮不主动改**（用户未要求，且当前流程已稳）
+- **调高 sshd MaxStartups**：运维债需 root + `service sshd restart`，**本轮不主动做**（运营用户不需要我动 sshd）
+
+### 涉及文件
+
+| 文件 | 改动 |
+|---|---|
+| `/opt/aiwei/VERSION`（云端，仅运行时） | 新建，6 bytes，内容 1.2.0 |
+| `CLAUDE.md` | +1 行（路径映射）+ 9 行（修改 VERSION 章节）|
+| `MEMORY.md`（机器） | 给 `feedback_ssh_disconnect_during_batch_scp` 加规则 8（Sleep + curl 兜底）|
+
+### git
+
+- `57924e9 docs: 补 VERSION 文件云端同步动作（v1.2.0 起）+ 路径映射加 ./VERSION 行` （1 文件 +10 行）
+
+### 与第十六期的关系
+
+本轮**不是新一期**，是第十六期（`ba3d9e3`）升号步骤的**遗漏补遗**。日志单独成节便于追溯：ba3d9e3 → 57924e9 间隔 30 分钟内由同次对话完成。
+
+---
+
 ## 2026-07-16 第十五期：整体部署 — 项目清单页 + 8 模块一次落地
 
 > **本期定位**：把 0710-0714 期间累积未提交的 8 模块 / 14 文件改动**一次性整体部署到云端**。同时为「📋 项目清单」独立页面修复了一个关键 bug（accessMap 漏登记）。
