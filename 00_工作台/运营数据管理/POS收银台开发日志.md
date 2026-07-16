@@ -61,6 +61,8 @@ kex_exchange_identification: Connection closed by remote host
 
 **根因**：`/etc/ssh/sshd_config` 默认 `MaxStartups 10:30:100` —— 未认证连接累计 10 个后服务端主动拒绝。即使 sleep 5-15s 也来不及回收被拒的 startup slot。连续重试只会反复 reset。
 
+> 注：本结论基于 ssh -vv 调试日志显示 `Exceeded MaxStartups` + memory 推测的 sshd 默认值，**未实际登录服务器 `cat /etc/ssh/sshd_config` 验证**。如需 100% 确证，需改日 ssh 验证并打实测锚点。
+
 **新 memory 规则 8**：触发 `Exceeded MaxStartups` 后 **sleep ≥30s**；等待期间可用 **curl 兜底**验证文件落地（HTTP 不受 SSH 限制）。同步更新 memory `feedback_ssh_disconnect_during_batch_scp`。
 
 **HTTP 验证手段确认**：触发 SSH 拒绝时 curl 仍正常返回 200，证明服务器进程未宕，是 SSH 链路独立限流。这是重要的**兜底诊断技巧**。
