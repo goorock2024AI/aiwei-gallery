@@ -44,11 +44,15 @@
         case 'expense': await UI.renderExpensePage(); break;
         case 'gallery': await UI.renderGalleryPage(); break;
         case 'space': await UI.renderSpacePage(); break;
+        case 'project-list': await UI.renderProjectListPage(); break;
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;
         case 'products': await UI.renderProductPage(); break;
         case 'users': await UI.renderUsersPage(); break;
         case 'logs': await UI.renderLogsPage(); break;
+        default:
+          UI.toast('未知页面：' + tab + '（请强刷浏览器 Ctrl+Shift+R）', 'error');
+          break;
       }
     } catch (err) {
       console.error('渲染错误：', err);

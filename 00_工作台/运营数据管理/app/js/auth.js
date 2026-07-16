@@ -165,6 +165,7 @@ const Auth = {
       expense:  ['admin', 'editor'],
       gallery:  ['admin', 'editor'],
       space:    ['admin', 'editor'],
+      'project-list': ['admin', 'editor'],
       reports:  ['admin', 'editor', 'viewer'],
       manage:   ['admin'],
       products: ['admin'],

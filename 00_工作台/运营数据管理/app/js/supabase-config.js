@@ -9,6 +9,8 @@ const TABLE_NAMES = {
   revenue: 'revenue',
   expense: 'expense',
   space: 'space_usage',
+  spacePayment: 'space_payments',
+  spaceWithPayments: 'space_usage_with_payments',
   gallery: 'gallery_sales',
   users: 'users',
   operationLogs: 'operation_logs',

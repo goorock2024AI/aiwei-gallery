@@ -5,6 +5,13 @@ const path = require('path');
 const url = require('url');
 const crypto = require('crypto');
 
+const UPLOAD_DIR = process.env.UPLOAD_DIR || '/tmp/aiwei-uploads';
+try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
+const ARTWORK_UPLOAD_DIR = path.join(UPLOAD_DIR, 'artworks');
+try { fs.mkdirSync(ARTWORK_UPLOAD_DIR, { recursive: true }); } catch (e) {}
+const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;  // 5MB
+
 const DB_HOST = process.env.DB_HOST || '127.0.0.1';
 const DB_PASS = process.env.DB_PASS || 'Aiwei2024Gallery';
 const PORT = process.env.PORT || 3000;
@@ -21,7 +28,9 @@ const pool = new Pool({
 
 // JSONB 列名（用于序列化数组为 JSON 字符串，避免 pg 错误序列化为 PG 数组字面量）
 const JSONB_COLS = new Set([
-  'ticket_items','coffee_items','workshop_items','retail_items'
+  'ticket_items','coffee_items','workshop_items','retail_items',
+  'tags',         // project_registry
+  'value'         // app_config（虽然 app_config 走专用路由，兜底也支持）
 ]);
 
 // 各表实际存在的列（用于过滤前端传入的非法列名）
@@ -33,7 +42,55 @@ const TABLE_COLS = {
     'venue_amount','other_amount','other_desc','cash_amount','account_amount',
     'payment_method','project_name','handler','notes','created_at'
   ]),
+  // 空间使用重构 2026-07-10：去掉 received_amount（由子表聚合）
+  space_usage: new Set([
+    'id','date','end_date','space','project_name','type','client','status',
+    'rental_type','receivable_amount','expected_payment_date','notes','created_at'
+  ]),
+  space_payments: new Set([
+    'id','space_usage_id','payment_date','amount','payment_method','notes','created_at'
+  ]),
+  // 画廊作品档案（含 image_url 2026-07-10；结算价/零售价 2026-07-11；artwork_no + 库存 2026-07-12）
+  artworks: new Set([
+    'id','artwork_no','title','artist','year','medium','dimensions','location','status',
+    'image_url','settlement_price','retail_price','total_qty','sold_qty',
+    'notes','created_at','updated_at'
+  ]),
+  // ===== 2026-07-11 补全：以下表之前无白名单导致字段被静默丢弃 =====
+  expense: new Set([
+    'id','date','type','project','category','amount','description','handler',
+    'invoice_status','receipt_status','related_activity','created_at'
+  ]),
+  gallery_sales: new Set([
+    'id','date','artwork_no','artwork_name','artist','price','commission','buyer_name',
+    'payment_method','related_exhibition','status','handler','notes','sale_quantity','created_at'
+  ]),
+  operation_logs: new Set([
+    'id','user_id','action','table_name','record_id','details','created_at'
+  ]),
+  project_registry: new Set([
+    'id','name','repository','status','tags','notes','created_at','updated_at'
+  ]),
+  inventory: new Set([
+    'id','name','category','quantity','unit','notes','created_at','updated_at'
+  ]),
+  partners: new Set([
+    'id','name','type','contact','phone','notes','created_at','updated_at'
+  ]),
+  content_posts: new Set([
+    'id','title','platform','publish_date','status','url','notes','created_at','updated_at'
+  ]),
+  creative_products: new Set([
+    'id','name','sku','supplier','cost_price','retail_price','stock','unit',
+    'notes','created_at','updated_at'
+  ]),
+  // users / app_config 不需要白名单：
+  // - users 走独立路由（handleLogin / handleChangePassword）
+  // - app_config 走 Store.saveConfig / loadAppConfig（专用 key+value）
 };
+
+// 只读视图/表（POST/PATCH/DELETE 拒绝）
+const READ_ONLY_TABLES = new Set(['space_usage_with_payments']);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
 function toCamel(row) {
@@ -79,7 +136,7 @@ function parsePath(reqUrl) {
 
 function sendJSON(res, status, data, count) {
   const headers = {
-    'Content-Type': 'application/json',
+    'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': '*'
@@ -96,7 +153,7 @@ function sendError(res, status, msg) {
 // --- POST /rest/v1/login --- 服务端密码校验
 async function handleLogin(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
       const { username, password } = JSON.parse(body);
@@ -130,7 +187,7 @@ async function handleLogin(req, res) {
 // --- POST /rest/v1/change-password --- 修改密码
 async function handleChangePassword(req, res) {
   let body = '';
-  req.on('data', chunk => body += chunk);
+  req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
       const { userId, newPassword } = JSON.parse(body);
@@ -139,6 +196,144 @@ async function handleChangePassword(req, res) {
       const hash = sha256(newPassword);
       await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, userId]);
       sendJSON(res, 200, { success: true });
+    } catch (e) { sendError(res, 400, e.message); }
+  });
+}
+
+// --- POST /rest/v1/artworks/upload --- 作品图片上传（multipart/form-data）
+// 返回 { url: '/uploads/artworks/xxx.jpg' }
+function handleArtworkUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const m = contentType.match(/^multipart\/form-data;\s*boundary=(.+)$/);
+  if (!m) return sendError(res, 400, 'Content-Type 必须是 multipart/form-data');
+  const boundary = '--' + m[1];
+
+  const chunks = [];
+  let totalLen = 0;
+  let aborted = false;
+
+  req.on('data', chunk => {
+    if (aborted) return;
+    totalLen += chunk.length;
+    if (totalLen > MAX_IMAGE_SIZE) {
+      aborted = true;
+      try { req.destroy(); } catch (e) {}
+      return sendError(res, 413, '文件超过 5MB 限制');
+    }
+    chunks.push(chunk);
+  });
+
+  req.on('end', () => {
+    if (aborted) return;
+    try {
+      const buf = Buffer.concat(chunks);
+      const result = parseMultipartFile(buf, boundary, 'file', MAX_IMAGE_SIZE);
+      if (!result) return sendError(res, 400, '未找到名为 file 的文件字段');
+      const ext = path.extname(result.filename).toLowerCase();
+      if (!ALLOWED_IMAGE_EXTS.has(ext)) {
+        return sendError(res, 400, '仅支持图片格式：' + [...ALLOWED_IMAGE_EXTS].join(','));
+      }
+      // 生成唯一文件名：时间戳 + 随机 4 字符
+      const random = crypto.randomBytes(2).toString('hex');
+      const newName = Date.now().toString(36) + '_' + random + ext;
+      const destPath = path.join(ARTWORK_UPLOAD_DIR, newName);
+      fs.writeFileSync(destPath, result.data);
+      const url = '/uploads/artworks/' + newName;
+      sendJSON(res, 201, { url, filename: newName, size: result.data.length });
+    } catch (e) {
+      sendError(res, 500, '上传失败：' + e.message);
+    }
+  });
+
+  req.on('error', e => {
+    if (!aborted) sendError(res, 500, '上传错误：' + e.message);
+  });
+}
+
+/** 简易 multipart 解析（单文件场景，无嵌套） */
+function parseMultipartFile(buf, boundary, fieldName, maxSize) {
+  const boundaryBuf = Buffer.from(boundary, 'utf8');
+  // 找每个 part 的头/体分隔
+  let pos = 0;
+  while (pos < buf.length) {
+    // 找 boundary 起点的 \r\n
+    const start = buf.indexOf(boundaryBuf, pos);
+    if (start === -1) break;
+    // boundary 后跟 \r\n，然后是 part header
+    let partStart = start + boundaryBuf.length;
+    if (buf[partStart] === '-' && buf[partStart + 1] === '-') break;  // 结束 boundary
+    if (buf[partStart] === 0x0d) partStart += 2;  // skip \r\n
+    // 找 header 结束的 \r\n\r\n
+    const headerEnd = buf.indexOf('\r\n\r\n', partStart);
+    if (headerEnd === -1) break;
+    const header = buf.slice(partStart, headerEnd).toString('utf8');
+    // body 起点 = headerEnd + 4
+    const bodyStart = headerEnd + 4;
+    // 找下一个 boundary 起点
+    const next = buf.indexOf(boundaryBuf, bodyStart);
+    if (next === -1) break;
+    // body 终点 = next - 2（去掉 boundary 前的 \r\n）
+    let bodyEnd = next - 2;
+    if (bodyEnd <= bodyStart) break;
+    // 解析 Content-Disposition 拿 filename + name
+    const filenameMatch = header.match(/filename="([^"]+)"/);
+    const nameMatch = header.match(/name="([^"]+)"/);
+    const curName = nameMatch ? nameMatch[1] : '';
+    if (curName === fieldName && filenameMatch) {
+      const filename = filenameMatch[1];
+      const data = buf.slice(bodyStart, bodyEnd);
+      if (data.length > maxSize) throw new Error('文件超过限制');
+      return { filename, data };
+    }
+    pos = next + boundaryBuf.length;
+  }
+  return null;
+}
+
+// --- POST /rest/v1/space_usage/check-conflict ---
+// body: { space, date, endDate, excludeId? }
+// 返回 200 { ok: true } 或 409 { conflict: { id, projectName, date, endDate } }
+async function handleSpaceConflict(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', async () => {
+    try {
+      const { space, date, endDate, excludeId } = JSON.parse(body);
+      if (!space || !date) return sendError(res, 400, '缺少 space 或 date');
+
+      const newStart = date;
+      const newEnd = endDate || date;
+
+      // 区间相交判定：新记录区间 [newStart..newEnd] ∩ 已有记录 [s.date..COALESCE(s.end_date, s.date)]
+      // 等价于：newStart <= COALESCE(s.end_date, s.date) AND newEnd >= s.date
+      const params = [space, newStart, newEnd];
+      let excludeClause = '';
+      if (excludeId) {
+        params.push(excludeId);
+        excludeClause = ` AND id <> $${params.length}`;
+      }
+      const sql = `
+        SELECT id, project_name, date, end_date, status
+          FROM space_usage
+         WHERE space = $1
+           AND status IN ('已确认','进行中')
+           AND $2 <= COALESCE(NULLIF(end_date, ''), date)
+           AND $3 >= date
+           ${excludeClause}
+         LIMIT 1`;
+      const r = await pool.query(sql, params);
+      if (r.rows.length > 0) {
+        return sendJSON(res, 409, {
+          conflict: {
+            id: r.rows[0].id,
+            projectName: r.rows[0].project_name,
+            date: r.rows[0].date,
+            endDate: r.rows[0].end_date || r.rows[0].date,
+            status: r.rows[0].status
+          }
+        });
+      }
+      sendJSON(res, 200, { ok: true });
     } catch (e) { sendError(res, 400, e.message); }
   });
 }
@@ -152,6 +347,7 @@ async function handleREST(req, res, urlInfo) {
   const table = parts[2];
   const tableMap = {
     'revenue': 'revenue', 'expense': 'expense', 'space_usage': 'space_usage',
+    'space_payments': 'space_payments', 'space_usage_with_payments': 'space_usage_with_payments',
     'gallery_sales': 'gallery_sales', 'app_config': 'app_config',
     'users': 'users', 'operation_logs': 'operation_logs',
     'project_registry': 'project_registry', 'inventory': 'inventory',
@@ -162,6 +358,11 @@ async function handleREST(req, res, urlInfo) {
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);
 
   const method = req.method.toUpperCase();
+
+  // 只读视图/表拒绝写
+  if (READ_ONLY_TABLES.has(dbTable) && method !== 'GET' && method !== 'OPTIONS') {
+    return sendError(res, 405, '视图只读，不能写入');
+  }
 
   try {
     // --- GET /rest/v1/table ---
@@ -234,7 +435,7 @@ async function handleREST(req, res, urlInfo) {
     // --- POST /rest/v1/table ---
     else if (method === 'POST') {
       let body = '';
-      req.on('data', chunk => body += chunk);
+      req.on('data', chunk => body += chunk.toString('utf8'));
       req.on('end', async () => {
         try {
           let data = JSON.parse(body);
@@ -272,7 +473,7 @@ async function handleREST(req, res, urlInfo) {
       }
 
       let body = '';
-      req.on('data', chunk => body += chunk);
+      req.on('data', chunk => body += chunk.toString('utf8'));
       req.on('end', async () => {
         try {
           let data = JSON.parse(body);
@@ -377,6 +578,10 @@ const server = http.createServer((req, res) => {
       handleLogin(req, res);
     } else if (parts[2] === 'change-password' && req.method === 'POST') {
       handleChangePassword(req, res);
+    } else if (parts[2] === 'space_usage' && parts[3] === 'check-conflict' && req.method === 'POST') {
+      handleSpaceConflict(req, res);
+    } else if (parts[2] === 'artworks' && parts[3] === 'upload' && req.method === 'POST') {
+      handleArtworkUpload(req, res);
     } else {
       handleREST(req, res, urlInfo);
     }

@@ -8,6 +8,19 @@ const UI = {
   _expenseFilterMonth: '',
   _spaceFilterMonth: '',
   _galleryFilterMonth: '',
+  _artworkFilterChip: 'all',  // 画廊库存子过滤：all | instock | exhibiting | soldout | lowstock
+  _artworkSalesPeriod: 'month',  // 销售额月/年切换：month | year
+  _salesAgg: { month: 0, year: 0, total: 0 },  // 画廊销售聚合（缓存）
+  _spaceStatsTotalPeriod: (typeof localStorage !== 'undefined' && localStorage.getItem('aiwei_space_stats_total_period')) || 'month',  // 总收入统计周期：month | year
+  _spaceStatsReceivedPeriod: (typeof localStorage !== 'undefined' && localStorage.getItem('aiwei_space_stats_received_period')) || 'month',  // 已收统计周期：month | year
+  // 产品管理二级标签（重构 2026-07-10）
+  _productTab: 'ticket',  // ticket | coffee | creative | workshop | gallery
+  _productSearch: { ticket: '', coffee: '', creative: '', workshop: '', gallery: '' },
+  _artworks: [],
+  _creativeProducts: [],
+  _cpFilterSupplier: '',
+  _cpPage: 0,
+  _CP_PAGE_SIZE: 40,
 
   // === Toast 通知 ===
   toast(msg, type = 'success') {
@@ -32,6 +45,7 @@ const UI = {
 
   _noAccess(page) {
     html(page, '<div class="card" style="text-align:center;padding:60px 20px"><p style="font-size:16px;color:var(--gray-500)">无权限访问此页面</p></div>');
+    this.toast('当前账号无权限访问此页面', 'error');
   },
 
   // === 日期工具 ===
@@ -841,18 +855,6 @@ const UI = {
     el.innerHTML = `⚠️ 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔），请前往 <a href="#" onclick="UI._goToSpaceTab();return false">🏛 空间使用</a> 核对到账`;
   },
 
-  // === 空间页顶部待收款汇总卡片（独立实现，不抽公共方法）===
-  async _loadSpaceRentSummary() {
-    const el = document.getElementById('space-rent-summary');
-    if (!el) return;
-    const all = await Store.getAll('space');
-    const unpaid = all.filter(s => s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
-    if (!unpaid.length) { el.style.display = 'none'; return; }
-    const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
-    el.style.display = 'block';
-    el.innerHTML = `💰 场地租金待收款 <strong>¥${this._fmt(total)}</strong>（${unpaid.length} 笔）<span class="srh-hint">请滚动到底部核对到账情况</span>`;
-  },
-
   // === 当日销售统计（收银台顶部） ===
   async _loadTodayStats() {
     const el = document.getElementById('pos-today-stats');
@@ -900,6 +902,249 @@ const UI = {
   _goToSpaceTab() {
     const btn = document.querySelector('.tab-btn[data-tab="space"]');
     if (btn) btn.click();
+  },
+
+  _goToProjectListTab() {
+    const btn = document.querySelector('.tab-btn[data-tab="project-list"]');
+    if (btn) btn.click();
+  },
+
+  // === 项目清单页（合同视角的收款快速入口；2026-07-15 重构） ===
+  _projectListFilter: 'pending',  // all | pending | settled | status:{value}
+  _projectListStatusFilter: '',
+
+  async renderProjectListPage() {
+    const page = $('#page-project-list');
+    if (!Auth.hasModuleAccess('space')) { this._noAccess(page); return; }
+    const records = await Store.getAll('space');
+    this._projectListRecords = records;
+
+    let pendingCount = 0, settledCount = 0, pendingAmount = 0, settledAmount = 0;
+    records.forEach(r => {
+      if (r.rentalType !== '付费') return;
+      const recv = +r.receivableAmount || 0;
+      const got = +r.receivedAmount || 0;
+      if (got < recv) { pendingCount += 1; pendingAmount += (recv - got); }
+      else { settledCount += 1; settledAmount += recv; }
+    });
+
+    const filterOpts = `
+      <div class="form-group"><label>范围</label>
+        <select id="pl-filter" onchange="UI._onProjectListFilterChange()">
+          <option value="pending" ${this._projectListFilter === 'pending' ? 'selected' : ''}>待收（${pendingCount}）</option>
+          <option value="settled" ${this._projectListFilter === 'settled' ? 'selected' : ''}>已结清（${settledCount}）</option>
+          <option value="all" ${this._projectListFilter === 'all' ? 'selected' : ''}>全部（${pendingCount + settledCount}）</option>
+        </select>
+      </div>
+      <div class="form-group"><label>状态</label>
+        <select id="pl-status-filter" onchange="UI._onProjectListFilterChange()">
+          <option value="">全部</option>
+          <option value="筹备中" ${this._projectListStatusFilter === '筹备中' ? 'selected' : ''}>筹备中</option>
+          <option value="已确认" ${this._projectListStatusFilter === '已确认' ? 'selected' : ''}>已确认</option>
+          <option value="进行中" ${this._projectListStatusFilter === '进行中' ? 'selected' : ''}>进行中</option>
+          <option value="已完成" ${this._projectListStatusFilter === '已完成' ? 'selected' : ''}>已完成</option>
+          <option value="已取消" ${this._projectListStatusFilter === '已取消' ? 'selected' : ''}>已取消</option>
+        </select>
+      </div>
+    `;
+
+    html(page, `
+      <div class="card">
+        <div class="card-title">📋 项目清单</div>
+        <div class="stat-card-grid" style="margin-bottom: 16px;">
+          <div class="stat-card stat-card-clickable ${this._projectListFilter === 'pending' ? 'stat-card-active' : ''}" onclick="UI._setProjectListFilter('pending')">
+            <div class="stat-label">待收</div>
+            <div class="stat-value" style="color:var(--red)">${pendingCount} <span style="font-size:14px">笔合同</span></div>
+            <div class="stat-sub">合计待收 ¥${this._fmt(pendingAmount)}</div>
+          </div>
+          <div class="stat-card stat-card-clickable ${this._projectListFilter === 'settled' ? 'stat-card-active' : ''}" onclick="UI._setProjectListFilter('settled')">
+            <div class="stat-label">已结清</div>
+            <div class="stat-value" style="color:var(--green-700)">${settledCount} <span style="font-size:14px">笔合同</span></div>
+            <div class="stat-sub">合计应收 ¥${this._fmt(settledAmount)}</div>
+          </div>
+        </div>
+        <div class="filter-bar">${filterOpts}</div>
+        <div id="project-list-table">${this._renderProjectListTable(records)}</div>
+      </div>
+    `);
+  },
+
+  _setProjectListFilter(filter) {
+    this._projectListFilter = filter;
+    this._projectListStatusFilter = '';
+    this.renderProjectListPage();
+  },
+
+  _onProjectListFilterChange() {
+    this._projectListFilter = $('#pl-filter').value;
+    this._projectListStatusFilter = $('#pl-status-filter').value;
+    const records = this._projectListRecords || [];
+    document.getElementById('project-list-table').innerHTML = this._renderProjectListTable(records);
+    // 顶部统计卡同步
+    this.renderProjectListPage();
+  },
+
+  _renderProjectListTable(records) {
+    let arr = (records || []).filter(r => r.rentalType === '付费');
+    if (this._projectListStatusFilter) {
+      arr = arr.filter(r => r.status === this._projectListStatusFilter);
+    }
+    if (this._projectListFilter === 'pending') {
+      arr = arr.filter(r => (+r.receivedAmount || 0) < (+r.receivableAmount || 0));
+    } else if (this._projectListFilter === 'settled') {
+      arr = arr.filter(r => (+r.receivedAmount || 0) >= (+r.receivableAmount || 0));
+    }
+    if (!arr.length) return '<div class="empty-state"><div class="icon">📋</div>暂无符合条件的合同</div>';
+
+    // 按未收金额倒序
+    arr.sort((a, b) => {
+      const gapA = (+a.receivableAmount || 0) - (+a.receivedAmount || 0);
+      const gapB = (+b.receivableAmount || 0) - (+b.receivedAmount || 0);
+      return gapB - gapA;
+    });
+
+    const rows = arr.map(r => {
+      const recv = +r.receivableAmount || 0;
+      const got = +r.receivedAmount || 0;
+      const gap = Math.max(0, recv - got);
+      const pct = recv > 0 ? Math.round((got / recv) * 100) : 100;
+      const isPending = gap > 0;
+      const paymentsN = Array.isArray(r.payments) ? r.payments.length : 0;
+      const no = this._genSpaceContractNo(r);
+      return `
+        <tr>
+          <td><span style="font-family:monospace;background:var(--cream);padding:2px 6px;border-radius:4px;font-size:12px">${no}</span></td>
+          <td>
+            <div style="font-weight:600">${this._escHtml(r.projectName || '—')}</div>
+            <div style="font-size:12px;color:var(--gray-500)">${this._escHtml(r.client || '未指定客户')} · ${this._escHtml(r.space || '')} · ${this._escHtml(r.type || '')}</div>
+          </td>
+          <td>¥${this._fmt(recv)}</td>
+          <td>¥${this._fmt(got)}</td>
+          <td>
+            ${isPending
+              ? `<span style="color:var(--red);font-weight:600">¥${this._fmt(gap)}</span>`
+              : `<span style="color:var(--gray-400)">—</span>`}
+          </td>
+          <td>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div style="flex:1;height:6px;background:var(--gray-200);border-radius:3px;overflow:hidden;max-width:80px">
+                <div style="width:${pct}%;height:100%;background:${isPending ? 'var(--gold)' : 'var(--green-700)'}"></div>
+              </div>
+              <span style="font-size:12px;color:var(--gray-500);min-width:36px">${pct}%</span>
+            </div>
+            ${paymentsN > 0 ? `<div style="font-size:12px;color:var(--gray-500);margin-top:2px">${paymentsN} 笔到账</div>` : ''}
+          </td>
+          <td><span class="tag tag-info">${this._escHtml(r.status || '筹备中')}</span></td>
+          <td class="row-actions" style="white-space:nowrap">
+            ${isPending ? `<button class="btn btn-primary btn-sm" onclick="UI._openQuickCollectModal('${r.id}')">💰 收款</button> ` : ''}
+            <button class="btn btn-secondary btn-sm" onclick="UI._editSpace('${r.id}')">详情</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr>
+          <th>合同编号</th><th>项目 / 客户 / 空间</th>
+          <th>应收</th><th>已收</th><th>未收</th><th>已收进度</th><th>状态</th><th>操作</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    `;
+  },
+
+  // 合同编号生成（按 id 后 6 位）
+  _genSpaceContractNo(r) {
+    return 'C' + (r.id || '').slice(-6).toUpperCase();
+  },
+
+  _openQuickCollectModal(spaceId) {
+    const r = (this._projectListRecords || []).find(x => x.id === spaceId);
+    if (!r) { this.toast('记录不存在', 'error'); return; }
+    const recv = +r.receivableAmount || 0;
+    const got = +r.receivedAmount || 0;
+    const gap = Math.max(0, recv - got);
+
+    const existing = document.getElementById('quick-collect-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'quick-collect-modal';
+    modal.className = 'modal-mask';
+    modal.innerHTML = `
+      <div class="modal-card quick-collect-modal" onclick="event.stopPropagation()">
+        <div class="modal-header">💰 快速到账 — ${this._escHtml(r.projectName || '')} <span style="float:right;cursor:pointer;font-size:20px;color:var(--gray-500)" onclick="document.getElementById('quick-collect-modal').remove()">×</span></div>
+        <div class="quick-collect-summary">
+          <div class="quick-collect-cell">
+            <div class="quick-collect-label">合同总金额</div>
+            <div class="quick-collect-value">¥${this._fmt(recv)}</div>
+          </div>
+          <div class="quick-collect-cell quick-collect-cell-highlight">
+            <div class="quick-collect-label">待收款金额</div>
+            <div class="quick-collect-value" style="color:var(--red)">¥${this._fmt(gap)}</div>
+          </div>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>到账金额 <span style="color:var(--red)">*</span></label>
+              <input type="number" id="qc-amount" min="0.01" max="${gap || ''}" step="0.01" placeholder="0.00" value="${gap.toFixed(2)}">
+              <small style="color:var(--gray-500)">最多 ¥${this._fmt(gap)}</small>
+            </div>
+            <div class="form-group"><label>到账日期</label><input type="date" id="qc-date" value="${todayStr()}"></div>
+            <div class="form-group full">
+              <label>付款方式</label>
+              <div class="radio-group">
+                <label class="radio-pill"><input type="radio" name="qc-method" value="扫码支付" checked> 扫码支付</label>
+                <label class="radio-pill"><input type="radio" name="qc-method" value="转账"> 转账</label>
+              </div>
+            </div>
+            <div class="form-group full"><label>备注</label><input type="text" id="qc-notes" placeholder="选填"></div>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="document.getElementById('quick-collect-modal').remove()">取消</button>
+            <button class="btn btn-primary" onclick="UI._submitQuickCollect('${spaceId}')">✅ 确认收款</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', () => modal.remove());
+    setTimeout(() => document.getElementById('qc-amount')?.focus(), 30);
+  },
+
+  async _submitQuickCollect(spaceId) {
+    const amount = +($('#qc-amount').value || 0);
+    const date = $('#qc-date').value;
+    const method = (document.querySelector('input[name="qc-method"]:checked') || {}).value || '扫码支付';
+    const notes = $('#qc-notes').value || '';
+    if (!(amount > 0)) { this.toast('金额必须大于 0', 'error'); return; }
+    const r = (this._projectListRecords || []).find(x => x.id === spaceId);
+    if (!r) return;
+    const gap = (+r.receivableAmount || 0) - (+r.receivedAmount || 0);
+    if (amount > gap + 0.01) {
+      this.toast(`金额超过待收 ¥${this._fmt(gap)}`, 'error'); return;
+    }
+    try {
+      await Store.add('spacePayment', createSpacePayment({
+        spaceUsageId: spaceId,
+        paymentDate: date,
+        amount, paymentMethod: method, notes
+      }));
+      this.toast(`已录入到账 ¥${this._fmt(amount)}`);
+      document.getElementById('quick-collect-modal').remove();
+      // 刷新页面与顶部 4 卡片
+      this._projectListRecords = await Store.getAll('space');
+      await this.renderProjectListPage();
+      // 同步空间页（如果用户切回去能直接看到变化）
+      const spacePage = $('#page-space');
+      if (spacePage && spacePage.classList.contains('active')) {
+        await this.renderSpacePage();
+      }
+    } catch (e) {
+      this.toast('到账录入失败：' + (e.message || e), 'error');
+    }
   },
 
   // === 支出录入 ===
@@ -1049,35 +1294,29 @@ const UI = {
     this._renderExpenseList();
   },
 
-  // === 空间使用（卡片看板 + 统一录入） ===
+  // === 空间使用（重构 2026-07-10：财务卡 + 甘特图 + 子表付款）===
   async renderSpacePage() {
     const page = $('#page-space');
     if (!Auth.hasModuleAccess('space')) { this._noAccess(page); return; }
     const editing = this._editingSpaceId;
     const records = await Store.getAll('space');
 
-    // 按空间聚合当前状态
-    const spaceStatuses = {};
-    MODELS.SPACES.forEach(s => { spaceStatuses[s] = null; });
-    records.forEach(r => {
-      if (['筹备中','已确认','进行中'].includes(r.status)) {
-        spaceStatuses[r.space] = r;
-      }
-    });
-
     html(page, `
-      <div id="space-rent-summary" class="space-rent-summary" style="display:none"></div>
+      <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div>
       <div class="card">
-        <div class="card-title">🏛 空间使用看板</div>
-        <div class="space-dashboard" id="space-dashboard-cards">
-          ${this._renderSpaceDashboardCards(spaceStatuses)}
+        <div class="card-title">🏛 空间使用日历（本月）</div>
+        <div class="filter-bar">
+          <div class="form-group"><label>月份</label><input type="month" id="sp-gantt-month" value="${this._spaceGanttMonth || todayStr().slice(0,7)}" onchange="UI._onGanttMonthChange()"></div>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('sp-gantt-month').value='${todayStr().slice(0,7)}'; UI._onGanttMonthChange()">本月</button>
+          <span style="font-size:12px;color:var(--gray-500);margin-left:auto">色块：<span class="gantt-legend gantt-bar--partial" style="display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:middle"></span> 部分收　<span class="gantt-legend gantt-bar" style="display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:middle;background:var(--green-500)"></span> 已收齐　<span class="gantt-legend gantt-bar--free" style="display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:middle;background:var(--gray-300)"></span> 免费</span>
         </div>
+        <div id="space-gantt">${this._renderSpaceGantt(records, this._spaceGanttMonth || todayStr().slice(0,7))}</div>
       </div>
       <div class="card">
         <div class="card-title">${editing ? '编辑使用记录' : '新增使用登记'}</div>
-        <form id="space-form" class="form-grid">
-          <div class="form-group"><label>日期</label><input type="date" id="sp-date" value="${todayStr()}"></div>
-          <div class="form-group"><label>结束日期</label><input type="date" id="sp-end-date" value=""></div>
+        <form id="space-form" class="form-grid" onsubmit="return false">
+          <div class="form-group"><label>日期</label><input type="date" id="sp-date" value="${todayStr()}" onchange="UI._autoSetExpectedPayment()"></div>
+          <div class="form-group"><label>结束日期</label><input type="date" id="sp-end-date" value="" onchange="UI._autoSetExpectedPayment()"></div>
           <div class="form-group"><label>空间</label><select id="sp-space">${MODELS.SPACES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>项目/活动名称</label><input type="text" id="sp-project" placeholder="请输入项目名称" required></div>
           <div class="form-group"><label>类型</label><select id="sp-type">${MODELS.SPACE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
@@ -1089,14 +1328,15 @@ const UI = {
             </select>
           </div>
           <div class="form-group" id="sp-rental-amount-group"><label>应收金额</label><input type="number" id="sp-receivable" min="0" step="0.01" placeholder="0.00" value="0"></div>
-          <div class="form-group" id="sp-received-group"><label>已收金额</label><input type="number" id="sp-received" min="0" step="0.01" placeholder="0.00" value="0"></div>
+          <div class="form-group"><label>预计到账日</label><input type="date" id="sp-expected-payment"></div>
           <div class="form-group full"><label>备注</label><textarea id="sp-notes" rows="2"></textarea></div>
           <div class="form-actions full">
-            <button type="submit" class="btn btn-primary">${editing ? '保存修改' : '保存记录'}</button>
+            <button type="button" class="btn btn-primary" onclick="UI._saveSpace()">${editing ? '保存修改' : '保存记录'}</button>
             ${editing ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditSpace()">取消编辑</button>' : ''}
           </div>
         </form>
       </div>
+      ${editing ? `<div class="card" id="space-payments-card">${await this._renderPaymentsCard(editing)}</div>` : ''}
       <div class="card">
         <div class="card-title">全部记录</div>
         <div class="filter-bar">
@@ -1110,80 +1350,273 @@ const UI = {
 
     document.getElementById('sp-filter-month').value = this._spaceFilterMonth || todayStr().slice(0, 7);
 
-    // 初始化租金类型（新增时默认付费）
+    // 初始化租金类型 + 自动算预计到账日
     this._toggleRentalType();
+    this._autoSetExpectedPayment();
 
     if (editing) {
       const r = await Store.getById('space', editing);
       if (r) this._fillSpaceForm(r);
     }
     await this._renderSpaceList();
-    await this._loadSpaceRentSummary();
   },
 
-  _renderSpaceDashboardCards(spaceStatuses) {
-    const names = { '1号厅':'1号展厅', '2号厅':'2号展厅', '美学空间':'美学空间', '多功能厅':'多功能厅', '六楼综合空间':'六楼综合空间', '走廊画廊':'走廊画廊', '户外露台':'户外露台' };
-    const icons = { '1号厅':'🖼️', '2号厅':'🖼️', '美学空间':'💬', '多功能厅':'🎤', '六楼综合空间':'📦', '走廊画廊':'🖼️', '户外露台':'🌿' };
-    let h = '';
-    MODELS.SPACES.forEach(s => {
-      const usage = spaceStatuses[s];
-      const isOccupied = !!usage;
-      const statusClass = isOccupied
-        ? (usage.status === '进行中' ? 'card-occupied' : 'card-pending')
-        : 'card-free';
-      const statusLabel = isOccupied
-        ? `<span class="tag ${usage.status === '进行中' ? 'tag-success' : 'tag-info'}">${usage.status}</span>`
-        : '<span class="tag tag-free">空闲</span>';
+  // === 顶部 4 张财务卡片（2026-07-14 重构：双口径时间锚点；2026-07-15 拆分切换器）
+  //   总收入 → 按合同月（rentalType==='付费' 且 r.date 在期内），独立切换器
+  //   已收 → 按入账日（space_payments.payment_date 在期内），独立切换器
+  //   未收 → 全期存量（SUM(receivable - received)），无切换器
+  //   待收项目 → 全期存量（COUNT(应收>已收 的合同数)），无切换器）===
+  _renderRentStatCards(records) {
+    const totalPeriod = this._spaceStatsTotalPeriod || 'month';
+    const recvPeriod = this._spaceStatsReceivedPeriod || 'month';
+    const today = todayStr();
+    const totalStart = totalPeriod === 'month' ? today.slice(0, 7) : today.slice(0, 4);
+    const recvStart = recvPeriod === 'month' ? today.slice(0, 7) : today.slice(0, 4);
+    const totalLabel = totalPeriod === 'month' ? `${totalStart}（本月）` : `${totalStart}年（本年）`;
+    const recvLabel = recvPeriod === 'month' ? `${recvStart}（本月）` : `${recvStart}年（本年）`;
 
-      h += `<div class="space-card-dash ${statusClass}" onclick="UI._quickSelectSpace('${s}')">
-        <div class="scd-icon">${icons[s] || '🏛️'}</div>
-        <div class="scd-name">${names[s] || s}</div>
-        <div class="scd-status">${statusLabel}</div>
-        ${isOccupied ? `<div class="scd-project">${usage.projectName}</div>
-          <div class="scd-meta">${usage.date}${usage.endDate ? ' → ' + usage.endDate : ''}</div>
-          <div class="scd-meta">${usage.type} · ${usage.client || '—'}</div>
-          <div class="scd-rent">${usage.rentalType === '免费' ? '免费' : '¥' + this._fmt(usage.receivableAmount)}</div>` : ''}
-      </div>`;
+    let receivable = 0;        // 流量：期内合同应收（按 totalPeriod）
+    let received = 0;          // 流量：期内实收（按 recvPeriod）
+    let unpaidAllTime = 0;     // 存量：全期未收合计金额
+    let pendingProjects = 0;   // 存量：全期待收合同数
+
+    records.forEach(r => {
+      if (r.rentalType !== '付费') return;
+      const recv = +r.receivableAmount || 0;
+      const got = +r.receivedAmount || 0;
+
+      // 流量 1：合同月落在 totalPeriod 期内 → 应收计入
+      if (r.date && r.date.startsWith(totalStart)) {
+        receivable += recv;
+      }
+      // 流量 2：遍历子表按 payment_date 落在 recvPeriod 期内计入
+      const payments = Array.isArray(r.payments) ? r.payments : [];
+      payments.forEach(p => {
+        if (p.paymentDate && p.paymentDate.startsWith(recvStart)) {
+          received += +(p.amount || 0);
+        }
+      });
+
+      // 存量：未收金额 + 待收项目（全期累积，合同收齐才扣除）
+      const gap = recv - got;
+      if (gap > 0) {
+        unpaidAllTime += gap;
+        pendingProjects += 1;
+      }
     });
-    return h;
+
+    // 独立切换器渲染器
+    const renderToggle = (cardKey, period, clickHandler) => `
+      <div class="period-inline-toggle">
+        <button type="button" class="rent-period-btn ${period === 'month' ? 'active' : ''}" data-period="month" onclick="UI._onSpaceCardPeriodChange('${cardKey}', 'month', this)">本月</button>
+        <button type="button" class="rent-period-btn ${period === 'year' ? 'active' : ''}" data-period="year" onclick="UI._onSpaceCardPeriodChange('${cardKey}', 'year', this)">本年</button>
+      </div>
+    `;
+
+    return `
+      <div class="stat-card">
+        <div class="stat-card-header">
+          <div class="stat-label">总收入</div>
+          ${renderToggle('total', totalPeriod)}
+        </div>
+        <div class="stat-value">¥${this._fmt(receivable)}</div>
+        <div class="stat-sub">${totalLabel} · 合同金额</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-header">
+          <div class="stat-label">已收</div>
+          ${renderToggle('received', recvPeriod)}
+        </div>
+        <div class="stat-value" style="color:var(--green-700)">¥${this._fmt(received)}</div>
+        <div class="stat-sub">${recvLabel} · 实收金额</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">未收</div>
+        <div class="stat-value" style="color:var(--gold)">¥${this._fmt(unpaidAllTime)}</div>
+        <div class="stat-sub">全期累积 · ${unpaidAllTime > 0 ? '需跟进' : '已结清'}</div>
+      </div>
+      <div class="stat-card stat-card-clickable" onclick="UI._goToProjectListTab()">
+        <div class="stat-label">待收项目</div>
+        <div class="stat-value" style="color:${pendingProjects > 0 ? 'var(--red)' : 'var(--gray-500)'}">${pendingProjects} <span style="font-size:14px">笔合同</span></div>
+        <div class="stat-sub">全期累积 · ¥${this._fmt(unpaidAllTime)} 待收 · 点击查看 →</div>
+      </div>
+    `;
   },
+
+  // === 空间页财务卡：单卡独立月/年切换器（2026-07-15） ===
+  _onSpaceCardPeriodChange(cardKey, period, btn) {
+    if (!['month', 'year'].includes(period)) return;
+    if (cardKey === 'total') {
+      this._spaceStatsTotalPeriod = period;
+      try { localStorage.setItem('aiwei_space_stats_total_period', period); } catch {}
+    } else if (cardKey === 'received') {
+      this._spaceStatsReceivedPeriod = period;
+      try { localStorage.setItem('aiwei_space_stats_received_period', period); } catch {}
+    } else {
+      return;
+    }
+    // 当前卡内按钮 active 态切换（不影响其他卡）
+    const toggle = btn.parentElement;
+    toggle.querySelectorAll('.rent-period-btn').forEach(b => b.classList.toggle('active', b.dataset.period === period));
+    // 重渲染整个卡片网格（其余 3 张卡也用最新状态重新计算）
+    Store.getAll('space').then(records => {
+      const grid = document.getElementById('rent-stat-grid');
+      if (grid) grid.innerHTML = this._renderRentStatCards(records);
+    });
+  },
+
+  // === 甘特图自绘：横轴日期 / 纵轴空间 ===
+  _renderSpaceGantt(records, yearMonth) {
+    const [y, m] = yearMonth.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const monthStart = `${y}-${String(m).padStart(2,'0')}-01`;
+    const monthEnd = `${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+    const today = todayStr();
+    const todayDay = today.startsWith(yearMonth) ? +today.slice(8,10) : -1;
+
+    // 过滤当月记录
+    const inMonth = records.filter(r => {
+      const s = r.date, e = r.endDate || r.date;
+      return !(e < monthStart || s > monthEnd);
+    });
+
+    // 表头：日期
+    let headerHtml = '<div class="gantt-day-head gantt-corner">空间 \\ 日期</div>';
+    for (let d = 1; d <= lastDay; d++) {
+      const isToday = d === todayDay;
+      headerHtml += `<div class="gantt-day-head${isToday ? ' gantt-today' : ''}">${d}</div>`;
+    }
+    const dayCount = lastDay;
+
+    // 每行：1 空间
+    let rowsHtml = '';
+    MODELS.SPACES.forEach(space => {
+      const spaceRecs = inMonth.filter(r => r.space === space);
+      rowsHtml += `<div class="gantt-space-cell">${space}</div>`;
+      // 每天 1 个单元格（占位，色块用 grid-column 跨列）
+      for (let d = 1; d <= lastDay; d++) {
+        const dateStr = `${yearMonth}-${String(d).padStart(2,'0')}`;
+        const cellRec = spaceRecs.find(r => r.date <= dateStr && (r.endDate || r.date) >= dateStr);
+        if (cellRec && cellRec.date === dateStr) {
+          // 色块起点
+          const startDay = +cellRec.date.slice(8,10);
+          const endDay = +(cellRec.endDate || cellRec.date).slice(8,10);
+          const span = Math.min(endDay, lastDay) - startDay + 1;
+          const expected = cellRec.expectedPaymentDate || this._calcExpectedPaymentDate(cellRec.date, cellRec.endDate);
+          const recv = +(cellRec.receivedAmount || 0);
+          const req = +(cellRec.receivableAmount || 0);
+          let cls = 'gantt-bar';
+          if (cellRec.rentalType === '免费') cls += ' gantt-bar--free';
+          else if (req > 0 && recv >= req) cls += ' gantt-bar--paid';
+          else if (recv > 0) cls += ' gantt-bar--partial';
+          rowsHtml += `<div class="gantt-bar-cell">
+            <div class="${cls}" style="grid-column: span ${span}" title="${this._escAttr(cellRec.projectName)} · ${cellRec.date}${cellRec.endDate && cellRec.endDate !== cellRec.date ? ' → ' + cellRec.endDate : ''} · ${cellRec.status}" onclick="UI._editSpace('${cellRec.id}')">${this._escHtml(cellRec.projectName)}</div>
+          </div>`;
+          d += span - 1; // 跳过被色块覆盖的日期
+        } else if (cellRec) {
+          // 被前面的色块覆盖，跳过（不渲染）
+          rowsHtml += `<div class="gantt-bar-cell"></div>`;
+        } else {
+          rowsHtml += `<div class="gantt-bar-cell"></div>`;
+        }
+      }
+    });
+
+    return `<div class="gantt-wrap"><div class="gantt-grid" style="--days:${dayCount}">
+      ${headerHtml}
+      ${rowsHtml}
+    </div></div>`;
+  },
+
+  _onGanttMonthChange() {
+    this._spaceGanttMonth = document.getElementById('sp-gantt-month').value;
+    Store.getAll('space').then(records => {
+      const el = document.getElementById('space-gantt');
+      if (el) el.innerHTML = this._renderSpaceGantt(records, this._spaceGanttMonth);
+      // 同步刷新财务卡
+      const statEl = document.getElementById('rent-stat-grid');
+      if (statEl) statEl.innerHTML = this._renderRentStatCards(records);
+    });
+  },
+
+  // === 子表 payments 卡（仅编辑模式显示；2026-07-15 移除录入表单，仅保留明细列表 + 删除）===
+  async _renderPaymentsCard(spaceId) {
+    const r = await Store.getById('space', spaceId);
+    const payments = (r && r.payments) || [];
+    const total = payments.reduce((s,p)=>s + (+p.amount||0), 0);
+    const req = +(r?.receivableAmount || 0);
+    const unpaid = Math.max(0, req - total);
+
+    const rows = payments.map(p => `
+      <tr>
+        <td>${p.paymentDate}</td>
+        <td>¥${this._fmt(p.amount)}</td>
+        <td>${p.paymentMethod || '转账'}</td>
+        <td>${this._escHtml(p.notes || '')}</td>
+        <td class="row-actions"><button class="btn btn-sm btn-danger" onclick="UI._deletePayment('${p.id}','${spaceId}')">删除</button></td>
+      </tr>
+    `).join('');
+
+    return `
+      <div class="card-title">💰 到账明细（已收 ¥${this._fmt(total)} / 应收 ¥${this._fmt(req)}${unpaid > 0 ? ' · 待收 ¥' + this._fmt(unpaid) : ' · 已结清'}）<span style="font-size:12px;color:var(--gray-500);margin-left:8px">录入请到「📋 项目清单」</span></div>
+      ${payments.length === 0 ? '<div class="empty-state">暂无到账记录</div>' : `
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>日期</th><th>金额</th><th>方式</th><th>备注</th><th>操作</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`}
+    `;
+  },
+
+  async _deletePayment(paymentId, spaceId) {
+    if (!confirm('确认删除此到账记录？')) return;
+    await Store.delete('spacePayment', paymentId);
+    this.toast('已删除');
+    const card = document.getElementById('space-payments-card');
+    if (card) card.innerHTML = await this._renderPaymentsCard(spaceId);
+    this._refreshGanttAndStats();
+  },
+
+  async _refreshGanttAndStats() {
+    const records = await Store.getAll('space');
+    const statEl = document.getElementById('rent-stat-grid');
+    if (statEl) statEl.innerHTML = this._renderRentStatCards(records);
+    const ganttEl = document.getElementById('space-gantt');
+    if (ganttEl) ganttEl.innerHTML = this._renderSpaceGantt(records, this._spaceGanttMonth || todayStr().slice(0,7));
+  },
+
+  // === 自动算预计到账日 = 结束日期 + 30 天 ===
+  _calcExpectedPaymentDate(date, endDate) {
+    const base = endDate || date;
+    if (!base) return '';
+    const d = new Date(base);
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  },
+  _autoSetExpectedPayment() {
+    const date = $('#sp-date')?.value;
+    const endDate = $('#sp-end-date')?.value;
+    const expected = $('#sp-expected-payment');
+    if (expected && date) {
+      expected.value = this._calcExpectedPaymentDate(date, endDate);
+    }
+  },
+
+  _escHtml(s) {
+    return String(s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+  },
+  _escAttr(s) { return this._escHtml(s); },
 
   _toggleRentalType() {
     const type = $('#sp-rental-type')?.value;
     const amountGroup = $('#sp-rental-amount-group');
-    const receivedGroup = $('#sp-received-group');
     if (!amountGroup) return;
     if (type === '免费') {
       amountGroup.style.display = 'none';
-      receivedGroup.style.display = 'none';
       const rInput = $('#sp-receivable');
-      const rvInput = $('#sp-received');
       if (rInput) rInput.value = 0;
-      if (rvInput) rvInput.value = 0;
     } else {
       amountGroup.style.display = '';
-      receivedGroup.style.display = '';
     }
-    this._bindSpaceAmountValidation();
-  },
-
-  _bindSpaceAmountValidation() {
-    const rInput = $('#sp-receivable');
-    const rvInput = $('#sp-received');
-    if (!rInput || !rvInput) return;
-    const handler = () => {
-      const receivable = +(rInput.value || 0);
-      const received = +(rvInput.value || 0);
-      if (received > receivable && receivable >= 0) {
-        rvInput.classList.add('invalid');
-        rInput.classList.add('invalid');
-      } else {
-        rvInput.classList.remove('invalid');
-        rInput.classList.remove('invalid');
-      }
-    };
-    rInput.oninput = handler;
-    rvInput.oninput = handler;
   },
 
   _quickSelectSpace(space) {
@@ -1202,15 +1635,9 @@ const UI = {
     $('#sp-status').value = r.status;
     $('#sp-rental-type').value = r.rentalType || '付费';
     $('#sp-receivable').value = r.receivableAmount || 0;
-    $('#sp-received').value = r.receivedAmount || 0;
+    $('#sp-expected-payment').value = r.expectedPaymentDate || this._calcExpectedPaymentDate(r.date, r.endDate);
     $('#sp-notes').value = r.notes || '';
     this._toggleRentalType();
-    // 编辑回填后立刻校验一次（若旧数据已收>应收，要标红提醒）
-    const rInput = $('#sp-receivable');
-    const rvInput = $('#sp-received');
-    if (rInput && rvInput) {
-      rInput.dispatchEvent(new Event('input'));
-    }
   },
 
   async _renderSpaceList() {
@@ -1224,20 +1651,22 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">📋</div>暂无记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>结束日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>租金类型</th><th>状态</th><th>应收</th><th>已收</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>结束日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>租金类型</th><th>状态</th><th>应收</th><th>已收</th><th>预计到账</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       const statusTagClass = r.status === '已完成' ? 'tag-success' : r.status === '已取消' || r.status === '空闲' ? 'tag-danger' : 'tag-info';
+      const expected = r.expectedPaymentDate || this._calcExpectedPaymentDate(r.date, r.endDate);
       h += `<tr>
         <td>${r.date}</td>
         <td>${r.endDate || '—'}</td>
-        <td>${r.space}</td>
-        <td>${r.projectName}</td>
-        <td>${r.type}</td>
-        <td>${r.client || '-'}</td>
+        <td>${this._escHtml(r.space)}</td>
+        <td>${this._escHtml(r.projectName)}</td>
+        <td>${this._escHtml(r.type)}</td>
+        <td>${this._escHtml(r.client || '-')}</td>
         <td><span class="tag ${r.rentalType === '免费' ? 'tag-free' : 'tag-info'}">${r.rentalType || '付费'}</span></td>
         <td><span class="tag ${statusTagClass}">${r.status}</span></td>
         <td>${r.rentalType === '免费' ? '免费' : '¥' + this._fmt(r.receivableAmount)}</td>
-        <td>${r.rentalType === '免费' ? '—' : '¥' + this._fmt(r.receivedAmount)}</td>
+        <td>${r.rentalType === '免费' ? '—' : '¥' + this._fmt(r.receivedAmount || 0)}</td>
+        <td>${expected || '—'}</td>
         <td class="row-actions">
           <button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>
           <button class="btn btn-sm btn-danger" onclick="UI._deleteSpace('${r.id}')">删除</button>
@@ -1248,11 +1677,7 @@ const UI = {
     html(el, h);
   },
 
-  async _saveSpace(e) {
-    e.preventDefault();
-    const btn = e.target.querySelector('button[type="submit"]');
-    if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
-
+  async _saveSpace() {
     const rentalType = $('#sp-rental-type').value;
     const data = {
       date: $('#sp-date').value,
@@ -1264,88 +1689,54 @@ const UI = {
       status: $('#sp-status').value,
       rentalType: rentalType,
       receivableAmount: rentalType === '免费' ? 0 : +($('#sp-receivable').value || 0),
-      receivedAmount: rentalType === '免费' ? 0 : +($('#sp-received').value || 0),
+      expectedPaymentDate: $('#sp-expected-payment').value || '',
       notes: $('#sp-notes').value
     };
 
-    if (!data.projectName) { this.toast('请输入项目/活动名称', 'error'); if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; } return; }
+    if (!data.projectName) { this.toast('请输入项目/活动名称', 'error'); return; }
+    if (!data.date) { this.toast('请选择日期', 'error'); return; }
 
-    // 校验：已收金额不能大于应收金额
-    if (rentalType !== '免费' && data.receivedAmount > data.receivableAmount) {
-      this.toast(`已收金额（¥${this._fmt(data.receivedAmount)}）不能大于应收金额（¥${this._fmt(data.receivableAmount)}）`, 'error');
-      if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; }
-      const rInput = $('#sp-received');
-      if (rInput) { rInput.classList.add('invalid'); rInput.focus(); }
-      return;
-    }
-
-    // 检查时间冲突
+    // 硬性冲突检测（仅对已确认/进行中状态）
     if (['已确认','进行中'].includes(data.status)) {
-      const conflict = await this._checkSpaceConflict(data);
-      if (conflict) {
-        this.toast(`时间冲突：该空间在所选时段已被「${conflict.projectName}」占用`, 'error');
-        if (btn) { btn.disabled = false; btn.textContent = this._editingSpaceId ? '保存修改' : '保存记录'; }
+      try {
+        const r = await fetch((SUPABASE_CONFIG.url || '') + '/rest/v1/space_usage/check-conflict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            space: data.space,
+            date: data.date,
+            endDate: data.endDate || '',
+            excludeId: this._editingSpaceId || ''
+          })
+        });
+        if (r.status === 409) {
+          const body = await r.json();
+          this.toast(`时间冲突：${data.space} 在所选时段已被「${body.conflict?.projectName || '其他项目'}」占用（${body.conflict?.date}${body.conflict?.endDate && body.conflict.endDate !== body.conflict.date ? ' → ' + body.conflict.endDate : ''}）`, 'error');
+          return;
+        }
+        if (!r.ok) {
+          this.toast('冲突检测失败：HTTP ' + r.status, 'error');
+          return;
+        }
+      } catch (e) {
+        this.toast('冲突检测失败：' + e.message, 'error');
         return;
       }
     }
 
-    if (this._editingSpaceId) {
-      await Store.update('space', this._editingSpaceId, data);
-      this.toast('空间使用记录已更新');
-      this._editingSpaceId = null;
-    } else {
-      await Store.add('space', createSpaceUsage(data));
-      this.toast('空间使用记录已保存');
-    }
-    await this.renderSpacePage();
-  },
-
-  async _checkSpaceConflict(newData) {
-    // 获取同一空间的所有记录
-    const all = await Store.getAll('space');
-    const sameSpace = all.filter(r =>
-      r.space === newData.space &&
-      ['已确认','进行中'].includes(r.status) &&
-      r.id !== this._editingSpaceId // 编辑时排除自身
-    );
-    if (!sameSpace.length) return null;
-
-    // 新记录占用日期集合
-    const occupiedDates = new Set();
-    const start = new Date(newData.date);
-    let end;
-    if (newData.endDate) {
-      // 有结束日期：占用到结束日期后一天
-      end = new Date(newData.endDate);
-      end.setDate(end.getDate() + 1);
-    } else {
-      // 只有开始日期：仅当天占用
-      end = new Date(newData.date);
-    }
-
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      occupiedDates.add(d.toISOString().slice(0, 10));
-    }
-
-    // 检查每条已有记录的占用区间
-    for (const record of sameSpace) {
-      const rStart = new Date(record.date);
-      let rEnd;
-      if (record.endDate) {
-        rEnd = new Date(record.endDate);
-        rEnd.setDate(rEnd.getDate() + 1);
+    try {
+      if (this._editingSpaceId) {
+        await Store.update('space', this._editingSpaceId, data);
+        this.toast('空间使用记录已更新');
+        this._editingSpaceId = null;
       } else {
-        rEnd = new Date(record.date);
+        await Store.add('space', createSpaceUsage(data));
+        this.toast('空间使用记录已保存');
       }
-
-      for (let d = new Date(rStart); d <= rEnd; d.setDate(d.getDate() + 1)) {
-        if (occupiedDates.has(d.toISOString().slice(0, 10))) {
-          return record; // 返回冲突记录
-        }
-      }
+      await this.renderSpacePage();
+    } catch (e) {
+      this.toast('保存失败：' + (e.message || e), 'error');
     }
-
-    return null;
   },
 
   async _editSpace(id) {
@@ -1360,9 +1751,10 @@ const UI = {
   },
 
   async _deleteSpace(id) {
-    if (!confirm('确认删除此记录？')) return;
+    if (!confirm('确认删除此记录？（关联的到账记录会自动一起删除）')) return;
     await Store.delete('space', id);
     this.toast('已删除');
+    this._editingSpaceId = null;
     await this.renderSpacePage();
   },
 
@@ -1372,10 +1764,115 @@ const UI = {
   },
 
   // === 画廊销售 ===
+  async _pickGalleryArtwork() {
+    await this._loadArtworks();
+    const list = this._artworks;
+    if (!list.length) {
+      this.toast('作品库为空，请先在「产品管理 → 画廊」录入作品', 'error');
+      return;
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    const rows = list
+      .filter(a => a.status !== '已售' && a.status !== '借出' && a.status !== '下架')
+      .map(a => ({
+        ...a,
+        avail: !['已售', '借出', '下架'].includes(a.status)
+      }));
+    const renderRows = (filterText) => {
+      const kw = (filterText || '').trim().toLowerCase();
+      const filtered = !kw ? list : list.filter(a =>
+        String(a.title || '').toLowerCase().includes(kw) ||
+        String(a.artist || '').toLowerCase().includes(kw) ||
+        String(a.location || '').toLowerCase().includes(kw)
+      );
+      const body = overlay.querySelector('#picker-tbody');
+      if (!filtered.length) {
+        body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--gray-500);padding:20px">${kw ? '没有匹配作品' : '作品库为空'}</td></tr>`;
+        return;
+      }
+      body.innerHTML = filtered.map(a => {
+        const imgUrl = this._resolveImageUrl(a.imageUrl || a.image_url || '');
+        const thumb = imgUrl
+          ? `<img src="${this._escHtml(imgUrl)}" class="aw-thumb" onerror="this.outerHTML='<div class=&quot;aw-thumb aw-thumb--placeholder&quot;>无图</div>'">`
+          : `<div class="aw-thumb aw-thumb--placeholder">无图</div>`;
+        const stClass = a.status === '在库' ? 'tag-success' : a.status === '在展' ? 'tag-info' : 'tag-danger';
+        const totalQty = Number(a.totalQty ?? a.total_qty ?? 1);
+        const soldQty = Number(a.soldQty ?? a.sold_qty ?? 0);
+        const avail = Math.max(0, totalQty - soldQty);
+        const soldOut = avail <= 0 || ['已售', '借出', '下架'].includes(a.status);
+        const no = this._escHtml(a.artworkNo || a.artwork_no || '');
+        return `<tr style="${soldOut ? 'opacity:0.5' : ''}">
+          <td><span style="font-family:monospace;background:var(--cream);padding:2px 6px;border-radius:4px;font-size:11px">${no || '-'}</span></td>
+          <td>${thumb}</td>
+          <td><strong>${this._escHtml(a.title || '-')}</strong></td>
+          <td>${this._escHtml(a.artist || '-')}</td>
+          <td><span class="tag ${stClass}">${this._escHtml(a.status || '在库')}</span></td>
+          <td>${avail}/${totalQty}</td>
+          <td>¥${this._fmt(a.retailPrice ?? a.retail_price)}</td>
+          <td><button type="button" class="btn btn-sm btn-primary" ${soldOut ? 'disabled title="该作品无库存可售"' : ''} onclick="UI._selectArtworkForSale('${a.id}')">${soldOut ? '已售罄' : '选择'}</button></td>
+        </tr>`;
+      }).join('');
+    };
+    overlay.innerHTML = `
+      <div class="modal-card" style="min-width:720px;max-width:90vw">
+        <div class="modal-title">📋 从作品库选择</div>
+        <div class="filter-bar" style="margin-bottom:12px">
+          <div class="form-group" style="flex:1;margin-bottom:0">
+            <label>查询</label>
+            <input type="text" id="picker-search" placeholder="按标题/艺术家/位置搜索..." autofocus>
+          </div>
+          <span style="font-size:12px;color:var(--gray-500);margin-left:auto">共 ${list.length} 件</span>
+        </div>
+        <div class="table-wrap" style="max-height:50vh;overflow-y:auto">
+          <table class="data-table">
+            <thead><tr><th style="width:80px">编号</th><th style="width:60px">缩略图</th><th>标题</th><th>艺术家</th><th>状态</th><th style="width:90px">库存</th><th style="width:100px">零售价</th><th style="width:80px">操作</th></tr></thead>
+            <tbody id="picker-tbody"></tbody>
+          </table>
+        </div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:8px">库存为 0 或状态为「已售/借出/下架」的作品已禁用</div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    const searchInput = overlay.querySelector('#picker-search');
+    searchInput.addEventListener('input', () => renderRows(searchInput.value));
+    renderRows('');
+  },
+
+  _selectArtworkForSale(artworkId) {
+    const a = this._artworks.find(x => x.id === artworkId);
+    if (!a) { this.toast('作品不存在', 'error'); return; }
+    const artworkEl = $('#gal-artwork');
+    const noEl = $('#gal-artwork-no');
+    const artistEl = $('#gal-artist');
+    const priceEl = $('#gal-price');
+    const qtyEl = $('#gal-quantity');
+    const hintEl = $('#gal-max-qty-hint');
+    if (artworkEl) artworkEl.value = a.title || '';
+    if (noEl) noEl.value = a.artworkNo || a.artwork_no || '';
+    if (artistEl) artistEl.value = a.artist || '';
+    const retail = Number(a.retailPrice ?? a.retail_price ?? 0);
+    if (priceEl && retail > 0) priceEl.value = retail;
+    const totalQty = Number(a.totalQty ?? a.total_qty ?? 1);
+    const soldQty = Number(a.soldQty ?? a.sold_qty ?? 0);
+    const avail = Math.max(1, totalQty - soldQty);
+    if (qtyEl) qtyEl.value = 1;
+    if (qtyEl) qtyEl.max = avail;
+    if (hintEl) hintEl.textContent = `(库存 ${avail}/${totalQty})`;
+    this._updateGalleryNet();
+    document.querySelector('.modal-overlay')?.remove();
+    this.toast(`已选择：${a.artworkNo ? '['+a.artworkNo+'] ' : ''}${a.title}`);
+  },
+
   async renderGalleryPage() {
     const page = $('#page-gallery');
     if (!Auth.hasModuleAccess('gallery')) { this._noAccess(page); return; }
     const editing = this._editingGalleryId;
+    await this._loadArtworks();
 
     html(page, `
       <div class="card">
@@ -1385,9 +1882,18 @@ const UI = {
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="gal-date" value="${todayStr()}" style="flex:1">${this._todayBtn('gal-date')}</div>
           </div>
-          <div class="form-group"><label>作品名称</label><input type="text" id="gal-artwork" placeholder="请输入作品名称" required></div>
+          <div class="form-group">
+            <label>作品名称</label>
+            <div style="display:flex;gap:6px">
+              <input type="text" id="gal-artwork" placeholder="请输入或从作品库选择" required style="flex:1">
+              <button type="button" class="btn btn-secondary" onclick="UI._pickGalleryArtwork()" title="从产品库-画廊的作品档案中选择">📋 选作品</button>
+            </div>
+          </div>
+          <div class="form-group"><label>作品编号</label><input type="text" id="gal-artwork-no" placeholder="选品后自动填充" readonly style="background:var(--cream);font-family:monospace"></div>
           <div class="form-group"><label>艺术家</label><input type="text" id="gal-artist" placeholder="艺术家姓名（选填）"></div>
-          <div class="form-group"><label>成交价（元）</label><input type="number" id="gal-price" min="0" step="0.01" placeholder="0.00" required oninput="UI._updateGalleryNet()"></div>
+          <div class="form-group"><label>成交数量 <span id="gal-max-qty-hint" style="font-size:11px;color:var(--gray-500);font-weight:normal"></span></label><input type="number" id="gal-quantity" min="1" step="1" value="1" required oninput="UI._updateGalleryNet()"></div>
+          <div class="form-group"><label>成交单价（元）</label><input type="number" id="gal-price" min="0" step="0.01" placeholder="0.00" required oninput="UI._updateGalleryNet()"></div>
+          <div class="form-group"><label>总金额 <span style="font-size:11px;color:var(--gray-500);font-weight:normal">(单价×数量)</span></label><div id="gal-amount" style="padding:8px;background:var(--cream);border-radius:var(--radius-sm);font-weight:bold;color:var(--gold)">¥0.00</div></div>
           <div class="form-group"><label>佣金/手续费（元）</label><input type="number" id="gal-commission" min="0" step="0.01" placeholder="0.00" value="0" oninput="UI._updateGalleryNet()"></div>
           <div class="form-group"><label>净收入 <span id="gal-net" style="font-weight:bold;color:var(--green-700)">¥0.00</span></label></div>
           <div class="form-group"><label>买家</label><input type="text" id="gal-buyer" placeholder="买家姓名（选填）"></div>
@@ -1436,16 +1942,23 @@ const UI = {
   },
 
   _updateGalleryNet() {
+    const qty = +($('#gal-quantity')?.value || 1);
     const price = +($('#gal-price')?.value || 0);
     const comm = +($('#gal-commission')?.value || 0);
-    const net = $('#gal-net');
-    if (net) net.textContent = '¥' + Math.max(0, price - comm).toFixed(2);
+    const amount = qty * price;
+    const net = amount - comm;
+    const amountEl = $('#gal-amount');
+    if (amountEl) amountEl.textContent = '¥' + Math.max(0, amount).toFixed(2);
+    const netEl = $('#gal-net');
+    if (netEl) netEl.textContent = '¥' + Math.max(0, net).toFixed(2);
   },
 
   _fillGalleryForm(r) {
     $('#gal-date').value = r.date;
     $('#gal-artwork').value = r.artworkName || '';
+    $('#gal-artwork-no').value = r.artworkNo || r.artwork_no || '';
     $('#gal-artist').value = r.artist || '';
+    $('#gal-quantity').value = r.saleQuantity || r.sale_quantity || 1;
     $('#gal-price').value = r.price || 0;
     $('#gal-commission').value = r.commission || 0;
     $('#gal-buyer').value = r.buyerName || '';
@@ -1462,6 +1975,8 @@ const UI = {
       date: $('#gal-date').value,
       artworkName: $('#gal-artwork').value.trim(),
       artist: $('#gal-artist').value.trim(),
+      artworkNo: $('#gal-artwork-no')?.value.trim() || '',
+      saleQuantity: Math.max(1, +($('#gal-quantity').value || 1)),
       price: +($('#gal-price').value || 0),
       commission: +($('#gal-commission').value || 0),
       buyerName: $('#gal-buyer').value.trim(),
@@ -1478,8 +1993,10 @@ const UI = {
     const btn = document.querySelector('#page-gallery .btn-primary');
     if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
 
+    let prevRecord = null;
     try {
       if (this._editingGalleryId) {
+        prevRecord = await Store.getById('gallery', this._editingGalleryId);
         await Store.update('gallery', this._editingGalleryId, data);
         this.toast('画廊记录已更新');
         this._editingGalleryId = null;
@@ -1487,6 +2004,8 @@ const UI = {
         await Store.add('gallery', createGallerySale(data));
         this.toast('画廊销售记录已保存');
       }
+      // 联动艺术品库状态（按 artwork_no 优先，title+artist 兜底）
+      await this._syncArtworkStatusBySale(data, prevRecord);
     } catch (e) {
       this.toast('保存失败：' + (e.message || e), 'error');
       if (btn) { btn.disabled = false; btn.textContent = '保存记录'; }
@@ -1494,6 +2013,55 @@ const UI = {
     }
 
     await this.renderGalleryPage();
+  },
+
+  /** 根据销售记录联动更新作品库存 + 状态
+   * 规则：
+   *  - sold_qty 增加 saleQuantity（按 artwork_no 匹配，兜底用 title+artist）
+   *  - sold_qty >= total_qty 时仅显示"售罄"tag（status 字段不被强制覆盖）
+   *  - 删除销售时新增参数 soldQtyDelta 为负，逆向回滚
+   */
+  async _syncArtworkStatusBySale(saleData, prevSale, soldQtyDelta = null) {
+    const name = String(saleData.artworkName || '').trim();
+    const no = String(saleData.artworkNo || prevSale?.artworkNo || '').trim();
+    if (!name && !no) return;
+    await this._loadArtworks();
+    const matched = this._artworks.find(a => {
+      if (no) return String(a.artworkNo || a.artwork_no || '').trim() === no;
+      return String(a.title || '').trim() === name &&
+        (!saleData.artist || String(a.artist || '').trim() === String(saleData.artist || '').trim());
+    });
+    if (!matched) return;
+    const totalQty = Number(matched.totalQty ?? matched.total_qty ?? 1);
+    let curSoldQty = Number(matched.soldQty ?? matched.sold_qty ?? 0);
+    let delta;
+    if (soldQtyDelta !== null) {
+      // 显式 delta（删除回滚路径）
+      delta = soldQtyDelta;
+    } else {
+      // 计算本次增量：本次 quantity - 上次 quantity
+      const curQty = +saleData.saleQuantity || 1;
+      const prevQty = +(prevSale?.saleQuantity || prevSale?.sale_quantity || 1);
+      const wasSold = prevSale?.status === '已售出';
+      const isSoldNow = saleData.status === '已售出';
+      if (wasSold && isSoldNow) delta = curQty - prevQty;
+      else if (!wasSold && isSoldNow) delta = curQty;
+      else if (wasSold && !isSoldNow) delta = -prevQty;
+      else delta = 0;
+    }
+    const newSoldQty = Math.max(0, Math.min(totalQty, curSoldQty + delta));
+    if (newSoldQty === curSoldQty) return;
+    try {
+      await Store.update('artworks', matched.id, {
+        soldQty: newSoldQty,
+        updatedAt: new Date().toISOString()
+      });
+      matched.soldQty = newSoldQty;
+      const tag = newSoldQty >= totalQty ? '售罄' : '正常';
+      this.toast(`已更新作品库存：${matched.artworkNo || matched.title}（${curSoldQty}→${newSoldQty}/${totalQty}，${tag}）`, 'info');
+    } catch (e) {
+      console.warn('[gallery] 同步作品库存失败：', e);
+    }
   },
 
   async _renderGalleryList() {
@@ -1539,7 +2107,22 @@ const UI = {
 
   async _deleteGallery(id) {
     if (!confirm('确认删除此画廊销售记录？')) return;
+    let deletedRecord = null;
+    try { deletedRecord = await Store.getById('gallery', id); } catch {}
     await Store.delete('gallery', id);
+    // 联动回滚库存
+    if (deletedRecord?.status === '已售出') {
+      const qty = +(deletedRecord.saleQuantity || deletedRecord.sale_quantity || 1);
+      try {
+        await this._syncArtworkStatusBySale(
+          { artworkNo: deletedRecord.artworkNo, artworkName: deletedRecord.artworkName, artist: deletedRecord.artist },
+          null,
+          -qty
+        );
+      } catch (e) {
+        console.warn('[gallery] 删除时回滚库存失败：', e);
+      }
+    }
     this.toast('已删除');
     await this._renderGalleryList();
   },
@@ -1690,171 +2273,743 @@ const UI = {
   // ===== 产品/资产管理 =====
   async renderProductPage() {
     if (!Auth.hasModuleAccess('products')) { this._noAccess($('#page-products')); return; }
+    const page = $('#page-products');
+    const tab = this._productTab;
     // 确保配置已从数据库加载
     await Store.loadAppConfig();
-    const page = $('#page-products');
-    const ticketItems = MODELS.ticketProducts || [];
-    const coffeeItems = MODELS.coffeeProducts || [];
-    const wsItems = MODELS.WORKSHOP_PRODUCTS || [];
-    const spItems = MODELS.spaceDetails || [];
+    await this._loadCreativeProducts();
+    await this._loadArtworks();
+    if (tab === 'gallery') await this._buildArtworkLastSoldMap();
+    const counts = {
+      ticket: (MODELS.ticketProducts || []).length,
+      coffee: (MODELS.coffeeProducts || []).length,
+      creative: this._creativeProducts.length,
+      workshop: (MODELS.WORKSHOP_PRODUCTS || []).length,
+      gallery: this._artworks.length
+    };
 
     html(page, `
-      <div class="card">
-        <div class="card-title">🎫 票务产品</div>
-        <div id="prod-ticket-table">${this._renderEditableList(ticketItems, 'ticket', ['名称', '单价'], ['name', 'price'])}</div>
-        <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px" onclick="UI._addConfigItem('ticket')">+ 新增票种</button>
+      <div class="sub-tabs" id="product-sub-tabs">
+        <button class="sub-tab-btn ${tab==='ticket'?'active':''}" data-ptab="ticket">🎫 门票 <span class="badge">${counts.ticket}</span></button>
+        <button class="sub-tab-btn ${tab==='coffee'?'active':''}" data-ptab="coffee">☕ 咖啡 <span class="badge">${counts.coffee}</span></button>
+        <button class="sub-tab-btn ${tab==='creative'?'active':''}" data-ptab="creative">📦 文创/零售 <span class="badge">${counts.creative}</span></button>
+        <button class="sub-tab-btn ${tab==='workshop'?'active':''}" data-ptab="workshop">🔧 工坊 <span class="badge">${counts.workshop}</span></button>
+        <button class="sub-tab-btn ${tab==='gallery'?'active':''}" data-ptab="gallery">🖼️ 画廊 <span class="badge">${counts.gallery}</span></button>
       </div>
-      <div class="card">
-        <div class="card-title">☕ 咖啡饮品</div>
-        <div id="prod-coffee-table">${this._renderEditableList(coffeeItems, 'coffee', ['名称', '单价'], ['name', 'price'])}</div>
-        <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px" onclick="UI._addConfigItem('coffee')">+ 新增咖啡</button>
-      </div>
-      <div class="card">
-        <div class="card-title">🔧 工坊产品</div>
-        <div id="prod-workshop-table">${this._renderEditableList(wsItems, 'workshop', ['名称', '单价'], ['name', 'price'])}</div>
-        <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px" onclick="UI._addConfigItem('workshop')">+ 新增产品</button>
-      </div>
-      <div class="card">
-        <div class="card-title">🏛 经营空间</div>
-        <div id="prod-space-table">${this._renderEditableList(spItems, 'space', ['空间名', '日价', '半天价', '说明'], ['name', 'dailyPrice', 'halfDayPrice', 'desc'])}</div>
-        <button type="button" class="btn btn-sm btn-primary" style="margin-top:8px" onclick="UI._addConfigItem('space')">+ 新增空间</button>
-      </div>
-      <div class="card">
-        <div class="card-title">📦 文创产品管理</div>
-        <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
-          <button type="button" class="btn btn-sm btn-primary" onclick="UI._addCreativeProduct()">+ 新增产品</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._importCreativeProducts()">📥 导入库存</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._downloadImportTemplate()">📋 下载导入模板</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品列表</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 导出文创销售清单</button>
-          <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="cp-count"></span>
-        </div>
-        <div id="prod-creative-table"><div class="loading-state"><div class="spinner"></div></div></div>
-      </div>
+      <div id="product-tab-content">${this._renderProductTabContent(tab)}</div>
     `);
-    this._renderCreativeProductList();
-  },
 
-  _renderEditableList(items, type, headers, fields) {
-    if (!items || !items.length) return '<div class="empty-state" style="padding:16px">暂无数据</div>';
-    const fieldCount = fields.length;
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr>';
-    headers.forEach(hdr => { h += '<th>' + hdr + '</th>'; });
-    h += '<th style="width:90px">操作</th></tr></thead><tbody>';
-    items.forEach((item, idx) => {
-      h += '<tr>';
-      fields.forEach(f => {
-        const val = typeof item[f] !== 'undefined' ? item[f] : '';
-        const isPrice = f === 'price' || f === 'dailyPrice' || f === 'halfDayPrice';
-        h += isPrice ? '<td>' + val + '</td>' : '<td>' + val + '</td>';
+    // 绑定 tab 切换
+    page.querySelectorAll('.sub-tab-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        this._productTab = btn.getAttribute('data-ptab');
+        // 切到画廊子 tab 时，确保销售聚合数据已加载（避免子 tab 切换不走 renderProductPage 的问题）
+        if (this._productTab === 'gallery') {
+          await this._buildArtworkLastSoldMap();
+        }
+        const content = page.querySelector('#product-tab-content');
+        if (content) content.innerHTML = this._renderProductTabContent(this._productTab);
       });
-      h += `<td class="row-actions">
-        <button class="btn btn-sm btn-secondary" onclick="UI._editConfigItem('${type}', ${idx})">编辑</button>
-        <button class="btn btn-sm btn-danger" onclick="UI._deleteConfigItem('${type}', ${idx})">删除</button>
-      </td></tr>`;
     });
-    h += '</tbody></table></div>';
-    return h;
   },
 
-  _addConfigItem(type) {
-    let fields = [];
-    if (type === 'ticket' || type === 'coffee' || type === 'workshop') {
-      fields = ['名称', '单价'];
-    } else if (type === 'space') {
-      fields = ['空间名', '日价', '半天价', '说明'];
-    }
-    const name = prompt('请输入' + fields[0] + '：');
-    if (!name) return;
-    const price = parseFloat(prompt('请输入' + fields[1] + '：'));
-    if (isNaN(price) || price < 0) { this.toast('请输入有效价格', 'error'); return; }
-
-    let item;
-    if (type === 'ticket' || type === 'coffee' || type === 'workshop') {
-      item = { name, price };
-    } else if (type === 'space') {
-      const halfDay = parseFloat(prompt('请输入半天价（输入0表示无）：')) || 0;
-      const desc = prompt('请输入说明：') || '';
-      item = { name, dailyPrice: price, halfDayPrice: halfDay, desc };
-    }
-
-    const keyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products', space: 'spaces' };
-    const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS', space: 'spaceDetails' };
-    const listKey = listKeyMap[type];
-    const dbKey = keyMap[type];
-
-    MODELS[listKey] = MODELS[listKey] || [];
-    MODELS[listKey].push(item);
-
-    // 同步更新旧常量兼容
-    if (type === 'ticket') { MODELS.TICKET_PRICE = MODELS.ticketProducts[0]?.price || 10; if (MODELS.ticketProducts.length > 1) MODELS.COMBO_PRICE = MODELS.ticketProducts[1].price; }
-    if (type === 'coffee') { MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15; }
-    if (type === 'space') { MODELS.SPACES = MODELS.spaceDetails.map(s => s.name); }
-
-    Store.saveConfig(dbKey, MODELS[listKey]);
-    this.toast('已新增');
-    this.renderProductPage();
+  /** 二级 tab 内容渲染 */
+  _renderProductTabContent(tab) {
+    if (tab === 'ticket')      return this._renderSimpleConfigTab('ticket', '门票', ['名称', '单价'], ['name', 'price']);
+    if (tab === 'coffee')      return this._renderSimpleConfigTab('coffee', '咖啡', ['名称', '单价'], ['name', 'price']);
+    if (tab === 'workshop')    return this._renderSimpleConfigTab('workshop', '工坊', ['名称', '单价'], ['name', 'price']);
+    if (tab === 'creative')    return this._renderCreativeTab();
+    if (tab === 'gallery')     return this._renderArtworkTab();
+    return '';
   },
 
-  _editConfigItem(type, idx) {
-    const keyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products', space: 'spaces' };
-    const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS', space: 'spaceDetails' };
-    const listKey = listKeyMap[type];
-    const dbKey = keyMap[type];
-    const items = MODELS[listKey] || [];
-    if (!items[idx]) return;
-    const item = items[idx];
-
-    if (type === 'ticket' || type === 'coffee' || type === 'workshop') {
-      const name = prompt('名称：', item.name);
-      if (!name) return;
-      const price = parseFloat(prompt('单价：', item.price));
-      if (isNaN(price) || price < 0) { this.toast('请输入有效价格', 'error'); return; }
-      items[idx] = { name, price };
-    } else if (type === 'space') {
-      const name = prompt('空间名：', item.name);
-      if (!name) return;
-      const dp = parseFloat(prompt('日价：', item.dailyPrice));
-      if (isNaN(dp)) { this.toast('请输入有效日价', 'error'); return; }
-      const hp = parseFloat(prompt('半天价：', item.halfDayPrice)) || 0;
-      const desc = prompt('说明：', item.desc) || '';
-      items[idx] = { name, dailyPrice: dp, halfDayPrice: hp, desc };
-    }
-
-    // 同步
-    if (type === 'ticket') { MODELS.TICKET_PRICE = MODELS.ticketProducts[0]?.price || 10; if (MODELS.ticketProducts.length > 1) MODELS.COMBO_PRICE = MODELS.ticketProducts[1].price; }
-    if (type === 'coffee') { MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15; }
-    if (type === 'space') { MODELS.SPACES = MODELS.spaceDetails.map(s => s.name); }
-
-    Store.saveConfig(dbKey, items);
-    this.toast('已更新');
-    this.renderProductPage();
+  _setSalesPeriod(p) {
+    this._artworkSalesPeriod = p;
+    this._refreshCurrentProductTab();
   },
 
-  _deleteConfigItem(type, idx) {
-    if (!confirm('确认删除？')) return;
-    const keyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products', space: 'spaces' };
-    const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS', space: 'spaceDetails' };
-    const listKey = listKeyMap[type];
-    const dbKey = keyMap[type];
-    const items = MODELS[listKey] || [];
-    items.splice(idx, 1);
+  /** 异步构建作品最近售出索引 { artworkNo -> 'YYYY-MM-DD' } + 销售额月/年聚合 */
+  async _buildArtworkLastSoldMap() {
+    const map = {};
+    const ym = (new Date()).toISOString().slice(0, 7); // YYYY-MM
+    const yy = (new Date()).toISOString().slice(0, 4); // YYYY
+    const agg = { month: 0, year: 0, total: 0 };
+    try {
+      const all = await Store.getAll('gallery') || [];
+      all.forEach(r => {
+        // 仅"已售出"作为有效计入（已退款应反向，本期不处理）
+        if (r.status !== '已售出') return;
+        const qty = Number(r.saleQuantity || r.sale_quantity || 1);
+        const price = Number(r.price || 0);
+        const commission = Number(r.commission || 0);
+        const amount = qty * price; // 销售总额 = 单价 × 数量
+        const dateStr = r.date || '';
+        // 索引到最近售出
+        const key = r.artworkNo || r.artwork_no || (r.artworkName ? `name:${r.artworkName}` : '');
+        if (key && dateStr) {
+          if (!map[key] || dateStr > map[key]) map[key] = dateStr;
+        }
+        // 聚合（按现销售净额 = price × qty − commission）
+        const net = Math.max(0, amount - commission);
+        agg.total += net;
+        if (dateStr.startsWith(ym)) agg.month += net;
+        if (dateStr.startsWith(yy)) agg.year += net;
+      });
+    } catch (e) {
+      console.warn('[gallery] 拉最近售出失败：', e);
+    }
+    this._artworkLastSoldMap = map;
+    this._salesAgg = agg;
+  },
 
-    if (type === 'ticket') { MODELS.TICKET_PRICE = MODELS.ticketProducts[0]?.price || 10; MODELS.COMBO_PRICE = MODELS.ticketProducts.length > 1 ? MODELS.ticketProducts[1].price : 25; }
-    if (type === 'coffee') { MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15; }
-    if (type === 'space') { MODELS.SPACES = MODELS.spaceDetails.map(s => s.name); }
+  /** 门票/咖啡/工坊：简单配置表 + 查询框 + 内嵌表单 */
+  _renderSimpleConfigTab(type, label, headers, fields) {
+    const listKey = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' }[type];
+    const allItems = MODELS[listKey] || [];
+    const keyword = (this._productSearch[type] || '').trim().toLowerCase();
+    const items = keyword
+      ? allItems.filter(it => String(it.name || '').toLowerCase().includes(keyword))
+      : allItems;
+    const escaped = (s) => String(s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+    let rows = '';
+    if (!items.length) {
+      rows = `<tr><td colspan="${headers.length + 1}" style="text-align:center;color:var(--gray-500);padding:16px">${keyword ? '没有匹配项' : '暂无' + label + '产品'}</td></tr>`;
+    } else {
+      items.forEach((item) => {
+        const realIdx = allItems.indexOf(item);
+        const tds = fields.map(f => {
+          const v = item[f];
+          if (f === 'price') return `<td>¥${this._fmt(v)}</td>`;
+          return `<td>${escaped(v)}</td>`;
+        }).join('');
+        rows += `<tr>${tds}<td class="row-actions">
+          <button class="btn btn-sm btn-secondary" onclick="UI._editConfigItem('${type}', ${realIdx})">编辑</button>
+          <button class="btn btn-sm btn-danger" onclick="UI._deleteConfigItem('${type}', ${realIdx})">删除</button>
+        </td></tr>`;
+      });
+    }
+    return `
+      <div class="card">
+        <div class="card-title">🎫 ${label}管理</div>
+        <div class="filter-bar">
+          <div class="form-group" style="min-width:220px">
+            <label>查询</label>
+            <input type="text" id="prod-search-${type}" placeholder="按名称搜索 ${label}..." value="${escaped(this._productSearch[type] || '')}" oninput="UI._onProductSearch('${type}', this.value)">
+          </div>
+          <span style="font-size:12px;color:var(--gray-500);margin-left:auto">共 ${allItems.length} 项${keyword ? ` · 匹配 ${items.length}` : ''}</span>
+          <button type="button" class="btn btn-sm btn-primary" onclick="UI._addConfigItem('${type}')">+ 新增${label}</button>
+        </div>
+        <div class="table-wrap"><table class="data-table"><thead><tr>
+          ${headers.map(h => `<th>${h}</th>`).join('')}
+          <th style="width:140px">操作</th>
+        </tr></thead><tbody>${rows}</tbody></table></div>
+      </div>
+    `;
+  },
 
-    Store.saveConfig(dbKey, items);
+  _onProductSearch(type, value) {
+    this._productSearch[type] = value;
+    const content = document.getElementById('product-tab-content');
+    if (content) content.innerHTML = this._renderProductTabContent(this._productTab);
+    // 保留焦点和光标位置
+    const inp = document.getElementById('prod-search-' + type);
+    if (inp) {
+      inp.focus();
+      const len = value.length;
+      inp.setSelectionRange(len, len);
+    }
+  },
+
+  /** 文创产品 tab：查询框 + 供应商筛选 + 分页（重构版） */
+  _renderCreativeTab() {
+    const keyword = (this._productSearch.creative || '').trim().toLowerCase();
+    let list = this._creativeProducts;
+    if (this._cpFilterSupplier) list = list.filter(p => p.supplier === this._cpFilterSupplier);
+    if (keyword) list = list.filter(p =>
+      String(p.name || '').toLowerCase().includes(keyword) ||
+      String(p.sku || '').toLowerCase().includes(keyword) ||
+      String(p.supplier || '').toLowerCase().includes(keyword) ||
+      String(p.notes || '').toLowerCase().includes(keyword)
+    );
+    const suppliers = this._cpSuppliers();
+    const totalPages = Math.max(1, Math.ceil(list.length / this._CP_PAGE_SIZE));
+    if (this._cpPage >= totalPages) this._cpPage = totalPages - 1;
+    const start = this._cpPage * this._CP_PAGE_SIZE;
+    const pageItems = list.slice(start, start + this._CP_PAGE_SIZE);
+
+    const toolbar = `<div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+      <div class="form-group" style="min-width:220px;margin-bottom:0">
+        <label>查询</label>
+        <input type="text" id="prod-search-creative" placeholder="按名称/SKU/供应商/备注搜索..." value="${this._escHtml(this._productSearch.creative || '')}" oninput="UI._onProductSearch('creative', this.value)">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label>供应商</label>
+        <select id="cp-supplier-filter" onchange="UI._cpOnFilterChange()" style="padding:4px 8px;font-size:13px">
+          <option value="">全部供应商</option>
+          ${suppliers.map(s => `<option value="${this._escHtml(s)}"${this._cpFilterSupplier === s ? ' selected' : ''}>${this._escHtml(s)}</option>`).join('')}
+        </select>
+      </div>
+      <button type="button" class="btn btn-sm btn-primary" onclick="UI._addCreativeProduct()">+ 新增产品</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._importCreativeProducts()">📥 导入库存</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._downloadImportTemplate()">📋 下载模板</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 销售清单</button>
+      <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="cp-count">${list.length} 个${keyword||this._cpFilterSupplier ? ' (筛选后)' : ''} · 共 ${this._creativeProducts.length} 个</span>
+    </div>`;
+
+    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>SKU</th><th>供应商</th><th>进货价</th><th>零售价</th><th>库存</th><th>单位</th><th>备注</th><th style="width:90px">操作</th></tr></thead><tbody>';
+    if (!pageItems.length) {
+      table += `<tr><td colspan="9" style="text-align:center;color:var(--gray-500);padding:16px">${keyword ? '没有匹配项' : '暂无文创产品，请新增或导入'}</td></tr>`;
+    } else {
+      pageItems.forEach(p => {
+        table += `<tr>
+          <td>${this._escHtml(p.name || '-')}</td>
+          <td>${this._escHtml(p.sku || '-')}</td>
+          <td>${this._escHtml(p.supplier || '-')}</td>
+          <td>¥${this._fmt(p.costPrice)}</td>
+          <td><strong>¥${this._fmt(p.retailPrice)}</strong></td>
+          <td><span class="tag ${(p.stock || 0) <= 0 ? 'tag-danger' : 'tag-success'}">${p.stock || 0}</span></td>
+          <td>${this._escHtml(p.unit || '个')}</td>
+          <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis">${this._escHtml(p.notes || '-')}</td>
+          <td class="row-actions">
+            <button class="btn btn-sm btn-secondary" onclick="UI._editCreativeProduct('${p.id}')">编辑</button>
+            <button class="btn btn-sm btn-danger" onclick="UI._deleteCreativeProduct('${p.id}')">删除</button>
+          </td>
+        </tr>`;
+      });
+    }
+    table += '</tbody></table></div>';
+
+    let pagination = '';
+    if (totalPages > 1) {
+      pagination = `<div class="filter-bar" style="margin-top:8px;justify-content:flex-end">
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(0)" ${this._cpPage === 0 ? 'disabled' : ''}>首页</button>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${this._cpPage - 1})" ${this._cpPage === 0 ? 'disabled' : ''}>‹ 上一页</button>
+        <span style="font-size:13px;color:var(--gray-700);padding:6px 12px">第 ${this._cpPage + 1}/${totalPages} 页</span>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${this._cpPage + 1})" ${this._cpPage >= totalPages - 1 ? 'disabled' : ''}>下一页 ›</button>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="UI._cpGoToPage(${totalPages - 1})" ${this._cpPage >= totalPages - 1 ? 'disabled' : ''}>末页</button>
+      </div>`;
+    }
+
+    return `<div class="card">${toolbar}${table}${pagination}</div>`;
+  },
+
+  // ===== 作品档案 (artworks) =====
+  async _loadArtworks() {
+    try {
+      this._artworks = await Store.getAll('artworks') || [];
+    } catch (e) {
+      this._artworks = [];
+    }
+    return this._artworks;
+  },
+
+  /** 画廊作品档案 tab：库存看板 + 查询 + chip 过滤 + 列表 + 行展开 + 增删改 */
+  _renderArtworkTab() {
+    const all = this._artworks || [];
+    const qtyOf = (a) => {
+      const t = Number(a.totalQty ?? a.total_qty ?? 1);
+      const s = Number(a.soldQty ?? a.sold_qty ?? 0);
+      return { total: t, sold: s, avail: Math.max(0, t - s), soldOut: t > 0 && s >= t };
+    };
+    // 全局统计（基于过滤前的全集，不被 search 影响）
+    const totalAvail = all.reduce((s, a) => s + qtyOf(a).avail, 0);
+    const totalSold = all.reduce((s, a) => s + qtyOf(a).sold, 0);
+    const exhibitCount = all.filter(a => a.status === '在展').length;
+    const totalValue = all.reduce((s, a) => s + qtyOf(a).avail * Number(a.retailPrice ?? a.retail_price ?? 0), 0);
+
+    // 销售额：按 月/年 toggle，从 _artworkLastSoldMap 旁的 salesStatsByPeriod 取（没有则用元数据）
+    const salesAgg = this._salesAgg || { month: 0, year: 0, total: 0 };
+    const period = this._artworkSalesPeriod || 'month';
+    const salesAmount = period === 'year' ? salesAgg.year : salesAgg.month;
+    const salesRangeLabel = period === 'year' ? '本年累计' : '本月销售';
+
+    // 关键字搜索
+    const keyword = (this._productSearch.gallery || '').trim().toLowerCase();
+    let list = all;
+    if (keyword) {
+      list = list.filter(a =>
+        String(a.title || '').toLowerCase().includes(keyword) ||
+        String(a.artist || '').toLowerCase().includes(keyword) ||
+        String(a.medium || '').toLowerCase().includes(keyword) ||
+        String(a.location || '').toLowerCase().includes(keyword) ||
+        String(a.notes || '').toLowerCase().includes(keyword) ||
+        String(a.artworkNo || a.artwork_no || '').toLowerCase().includes(keyword)
+      );
+    }
+    // 子过滤 chip
+    const chip = this._artworkFilterChip || 'all';
+    const filterByChip = (arr) => {
+      if (chip === 'all') return arr;
+      return arr.filter(a => {
+        const { avail, total } = qtyOf(a);
+        const st = a.status || '在库';
+        if (chip === 'instock') return st === '在库';
+        if (chip === 'exhibiting') return st === '在展';
+        if (chip === 'soldout') return avail <= 0;
+        if (chip === 'lowstock') return avail > 0 && avail <= Math.max(1, Math.ceil(total * 0.3));
+        return true;
+      });
+    };
+    list = filterByChip(list);
+
+    // 顶部库存看板（5 张卡）
+    const statsHtml = `<div class="stats-grid artwork-stats">
+      <div class="stat-card">
+        <div class="stat-label">总库存</div>
+        <div class="stat-value">${totalAvail}</div>
+        <div class="stat-sub">${all.length} 件作品 / 共 ${totalAvail + totalSold} 件</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">在展数</div>
+        <div class="stat-value" style="color:var(--gold)">${exhibitCount}</div>
+        <div class="stat-sub">当前展览中的作品</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">已售数</div>
+        <div class="stat-value" style="color:var(--gray-700)">${totalSold}</div>
+        <div class="stat-sub">累计售出件数</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">销售额</div>
+        <div class="stat-value" style="color:var(--green-700)">¥${this._fmt(salesAmount)}</div>
+        <div class="stat-sub">
+          <button type="button" class="stat-period-toggle ${period==='month'?'active':''}" onclick="UI._setSalesPeriod('month')">月</button>
+          <button type="button" class="stat-period-toggle ${period==='year'?'active':''}" onclick="UI._setSalesPeriod('year')">年</button>
+          <span style="font-size:11px;color:var(--gray-500);margin-left:4px">${salesRangeLabel}</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">库存估值</div>
+        <div class="stat-value" style="color:var(--green-700)">¥${this._fmt(totalValue)}</div>
+        <div class="stat-sub">可售 × 零售价</div>
+      </div>
+    </div>`;
+
+    // Chip 行
+    const chipsHtml = `<div class="qty-chips">
+      ${[
+        { k: 'all',        label: '全部', count: all.length },
+        { k: 'instock',    label: '在库', count: all.filter(a => (a.status || '在库') === '在库').length },
+        { k: 'exhibiting', label: '在展', count: all.filter(a => a.status === '在展').length },
+        { k: 'soldout',    label: '售罄', count: all.filter(a => qtyOf(a).avail <= 0).length },
+        { k: 'lowstock',   label: '低库存', count: all.filter(a => { const q = qtyOf(a); return q.avail > 0 && q.avail <= Math.max(1, Math.ceil(q.total * 0.3)); }).length }
+      ].map(c => `<button type="button" class="qty-chip ${chip === c.k ? 'active' : ''}" onclick="UI._setArtworkChip('${c.k}')">${c.label} <span class="qty-chip-count">${c.count}</span></button>`).join('')}
+    </div>`;
+
+    const toolbar = `<div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+      <div class="form-group" style="min-width:240px;margin-bottom:0">
+        <label>查询</label>
+        <input type="text" id="prod-search-gallery" placeholder="按编号/标题/艺术家/材质/位置/备注搜索..." value="${this._escHtml(this._productSearch.gallery || '')}" oninput="UI._onProductSearch('gallery', this.value)">
+      </div>
+      <span style="font-size:12px;color:var(--gray-500);margin-left:auto">${list.length} 件${keyword || chip !== 'all' ? ' (筛选后)' : ''} · 共 ${all.length} 件</span>
+      <button type="button" class="btn btn-sm btn-primary" onclick="UI._addArtwork()">+ 新增作品</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._importArtworks()">📥 批量导入</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._downloadArtworkTemplate()">📋 下载模板</button>
+    </div>`;
+
+    // 最近售出聚合
+    const lastSoldMap = this._artworkLastSoldMap || {};
+
+    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th style="width:80px">编号</th><th style="width:64px">缩略图</th><th>标题</th><th>艺术家</th><th style="width:90px">库存</th><th style="width:100px">零售价</th><th style="width:110px">最近售出</th><th>状态</th><th>位置</th><th style="width:90px">操作</th></tr></thead><tbody>';
+    if (!list.length) {
+      table += `<tr><td colspan="10" style="text-align:center;color:var(--gray-500);padding:16px">${keyword || chip !== 'all' ? '没有匹配项' : '暂无作品档案，请新增或导入'}</td></tr>`;
+    } else {
+      list.forEach(a => {
+        const statusClass = a.status === '在库' ? 'tag-success' : a.status === '在展' ? 'tag-info' : a.status === '已售' ? 'tag-danger' : a.status === '借出' ? 'tag-warning' : 'tag-default';
+        const imgUrl = this._resolveImageUrl(a.imageUrl || a.image_url || '');
+        const thumbCell = imgUrl
+          ? `<img src="${this._escHtml(imgUrl)}" class="aw-thumb" onerror="this.outerHTML='<div class=&quot;aw-thumb aw-thumb--placeholder&quot;>无图</div>'">`
+          : `<div class="aw-thumb aw-thumb--placeholder">无图</div>`;
+        const { total, sold, avail, soldOut } = qtyOf(a);
+        const isLowStock = !soldOut && avail > 0 && avail <= Math.max(1, Math.ceil(total * 0.3));
+        const qtyCell = soldOut
+          ? `<span style="color:var(--red);font-weight:bold">售罄 0</span><span style="font-size:11px;color:var(--gray-500);margin-left:4px">/ ${total}</span>`
+          : `<strong style="color:${isLowStock ? 'var(--gold)' : 'var(--green-700)'}">${avail}</strong> / ${total}${isLowStock ? '<br><span style="font-size:10px;color:var(--gold)">⚡ 低库存</span>' : ''}`;
+        const no = this._escHtml(a.artworkNo || a.artwork_no || '-');
+        const lastSold = lastSoldMap[a.artworkNo || a.artwork_no] || lastSoldMap[a.title];
+        const lastSoldCell = lastSold
+          ? `<span style="color:var(--gray-700)">${lastSold}</span>`
+          : `<span style="color:var(--gray-400)">—</span>`;
+        table += `<tr data-artwork-id="${this._escHtml(a.id)}" onclick="UI._toggleArtworkDetail(this)" style="cursor:pointer">
+          <td onclick="event.stopPropagation()"><span style="font-family:monospace;background:var(--cream);padding:2px 6px;border-radius:4px;font-size:12px">${no}</span></td>
+          <td>${thumbCell}</td>
+          <td onclick="event.stopPropagation()"><strong>${this._escHtml(a.title || '-')}</strong></td>
+          <td>${this._escHtml(a.artist || '-')}</td>
+          <td>${qtyCell}</td>
+          <td>¥${this._fmt(a.retailPrice ?? a.retail_price)}</td>
+          <td style="font-size:12px">${lastSoldCell}</td>
+          <td><span class="tag ${statusClass}">${this._escHtml(a.status || '在库')}</span></td>
+          <td style="max-width:120px">${this._escHtml(a.location || '-')}</td>
+          <td class="row-actions" onclick="event.stopPropagation()">
+            <button class="btn btn-sm btn-secondary" onclick="UI._editArtwork('${a.id}')">编辑</button>
+            <button class="btn btn-sm btn-danger" onclick="UI._deleteArtwork('${a.id}')">删除</button>
+          </td>
+        </tr>
+        <tr class="artwork-detail-row" id="aw-detail-${this._escHtml(a.id)}" style="display:none;background:var(--cream)">
+          <td colspan="10" style="padding:12px 16px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 24px;font-size:13px">
+              <div><span style="color:var(--gray-500)">结算价：</span><strong>¥${this._fmt(a.settlementPrice ?? a.settlement_price)}</strong></div>
+              <div><span style="color:var(--gray-500)">年份：</span>${this._escHtml(a.year || '-')}</div>
+              <div><span style="color:var(--gray-500)">材质：</span>${this._escHtml(a.medium || '-')}</div>
+              <div><span style="color:var(--gray-500)">尺寸：</span>${this._escHtml(a.dimensions || '-')}</div>
+              <div><span style="color:var(--gray-500)">已售：</span>${sold} / ${total}</div>
+              <div><span style="color:var(--gray-500)">更新时间：</span>${a.updatedAt ? new Date(a.updatedAt).toLocaleDateString('zh-CN') : '-'}</div>
+            </div>
+            ${a.notes ? `<div style="margin-top:8px;font-size:13px;color:var(--gray-700)"><span style="color:var(--gray-500)">备注：</span>${this._escHtml(a.notes)}</div>` : ''}
+          </td>
+        </tr>`;
+      });
+    }
+    table += '</tbody></table></div>';
+
+    return `<div class="card">${statsHtml}${toolbar}${chipsHtml}${table}</div>`;
+  },
+
+  _setArtworkChip(k) {
+    this._artworkFilterChip = k;
+    this._refreshCurrentProductTab();
+  },
+
+  _toggleArtworkDetail(rowEl) {
+    const id = rowEl.getAttribute('data-artwork-id');
+    if (!id) return;
+    const detailRow = document.getElementById('aw-detail-' + id);
+    if (detailRow) {
+      const visible = detailRow.style.display !== 'none';
+      detailRow.style.display = visible ? 'none' : 'table-row';
+      // 给主行加视觉指示
+      rowEl.style.background = visible ? '' : 'var(--cream)';
+    }
+  },
+
+  _showArtworkModal(data, isEdit) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    const d = data || {};
+    const ARTWORK_STATUSES = ['在库', '在展', '已售', '借出', '下架'];
+    const initialNo = d.artworkNo || d.artwork_no || (isEdit ? '' : this._nextArtworkNo());
+    const initialImg = this._resolveImageUrl(d.imageUrl || d.image_url || '');
+    overlay.innerHTML = `
+      <div class="modal-card" style="min-width:520px">
+        <div class="modal-title">${isEdit ? '编辑作品' : '新增作品'}</div>
+        <div class="form-grid">
+          <div class="form-group"><label>作品编号</label>
+            <div style="display:flex;gap:6px">
+              <input type="text" id="aw-no" value="${this._escHtml(initialNo)}" placeholder="A0001" style="flex:1;font-family:monospace">
+              ${isEdit ? '' : '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._regenArtworkNo()">⟳ 重生成</button>'}
+            </div>
+          </div>
+          <div class="form-group"><label>标题 *</label><input type="text" id="aw-title" value="${this._escHtml(d.title || '')}" placeholder="作品标题"></div>
+          <div class="form-group"><label>艺术家</label><input type="text" id="aw-artist" value="${this._escHtml(d.artist || '')}" placeholder="选填"></div>
+          <div class="form-group"><label>年份</label><input type="text" id="aw-year" value="${this._escHtml(d.year || '')}" placeholder="如 2024"></div>
+          <div class="form-group"><label>材质</label><input type="text" id="aw-medium" value="${this._escHtml(d.medium || '')}" placeholder="如 油画/水墨"></div>
+          <div class="form-group"><label>尺寸</label><input type="text" id="aw-dimensions" value="${this._escHtml(d.dimensions || '')}" placeholder="如 60×80cm"></div>
+          <div class="form-group"><label>存放位置</label><input type="text" id="aw-location" value="${this._escHtml(d.location || '')}" placeholder="如 1号展厅"></div>
+          <div class="form-group"><label>总件数 <span style="font-size:11px;color:var(--gray-500)">(原画=1,复制品=N)</span></label><input type="number" id="aw-total-qty" value="${d.totalQty ?? d.total_qty ?? 1}" min="1" step="1" oninput="UI._updateQtyPreview()"></div>
+          <div class="form-group"><label>已售件数</label><input type="number" id="aw-sold-qty" value="${d.soldQty ?? d.sold_qty ?? 0}" min="0" step="1" oninput="UI._updateQtyPreview()"></div>
+          <div class="form-group"><label>可用库存</label><div id="aw-available-qty" style="padding:8px;background:var(--cream);border-radius:var(--radius-sm);min-height:36px;display:flex;align-items:center"></div></div>
+          <div class="form-group"><label>结算价</label><input type="number" id="aw-settlement-price" value="${this._escHtml(d.settlementPrice ?? d.settlement_price ?? '')}" placeholder="如 0" min="0" step="0.01"></div>
+          <div class="form-group"><label>零售价</label><input type="number" id="aw-retail-price" value="${this._escHtml(d.retailPrice ?? d.retail_price ?? '')}" placeholder="如 0" min="0" step="0.01"></div>
+          <div class="form-group"><label>状态</label>
+            <select id="aw-status">
+              ${ARTWORK_STATUSES.map(s => `<option value="${s}"${(d.status||'在库') === s ? ' selected' : ''}>${s}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group full">
+            <label>作品照片</label>
+            <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+              <div id="aw-image-preview" style="width:120px;height:120px;border:1px dashed var(--gray-300);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;background:var(--cream);overflow:hidden;flex-shrink:0">
+                ${initialImg ? `<img src="${this._escHtml(initialImg)}" style="max-width:100%;max-height:100%;object-fit:cover">` : '<span style="font-size:11px;color:var(--gray-500)">无图</span>'}
+              </div>
+              <div style="flex:1;min-width:200px">
+                <input type="file" id="aw-image-file" accept="image/*" style="margin-bottom:6px">
+                <div style="font-size:11px;color:var(--gray-500);margin-bottom:4px">或直接粘贴 / 输入图片URL</div>
+                <input type="text" id="aw-image-url" value="${this._escHtml(d.imageUrl || d.image_url || '')}" placeholder="/uploads/artworks/xxx.jpg 或 https://...">
+                <input type="hidden" id="aw-image-stored" value="${this._escHtml(d.imageUrl || d.image_url || '')}">
+                <div id="aw-upload-status" style="font-size:11px;color:var(--gray-500);margin-top:4px"></div>
+                ${(d.imageUrl || d.image_url) ? '<button type="button" class="btn btn-sm btn-secondary" id="aw-image-clear" style="margin-top:6px">移除图片</button>' : ''}
+              </div>
+            </div>
+          </div>
+          <div class="form-group full"><label>备注</label><textarea id="aw-notes" rows="2">${this._escHtml(d.notes || '')}</textarea></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button class="btn btn-primary" id="aw-save-btn">${isEdit ? '保存修改' : '创建作品'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    // 初始化可用库存预览
+    this._updateQtyPreview();
+
+    // 图片 URL 输入变化 → 实时预览
+    const urlInput = overlay.querySelector('#aw-image-url');
+    const preview = overlay.querySelector('#aw-image-preview');
+    const storedInput = overlay.querySelector('#aw-image-stored');
+    const renderPreview = (url) => {
+      const full = this._resolveImageUrl(url);
+      if (full) {
+        preview.innerHTML = `<img src="${this._escHtml(full)}" style="max-width:100%;max-height:100%;object-fit:cover" onerror="this.parentNode.innerHTML='<span style=&quot;font-size:11px;color:var(--red)&quot;>加载失败</span>'">`;
+      } else {
+        preview.innerHTML = '<span style="font-size:11px;color:var(--gray-500)">无图</span>';
+      }
+    };
+    urlInput.addEventListener('input', () => {
+      storedInput.value = urlInput.value.trim();
+      renderPreview(urlInput.value.trim());
+    });
+
+    // 文件选择 → 上传到服务器
+    overlay.querySelector('#aw-image-file').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const statusEl = overlay.querySelector('#aw-upload-status');
+      statusEl.style.color = 'var(--gray-500)';
+      statusEl.textContent = '上传中...';
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const r = await fetch((SUPABASE_CONFIG.url || '') + '/rest/v1/artworks/upload', {
+          method: 'POST',
+          body: fd
+        });
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error || body.message || '上传失败');
+        urlInput.value = body.url;
+        storedInput.value = body.url;
+        renderPreview(body.url);
+        statusEl.style.color = 'var(--green-700)';
+        statusEl.textContent = `✅ 上传成功（${Math.round(body.size/1024)} KB）`;
+      } catch (err) {
+        statusEl.style.color = 'var(--red)';
+        statusEl.textContent = '❌ ' + (err.message || err);
+      }
+    });
+
+    // 移除图片
+    const clearBtn = overlay.querySelector('#aw-image-clear');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        urlInput.value = '';
+        storedInput.value = '';
+        renderPreview('');
+        const fu = overlay.querySelector('#aw-image-file');
+        if (fu) fu.value = '';
+        const st = overlay.querySelector('#aw-upload-status');
+        if (st) st.textContent = '';
+      });
+    }
+
+    overlay.querySelector('#aw-save-btn').addEventListener('click', async () => {
+      const title = overlay.querySelector('#aw-title').value.trim();
+      if (!title) { UI.toast('请输入作品标题', 'error'); return; }
+      const record = {
+        title,
+        artworkNo: overlay.querySelector('#aw-no').value.trim(),
+        artist: overlay.querySelector('#aw-artist').value.trim(),
+        year: overlay.querySelector('#aw-year').value.trim(),
+        medium: overlay.querySelector('#aw-medium').value.trim(),
+        dimensions: overlay.querySelector('#aw-dimensions').value.trim(),
+        location: overlay.querySelector('#aw-location').value.trim(),
+        totalQty: Math.max(1, Number(overlay.querySelector('#aw-total-qty').value) || 1),
+        soldQty: Math.max(0, Number(overlay.querySelector('#aw-sold-qty').value) || 0),
+        settlementPrice: Number(overlay.querySelector('#aw-settlement-price').value) || 0,
+        retailPrice: Number(overlay.querySelector('#aw-retail-price').value) || 0,
+        status: overlay.querySelector('#aw-status').value,
+        imageUrl: overlay.querySelector('#aw-image-stored').value.trim(),
+        notes: overlay.querySelector('#aw-notes').value.trim(),
+        updatedAt: new Date().toISOString()
+      };
+      try {
+        if (isEdit && d.id) {
+          await Store.update('artworks', d.id, record);
+          UI.toast('作品已更新');
+        } else {
+          await Store.add('artworks', createArtwork(record));
+          UI.toast('作品已新增');
+        }
+        overlay.remove();
+        await UI._loadArtworks();
+        UI._refreshCurrentProductTab();
+      } catch (e) {
+        UI.toast('保存失败：' + (e.message || e), 'error');
+      }
+    });
+  },
+
+  /** 生成下一个作品编号：A#### 格式，从当前最大值 + 1 起 */
+  _nextArtworkNo() {
+    const list = this._artworks || [];
+    let maxN = 0;
+    for (const a of list) {
+      const m = String(a.artworkNo || a.artwork_no || '').match(/^A(\d+)$/i);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n > maxN) maxN = n;
+      }
+    }
+    return 'A' + String(maxN + 1).padStart(4, '0');
+  },
+
+  _regenArtworkNo() {
+    const input = document.querySelector('#aw-no');
+    if (input) {
+      input.value = this._nextArtworkNo();
+      this.toast('已生成新编号');
+    }
+  },
+
+  /** modal 内：根据 total/sold 实时显示可用库存 + 售罄标记 */
+  _updateQtyPreview() {
+    const totalEl = document.querySelector('#aw-total-qty');
+    const soldEl = document.querySelector('#aw-sold-qty');
+    const availEl = document.querySelector('#aw-available-qty');
+    if (!totalEl || !soldEl || !availEl) return;
+    const total = Math.max(0, Number(totalEl.value) || 0);
+    const sold = Math.max(0, Number(soldEl.value) || 0);
+    const avail = Math.max(0, total - sold);
+    const soldOut = total > 0 && sold >= total;
+    availEl.innerHTML = soldOut
+      ? `<strong style="color:var(--red)">售罄（0/${total}）</strong>`
+      : `<strong style="color:var(--green-700)">${avail}</strong> / ${total} 件`;
+  },
+
+  /** 把 image_url 字段转成可在 <img src> 用的完整 URL */
+  _resolveImageUrl(url) {
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url;
+    if (url.startsWith('/')) return (SUPABASE_CONFIG.url || '') + url;
+    return url;
+  },
+
+  async _addArtwork() {
+    this._showArtworkModal(null, false);
+  },
+
+  async _editArtwork(id) {
+    const a = this._artworks.find(x => x.id === id);
+    if (!a) { this.toast('作品不存在', 'error'); return; }
+    this._showArtworkModal(a, true);
+  },
+
+  async _deleteArtwork(id) {
+    const a = this._artworks.find(x => x.id === id);
+    if (!confirm(`确认删除作品「${a ? a.title : id}」？`)) return;
+    await Store.delete('artworks', id);
     this.toast('已删除');
-    this.renderProductPage();
+    await this._loadArtworks();
+    this._refreshCurrentProductTab();
+  },
+
+  // === 旧 _renderEditableList 已废弃（被 _renderSimpleConfigTab 取代） ===
+
+  _showSimpleConfigModal(type, label, item, isEdit) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    const d = item || {};
+    overlay.innerHTML = `
+      <div class="modal-card" style="min-width:420px">
+        <div class="modal-title">${isEdit ? '编辑' + label : '新增' + label}</div>
+        <div class="form-grid">
+          <div class="form-group full"><label>名称 *</label><input type="text" id="cfg-name" value="${this._escHtml(d.name || '')}" placeholder="如 普通票 / 手冲咖啡 / 果壳风铃" autofocus></div>
+          <div class="form-group full"><label>单价（元）*</label><input type="number" id="cfg-price" min="0" step="0.01" value="${d.price || ''}" placeholder="0.00"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button class="btn btn-primary" id="cfg-save-btn">${isEdit ? '保存修改' : '创建'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#cfg-save-btn').addEventListener('click', async () => {
+      const name = overlay.querySelector('#cfg-name').value.trim();
+      const price = parseFloat(overlay.querySelector('#cfg-price').value);
+      if (!name) { UI.toast('请输入名称', 'error'); return; }
+      if (isNaN(price) || price < 0) { UI.toast('请输入有效单价', 'error'); return; }
+      const newItem = { name, price };
+      const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' };
+      const dbKeyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products' };
+      const listKey = listKeyMap[type];
+      const dbKey = dbKeyMap[type];
+      MODELS[listKey] = MODELS[listKey] || [];
+      if (isEdit) {
+        const idx = MODELS[listKey].indexOf(item);
+        if (idx >= 0) MODELS[listKey][idx] = newItem;
+      } else {
+        MODELS[listKey].push(newItem);
+      }
+      // 同步旧常量（票务/咖啡）
+      if (type === 'ticket') {
+        MODELS.TICKET_PRICE = MODELS.ticketProducts[0]?.price || 10;
+        MODELS.COMBO_PRICE = MODELS.ticketProducts.length > 1 ? MODELS.ticketProducts[1].price : 25;
+      }
+      if (type === 'coffee') MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15;
+      await Store.saveConfig(dbKey, MODELS[listKey]);
+      UI.toast(isEdit ? '已更新' : '已新增');
+      overlay.remove();
+      UI._refreshCurrentProductTab();
+    });
+  },
+
+  async _addConfigItem(type) {
+    const label = { ticket: '门票', coffee: '咖啡', workshop: '工坊产品' }[type];
+    this._showSimpleConfigModal(type, label, null, false);
+  },
+
+  async _editConfigItem(type, idx) {
+    const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' };
+    const listKey = listKeyMap[type];
+    const item = (MODELS[listKey] || [])[idx];
+    if (!item) { this.toast('产品不存在', 'error'); return; }
+    const label = { ticket: '门票', coffee: '咖啡', workshop: '工坊产品' }[type];
+    this._showSimpleConfigModal(type, label, item, true);
+  },
+
+  async _deleteConfigItem(type, idx) {
+    const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' };
+    const dbKeyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products' };
+    const listKey = listKeyMap[type];
+    const dbKey = dbKeyMap[type];
+    const items = MODELS[listKey] || [];
+    const item = items[idx];
+    if (!item) return;
+    if (!confirm(`确认删除「${item.name}」？`)) return;
+    items.splice(idx, 1);
+    if (type === 'ticket') {
+      MODELS.TICKET_PRICE = MODELS.ticketProducts[0]?.price || 10;
+      MODELS.COMBO_PRICE = MODELS.ticketProducts.length > 1 ? MODELS.ticketProducts[1].price : 25;
+    }
+    if (type === 'coffee') MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15;
+    await Store.saveConfig(dbKey, items);
+    this.toast('已删除');
+    this._refreshCurrentProductTab();
+  },
+
+  /** 刷新当前二级 tab（不重建整个页面，保留搜索框焦点/光标位置） */
+  _refreshCurrentProductTab() {
+    const content = document.getElementById('product-tab-content');
+    if (!content) return;
+    content.innerHTML = this._renderProductTabContent(this._productTab);
+    // 更新 tab 上的数量徽章
+    const tabEl = document.querySelector(`.sub-tab-btn[data-ptab="${this._productTab}"] .badge`);
+    if (tabEl) {
+      const counts = {
+        ticket: (MODELS.ticketProducts || []).length,
+        coffee: (MODELS.coffeeProducts || []).length,
+        creative: this._creativeProducts.length,
+        workshop: (MODELS.WORKSHOP_PRODUCTS || []).length,
+        gallery: this._artworks.length
+      };
+      tabEl.textContent = counts[this._productTab];
+    }
   },
 
   // ===== 文创产品管理 =====
-  _creativeProducts: [],
-  _cpFilterSupplier: '',
-  _cpPage: 0,
-  _CP_PAGE_SIZE: 40,
-
   async _loadCreativeProducts() {
     try {
       this._creativeProducts = await Store.getAll('creativeProducts') || [];
@@ -1971,7 +3126,7 @@ const UI = {
   _cpOnFilterChange() {
     this._cpFilterSupplier = document.getElementById('cp-supplier-filter')?.value || '';
     this._cpPage = 0;
-    this._renderCreativeProductList();
+    this._refreshCurrentProductTab();
   },
 
   _cpGoToPage(page) {
@@ -1979,7 +3134,7 @@ const UI = {
     const totalPages = Math.max(1, Math.ceil(filtered.length / this._CP_PAGE_SIZE));
     if (page < 0 || page >= totalPages) return;
     this._cpPage = page;
-    this._renderCreativeProductList();
+    this._refreshCurrentProductTab();
   },
 
   _showCreativeProductModal(data, isEdit) {
@@ -2033,7 +3188,7 @@ const UI = {
           UI.toast('产品已新增');
         }
         overlay.remove();
-        await UI._renderCreativeProductList();
+        await UI._refreshCurrentProductTab();
       } catch (e) {
         UI.toast('保存失败：' + (e.message || e), 'error');
       }
@@ -2055,7 +3210,7 @@ const UI = {
     if (!confirm(`确认删除产品「${p ? p.name : id}」？`)) return;
     await Store.delete('creativeProducts', id);
     this.toast('已删除');
-    await this._renderCreativeProductList();
+    await this._refreshCurrentProductTab();
   },
 
   async _importCreativeProducts() {
@@ -2079,7 +3234,7 @@ const UI = {
           }
         }
         this.toast(`导入完成：共 ${imported} 个产品`);
-        await this._renderCreativeProductList();
+        await this._refreshCurrentProductTab();
       } catch (err) {
         this.toast('导入失败：' + (err.message || err), 'error');
       }
@@ -2251,6 +3406,126 @@ const UI = {
     link.click();
     URL.revokeObjectURL(link.href);
     this.toast('导入模板已下载，请按表头格式填写后导入');
+  },
+
+  // === 作品档案导入（CSV / XLSX） ===
+  async _importArtworks() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.csv,.xlsx';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const rows = await this._parseArtworkImportFile(file);
+        if (!rows.length) { this.toast('未解析到有效数据', 'error'); return; }
+        let imported = 0, skipped = 0;
+        for (const row of rows) {
+          try {
+            await Store.add('artworks', createArtwork(row));
+            imported++;
+          } catch (err) {
+            console.warn('导入失败:', row, err);
+            skipped++;
+          }
+        }
+        this.toast(`导入完成：成功 ${imported} 件${skipped ? `，失败 ${skipped} 件` : ''}`);
+        await this._loadArtworks();
+        this._refreshCurrentProductTab();
+      } catch (err) {
+        this.toast('导入失败：' + (err.message || err), 'error');
+      }
+    };
+    input.click();
+  },
+
+  _parseArtworkImportFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const content = e.target.result;
+          const AW_FIELDS = {
+            title: ['标题','title','Title','作品','作品名','作品名称'],
+            artist: ['艺术家','artist','Artist','作者'],
+            year: ['年份','year','Year','创作年份'],
+            medium: ['材质','medium','Medium','媒介','材料'],
+            dimensions: ['尺寸','dimensions','Dimensions','规格'],
+            location: ['位置','location','Location','存放位置','存放'],
+            status: ['状态','status','Status'],
+            imageUrl: ['图片URL','图片','图片地址','image','image_url','imageUrl','照片'],
+            settlementPrice: ['结算价','settlement_price','settlementPrice','结算价格'],
+            retailPrice: ['零售价','retail_price','retailPrice','零售价格'],
+            notes: ['备注','notes','Notes','说明'],
+            artworkNo: ['作品编号','编号','artwork_no','artworkNo','NO','no'],
+            totalQty: ['总件数','total_qty','totalQty','数量','qty'],
+            soldQty: ['已售件数','sold_qty','soldQty']
+          };
+          const mapRow = (r) => {
+            const get = (cands) => {
+              for (const k of cands) {
+                if (r[k] !== undefined && r[k] !== null && r[k] !== '') return r[k];
+              }
+              return '';
+            };
+            const num = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
+            const totalQtyRaw = num(get(AW_FIELDS.totalQty));
+            return {
+              title: String(get(AW_FIELDS.title) || '').trim(),
+              artworkNo: String(get(AW_FIELDS.artworkNo) || '').trim(),
+              artist: String(get(AW_FIELDS.artist) || '').trim(),
+              year: String(get(AW_FIELDS.year) || '').trim(),
+              medium: String(get(AW_FIELDS.medium) || '').trim(),
+              dimensions: String(get(AW_FIELDS.dimensions) || '').trim(),
+              location: String(get(AW_FIELDS.location) || '').trim(),
+              status: String(get(AW_FIELDS.status) || '在库').trim(),
+              imageUrl: String(get(AW_FIELDS.imageUrl) || '').trim(),
+              settlementPrice: num(get(AW_FIELDS.settlementPrice)),
+              retailPrice: num(get(AW_FIELDS.retailPrice)),
+              totalQty: totalQtyRaw || 1,
+              soldQty: num(get(AW_FIELDS.soldQty)),
+              notes: String(get(AW_FIELDS.notes) || '').trim()
+            };
+          };
+          if (file.name.endsWith('.xlsx')) {
+            if (typeof XLSX === 'undefined') { reject(new Error('缺少 xlsx 库')); return; }
+            const wb = XLSX.read(content, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            resolve(rows.map(mapRow).filter(r => r.title));
+          } else {
+            const lines = content.replace(/^﻿/, '').split('\n').filter(l => l.trim());
+            if (lines.length < 2) { reject(new Error('CSV 为空或只有表头')); return; }
+            const headers = this._parseCSVLine(lines[0]);
+            const results = [];
+            for (let i = 1; i < lines.length; i++) {
+              const vals = this._parseCSVLine(lines[i]);
+              if (vals.length < 2) continue;
+              const row = {};
+              headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
+              const mapped = mapRow(row);
+              if (mapped.title) results.push(mapped);
+            }
+            resolve(results);
+          }
+        } catch (err) { reject(err); }
+      };
+      if (file.name.endsWith('.xlsx')) reader.readAsArrayBuffer(file);
+      else reader.readAsText(file, 'UTF-8');
+    });
+  },
+
+  _downloadArtworkTemplate() {
+    const headers = ['作品编号','标题','艺术家','年份','材质','尺寸','位置','总件数','已售件数','结算价','零售价','状态','图片URL','备注'];
+    const example = ['A0001','示例作品标题','张大千','1985','水墨画','68×136cm','1号展厅','5','0','5000','8000','在库','https://example.com/art.jpg','示例备注'];
+    const csvContent = '﻿' + headers.join(',') + '\n' + example.join(',') + '\n';
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `艾维美术馆_作品档案导入模板_${todayStr()}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast('模板已下载，请按表头填写后导入');
   },
 
   // === 用户管理 ===

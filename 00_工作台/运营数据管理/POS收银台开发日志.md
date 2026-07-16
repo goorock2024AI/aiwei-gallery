@@ -1,120 +1,109 @@
-## 2026-07-10 第十二期：本地预览走通 + 收入明细展开 + 文创导出修复 + 标题微调
+
+## 2026-07-11 第十四期：画廊作品图片上传 + 批量导入
 
 ### 工作内容
 
-#### 1. 本地预览服务走通（preview.js）
+#### 1. 图片上传（服务器存储方案）
 
-> **解决了从第七期起一直没修的老问题**：本机 `cmd serve` 走不通、PG 连不上、API 不代理，所有 UI 修改都要靠「改 → scp 云端 → 浏览器刷新云端」链路。
+> **关键决策**：用户选项是「上传到服务器」。数据库只存相对路径 `/uploads/artworks/xxx.png`，实际文件落 API 容器的 `/uploads/artworks/` 目录。
 
-写了一个 ~60 行的 `preview.js`（`00_工作台/运营数据管理/preview.js`），纯 Node 0 依赖：
-- 静态文件从 `app/` 直接读取（**不走 `dist/`**，消除镜像漂移）
-- `/rest/*` 路由用 Node 内置 `fetch` 反代到 `http://122.51.56.50`（绕开本机 PG 不通）
-- 环境变量 `PORT`（默认 3000）和 `UPSTREAM`（默认云端 API）可改
+`POST /rest/v1/artworks/upload` 新端点，接收 `multipart/form-data`，手写 parser（无 multer 依赖，零外部包）：
+- 5MB 上限（超出返回 413）
+- 仅允许 jpg/jpeg/png/gif/webp
+- 文件名 `时间戳_2字节随机.扩展名`，避免冲突
+- 返回 `{ url: '/uploads/artworks/xxx.png', filename, size }`
 
-`.claude/launch.json` 从 `cmd serve`（命令不存在，从未工作过）改为 `node 00_工作台/运营数据管理/preview.js`，preview 工具自动接管。
+**Nginx 静态托管**：`docker-compose.yml` 加 `uploads-data` volume，API 容器 rw 写，Nginx 容器 ro 读。`nginx.conf` 加 `location /uploads/ { alias /var/cache/nginx/uploads/; }`（用 alias 不用 root，因为 `/usr/share/nginx/html/` 是 overlayfs readonly）。
 
-**验证**：
-- 5 个静态资源 HTTP 200（直接服务 `app/`，无 scp 延迟）
-- 3 个 API 端点 HTTP 200（反代云端，数据真实）
-- 改 `app/index.html` title 一行，curl 立刻拿到新内容 —— **即时生效**
+> **踩坑**：第一版用 `alias /usr/share/nginx/html/uploads/` 启动失败，根因是 nginx 容器内的 `/usr/share/nginx/html/` 是只读 overlayfs，mkdir 创建子目录被拒。改路径到 `/var/cache/nginx/uploads/` 后通过。
 
-**部署说明**：本预览服务只用于开发期浏览器手动验证。**生产环境仍需 scp 到 122.51.56.50**（用户访问的是云端，不是 localhost）。
+#### 2. modal 加图片字段（_showArtworkModal）
 
-> ⚠️ `dist/` 目录**不归本预览管**，是 `scripts/deploy.sh` 复制给 Cloudflare Pages 用的另一条部署路径，**不能混淆**。
+缩略图预览（120×120）+ file input + URL 输入框（备选）+ 移除按钮。编辑回填时显示已有图片；URL 输入变化时实时预览；上传时显示状态（"上传中..." → "✅ 上传成功（123 KB）"）。`_resolveImageUrl` 把相对路径自动拼成完整 URL（`/uploads/...` → `http://122.51.56.50/uploads/...`）。
 
-#### 2. 收银台「收入明细」展开为数量×品名×单价
+#### 3. 列表缩略图列
 
-**问题**：收入记录表里「收入明细」列只显示 `🛒 文创 ¥15.00` 这种汇总 tag，对用户来说看不到具体买了什么、单价多少。
+新增 `缩略图` 列，60×60 圆角缩略图。`image_url` 为空时显示「无图」占位符。`onerror` 自动替换为「加载失败」。
 
-**改造**：把 ticketItems / coffeeItems / workshopItems / retailItems 4 个明细数组按行展开，每条记录渲染为「🎫 2×普通票 ¥10.00」这种格式。无明细数组的历史数据保留原 tag 形式（兜底兼容）。
+#### 4. 批量导入（CSV / XLSX）
 
-**关键技术点 — 字段名兼容 helper**：
+`_importArtworks` + `_parseArtworkImportFile` + `_downloadArtworkTemplate`，复用文创产品的导入代码模式：
+- 列头：标题 / 艺术家 / 年份 / 材质 / 尺寸 / 位置 / 状态 / 图片URL / 备注
+- 9 字段容错映射（候选多个别名）
+- 模板下载 CSV（含示例行）
 
-```js
-const itemName  = i => i.productName ?? i.product_name ?? i.name ?? '';
-const itemPrice = i => i.unitPrice ?? i.unit_price ?? i.price ?? 0;
-```
+### 关键技术坑
 
-> ⚠️ 真实坑：服务端 `toCamel` 函数**不递归 JSONB 数组**（server.js:47-54 只遍历顶层 key），但 `toSnake` 函数**会递归**（server.js:58-66）。所以录入路径用驼峰 `productName`，读出来时 key 是蛇形 `product_name`。直接读 `item.productName` 拿到 undefined → CSV/UI 全空。
-
-**CSS**：新增 `.rev-detail-group`（纵向布局）+ `.rev-detail-row`（小号灰色文字）。
-
-#### 3. 修复「导出文创销售清单」产品名全为空
-
-**问题**：自 7-5 第九期上线文创模块起，「导出文创销售清单」CSV 里产品名全是空字符串。
-
-**根因**：`_exportCreativeSales` 函数（ui.js:2204-2225）读 `item.productName || ''`，但 API 实际返回的是 `product_name`（蛇形），所以全 undefined → 全空。**这与第 2 项是同一根因**。
-
-**修复**：用与第 2 项相同的 helper 兼容两种 key。
-
-#### 4. 「继续发现」同步修复 import-export.js 同类 bug
-
-修复第 3 项后主动 grep 找同类问题：
-- `import-export.js:40-41` 导出收入记录的「工坊明细」「文创明细」列也是 `i.productName||''` → CSV 里也全空
-- 同样用 helper 兼容修复
-
-**容器内 Node E2E 验证**：5 条样本（含一条 2 个产品明细）全部正确显示产品名。
-
-#### 5. 收银台 + 概览仪表盘标题「文创零售」→「文创/零售」
-
-`ui.js:188` 收银台区块标题 + `charts.js:113` 概览仪表盘 stat-label，全部从「文创零售」改为「文创/零售」。HTML 注释里的「右列：文创零售 + 工坊」也顺手改为「右列：文创/零售 + 工坊」保持一致。
-
-#### 6. CLAUDE.md 沉淀「云端服务器配置」+ 部署纪律
-
-把 7-10 核实的云端配置（主机 / 3 个容器 / 端口 / 数据库 13 张表 / 路径映射 / scp 命令）写入根 `CLAUDE.md` 的「运营数据系统信息 → 云端服务器配置」章节。**核心目的**：未来任何 session 启动时自动加载这些硬约束，避免重复踩 scp 多文件静默跳过 / Node 12 vs Node 20 / `app/` 路径陷阱。
-
-新章节包含 6 个子节：
-- 主机（IP / OS / 内存 / 磁盘）
-- Docker 容器（端口 + 资源占用）
-- 路径映射（宿主机 ↔ 容器内 ↔ 浏览器 URL）
-- 部署运维操作清单（前端 scp / server.js rebuild / nginx restart / 数据库结构）
-- 部署后必做验证（4 步：ls -la / curl / docker logs / API 端点）
-- 不要做的事（6 条历史踩坑）
+1. **nginx `/uploads/` 不能用 `/usr/share/nginx/html/uploads/`**（只读 rootfs）→ 改 `/var/cache/nginx/uploads/` + alias
+2. **nginx `proxy_pass http://api:3000/` 末尾的 `/` 触发 location 前缀剥离**：`/rest/v1/artworks` → `/v1/artworks` 传给后端，server.js 路径错位 → 404（**这个 bug 之前一直存在**，本期才暴露，详见复盘）
+3. **TABLE_COLS 白名单遗漏**：新增表时 `server.js` 没加白名单，POST 字段被静默丢弃 → 返回 404 而非 500（无错误信息，难以诊断）
+4. **Windows bash + curl 中文乱码**（第二次踩，详见 memory `debug_curl_windows_gbk_encoding`）：用 `docker compose exec -T api node -e "..."` 容器内直接发请求调试
 
 ### 涉及文件
 
-| 文件 | 改动 |
-|---|---|
-| `00_工作台/运营数据管理/preview.js` | **新建** — 60 行 Node 预览服务（静态 + /rest/* 反代）|
-| `00_工作台/运营数据管理/app/js/ui.js` | `_renderRevenueList` 收入明细展开 + 字段名兼容 helper；`_exportCreativeSales` 修复产品名；收银台标题「文创零售」→「文创/零售」 |
-| `00_工作台/运营数据管理/app/js/charts.js` | 概览仪表盘 stat-label「文创零售」→「文创/零售」 |
-| `00_工作台/运营数据管理/app/js/import-export.js` | 收入记录导出工坊/文创明细列字段兼容修复 |
-| `00_工作台/运营数据管理/app/css/style.css` | 新增 `.rev-detail-group` + `.rev-detail-row` |
-| `00_工作台/运营数据管理/app/index.html` | cache-bust token `rev-detail-expand-20260710` |
-| `.claude/launch.json` | `cmd serve` → `node preview.js` |
-| `CLAUDE.md` | 新增「云端服务器配置」「本地预览」两节 |
-
-### 部署
-
-按 `CLAUDE.md` 「部署后必做验证」4 步走 —— 每个文件单独 scp，scp 后立即 `ls -la` 验证 mtime：
-
-| 部署 | 改动文件 | 验证方式 |
-|---|---|---|
-| 1 | `app/js/ui.js` 收入明细展开 + helper | mtime + 文件大小 + E2E 渲染 13 条历史数据 |
-| 2 | `app/css/style.css` `.rev-detail-*` | mtime + 200 |
-| 3 | `app/index.html` cache-bust token | mtime + grep token |
-| 4 | `app/js/ui.js` 标题微调 + `app/js/charts.js` | mtime + grep 残留 |
-| 5 | `app/js/ui.js` 文创清单产品名修复 | mtime + E2E 模拟导出 13 条 |
-| 6 | `app/js/import-export.js` 同类 bug 修复 | mtime + E2E 模拟导出 5 条 |
+- `app/sql/init.sql` — `artworks` 加 `image_url` 字段
+- `docker-compose.yml` — 加 `uploads-data` volume
+- `nginx.conf` — 加 `/uploads/` alias + `/rest/` proxy_pass 去 `/`
+- `server.js` — UPLOAD_DIR + handleArtworkUpload + parseMultipartFile + TABLE_COLS artworks 白名单
+- `app/js/models.js` — `createArtwork` 加 `imageUrl`
+- `app/js/ui.js` — `_showArtworkModal` 加图片 + `_resolveImageUrl` + `_renderArtworkTab` 加缩略图列 + `_importArtworks` + `_downloadArtworkTemplate`
+- `app/css/style.css` — `.aw-thumb` + `.aw-thumb--placeholder`
+- `app/index.html` — cache-bust `artwork-image-20260710`
 
 ### 数据库状态
 
-| 表 | 记录数 | 变化 |
-||----|-------:|------|
-| revenue | 209 | 7-10 新增 3 条（admin 测试套票 50 元 + 其他水费 2 元 + admin 其他 2 元）|
-| operation_logs | 238 | 同步增长 |
-| 其他 11 张表 | 不变 | — |
-
-### 沉淀的经验（memory）
-
-- [x] **debug_jsonb_snake_vs_camel_trap**：API JSONB 数组里对象的 key 永远是 snake；前端读取必须用 helper 兼容；同类 bug 一天内修了 3 次（收入明细 / 文创清单 / import-export），根因是 `toCamel` 不递归
-- [x] **feedback_cloud_deploy_traps**：app/ 路径陷阱 + scp 多文件静默跳过 + Node 12 vs Node 20
-- [x] **feedback_preview_serverjs_blocked**：标记 resolved-2026-07-10；旧 `cmd serve` 从未工作过
-- [x] **CLAUDE.md 云端服务器配置**：未来 session 启动时自动加载，避免重复踩坑
+| 表 | 条数 | 备注 |
+|---|---|---|
+| artworks | 0 | 测试数据已清理 |
+| space_usage | 0 | 用户主动清空 |
 
 ---
 
-## 2026-07-07 第十期：录入 bug 修复 + 统计可视化扩展 + 版本号修正
+## 2026-07-11 第十三期：产品管理二级标签页 + 作品档案 CRUD
+
+### 工作内容
+
+#### 1. 二级标签页（5 个 tab）
+
+`renderProductPage` 重写为 5 个二级 tab：🎫 门票 / ☕ 咖啡 / 📦 文创/零售 / 🔧 工坊 / 🖼️ 画廊。每个 tab 显示数量徽章，切换 tab 用 `addEventListener` 绑定。
+
+> **解决了原痛点**：原本 5 张产品卡堆在一个页面里，找特定类型要往下滚；用「产品配置」+「文创产品」混在一起逻辑混乱。现在每 tab 独立、互不干扰。
+
+#### 2. 每个 tab 加查询框
+
+每个 tab 顶部都有一个查询框，文创支持多字段（名称/SKU/供应商/备注），其他 tab 按名称模糊匹配。`_onProductSearch` 输入时实时过滤，且**保留焦点和光标位置**（重建 innerHTML 后重新 focus + setSelectionRange）。
+
+#### 3. 用 modal 替换 prompt() 弹窗
+
+原代码 `prompt('请输入名称：')` + `prompt('请输入价格：')` 串行弹窗（最多 3 次）改用 `_showSimpleConfigModal` / `_showArtworkModal`，统一交互体验。模态框内 `autofocus` 自动聚焦第一个字段，`Enter` 键触发保存。
+
+#### 4. 作品档案 CRUD（artworks）
+
+利用已存在的 `artworks` 表（10 字段），新增 UI 完整 CRUD：
+- `_loadArtworks` / `_renderArtworkTab` / `_showArtworkModal` / `_addArtwork` / `_editArtwork` / `_deleteArtwork`
+- 列表 + 编辑/删除按钮 + 状态 tag（在库/在展/已售/借出/下架）
+- 表单 8 字段（标题/艺术家/年份/材质/尺寸/位置/状态/备注）
+
+#### 5. 局部刷新
+
+`_refreshCurrentProductTab` 只刷新当前 tab 的 `innerHTML`，不重建整个页面，并同步更新 tab 上的徽章数字。增删改后立即看到效果，无需重新进 tab。
+
+### 涉及文件
+
+- `app/js/models.js` — `createArtwork` 工厂函数
+- `app/js/ui.js` — 重写 `renderProductPage` + 9 个新方法（_renderProductTabContent / _renderSimpleConfigTab / _renderCreativeTab / _renderArtworkTab / _loadArtworks / _onProductSearch / _showSimpleConfigModal / _showArtworkModal / _refreshCurrentProductTab）
+- `app/css/style.css` — `.sub-tabs` 二级标签样式 + 移动端适配
+- `app/index.html` — cache-bust `product-tabs-20260710`
+
+### 踩坑
+
+- 老的 `_renderCreativeProductList` 仍被保留（无 el 时是 no-op），但实际所有调用已改用 `_refreshCurrentProductTab`
+- `_renderEditableList` 已废弃，被 `_renderSimpleConfigTab` 取代
+- `models.js` 里旧的 `_creativeProducts: []` 重复定义清理（合并到顶部 UI 对象初始化时）
+
+---
+
+## 2026-07-10 第十二期：本地预览走通 + 收入明细展开 + 文创导出修复 + 标题微调
 
 ### 工作内容
 

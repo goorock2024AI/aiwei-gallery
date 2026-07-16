@@ -117,7 +117,7 @@ function createExpense(data = {}) {
   };
 }
 
-// 空间使用记录
+// 空间使用记录（重构 2026-07-10：删除 receivedAmount，由子表聚合；新增 expectedPaymentDate）
 function createSpaceUsage(data = {}) {
   return {
     id: data.id || createId(),
@@ -130,9 +130,22 @@ function createSpaceUsage(data = {}) {
     status: data.status || '筹备中',
     rentalType: data.rentalType || '付费',
     receivableAmount: +data.receivableAmount || 0,
-    receivedAmount: +data.receivedAmount || 0,
+    expectedPaymentDate: data.expectedPaymentDate || '',
     notes: data.notes || '',
     createdAt: data.createdAt || new Date().toISOString()
+  };
+}
+
+// 空间使用付款明细（子表记录）
+function createSpacePayment(data = {}) {
+  return {
+    id: data.id || createId(),
+    spaceUsageId: data.spaceUsageId || data.space_usage_id || '',
+    paymentDate: data.paymentDate || data.payment_date || todayStr(),
+    amount: +data.amount || 0,
+    paymentMethod: data.paymentMethod || data.payment_method || '转账',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
   };
 }
 
@@ -165,6 +178,7 @@ function createGallerySale(data = {}) {
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
+    artworkNo: data.artworkNo || data.artwork_no || '',
     artworkName: data.artworkName || '',
     artist: data.artist || '',
     price: +data.price || 0,
@@ -175,6 +189,7 @@ function createGallerySale(data = {}) {
     status: data.status || '已售出',
     handler: data.handler || '',
     notes: data.notes || '',
+    saleQuantity: +data.saleQuantity || +data.sale_quantity || 1,
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
@@ -194,6 +209,33 @@ function createCreativeProduct(data = {}) {
     retailPrice: +data.retailPrice || +data.retail_price || 0,
     stock: +data.stock || 0,
     unit: data.unit || '个',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+    updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()
+  };
+}
+
+// 画廊作品档案（2026-07-10：imageUrl；2026-07-11：settlementPrice/retailPrice；2026-07-12：artworkNo + totalQty + soldQty）
+function createArtwork(data = {}) {
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  return {
+    id: data.id || createId(),
+    artworkNo: data.artworkNo || data.artwork_no || '',
+    title: data.title || '',
+    artist: data.artist || '',
+    year: data.year || '',
+    medium: data.medium || '',
+    dimensions: data.dimensions || '',
+    location: data.location || '',
+    status: data.status || '在库',
+    imageUrl: data.imageUrl || data.image_url || '',
+    settlementPrice: num(data.settlementPrice ?? data.settlement_price),
+    retailPrice: num(data.retailPrice ?? data.retail_price),
+    totalQty: num(data.totalQty ?? data.total_qty) || 1,
+    soldQty: num(data.soldQty ?? data.sold_qty),
     notes: data.notes || '',
     createdAt: data.createdAt || data.created_at || new Date().toISOString(),
     updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()

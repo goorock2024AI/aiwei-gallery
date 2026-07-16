@@ -28,6 +28,9 @@ services:
       DB_HOST: db
       DB_PASS: ${DB_PASSWORD}
       PORT: 3000
+      UPLOAD_DIR: /uploads
+    volumes:
+      - uploads-data:/uploads
     networks:
       - aiwei-net
 
@@ -40,6 +43,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./app:/usr/share/nginx/html:ro
+      - uploads-data:/var/cache/nginx/uploads:ro
     depends_on:
       - api
     networks:
@@ -51,3 +55,4 @@ networks:
 
 volumes:
   db-data:
+  uploads-data:

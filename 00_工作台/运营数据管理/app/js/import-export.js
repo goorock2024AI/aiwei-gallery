@@ -47,8 +47,11 @@ const ImportExport = {
       headers = ['日期','类型','项目','类别','金额','内容说明','经手人','发票状态','凭证状态','关联活动','创建时间'];
       rows = records.map(r => [r.date, r.type, r.project, r.category, r.amount, r.description||'', r.handler||'', r.invoiceStatus, r.receiptStatus, r.relatedActivity||'', r.createdAt||'']);
     } else if (type === 'space') {
-      headers = ['日期','空间','项目名称','类型','客户','状态','应收金额','已收金额','备注','创建时间'];
-      rows = records.map(r => [r.date, r.space, r.projectName, r.type, r.client||'', r.status, r.receivableAmount||0, r.receivedAmount||0, r.notes||'', r.createdAt||'']);
+      headers = ['日期','结束日期','空间','项目名称','类型','客户','状态','应收金额','预计到账日','到账明细','备注','创建时间'];
+      rows = records.map(r => {
+        const detail = (r.payments || []).map(p => `${p.paymentDate}:¥${(+(p.amount||0)).toFixed(2)}(${p.paymentMethod || '转账'})`).join(' | ');
+        return [r.date, r.endDate || '', r.space, r.projectName, r.type, r.client||'', r.status, r.receivableAmount||0, r.expectedPaymentDate||'', detail, r.notes||'', r.createdAt||''];
+      });
     } else if (type === 'gallery') {
       headers = ['日期','作品名称','艺术家','成交价','佣金','净收入','买家','收款方式','状态','关联展览','经手人','备注','创建时间'];
       rows = records.map(r => [r.date, r.artworkName, r.artist, r.price||0, r.commission||0, Math.max(0, (r.price||0) - (r.commission||0)), r.buyerName||'', r.paymentMethod||'', r.status||'', r.relatedExhibition||'', r.handler||'', r.notes||'', r.createdAt||'']);
@@ -132,8 +135,22 @@ const ImportExport = {
       count += data.expense.length;
     }
     if (data.space && Array.isArray(data.space)) {
-      await Store.importData('space', data.space);
-      count += data.space.length;
+      // 拆分主表 + 子表：payments 跟着主记录一起导入
+      const mainRecs = [];
+      const paymentRecs = [];
+      data.space.forEach(r => {
+        const { payments, ...main } = r;
+        mainRecs.push(main);
+        if (Array.isArray(payments)) {
+          payments.forEach(p => paymentRecs.push({ ...p, spaceUsageId: r.id }));
+        }
+      });
+      await Store.importData('space', mainRecs);
+      count += mainRecs.length;
+      if (paymentRecs.length > 0) {
+        await Store.importData('spacePayment', paymentRecs);
+        count += paymentRecs.length;
+      }
     }
     if (data.gallery && Array.isArray(data.gallery)) {
       await Store.importData('gallery', data.gallery);
@@ -177,10 +194,25 @@ const ImportExport = {
         }));
       } else if (type === 'space') {
         records.push(createSpaceUsage({
-          date: record['日期'] || '', space: record['空间'] || '1号厅', projectName: record['项目名称'] || '',
+          date: record['日期'] || '', endDate: record['结束日期'] || '',
+          space: record['空间'] || '1号厅', projectName: record['项目名称'] || '',
           type: record['类型'] || '展览', client: record['客户'] || '', status: record['状态'] || '筹备中',
-          receivableAmount: +record['应收金额'] || 0, receivedAmount: +record['已收金额'] || 0, notes: record['备注'] || ''
+          receivableAmount: +record['应收金额'] || 0,
+          expectedPaymentDate: record['预计到账日'] || '',
+          notes: record['备注'] || ''
         }));
+        // 兼容老 CSV：识别「已收金额」列（无则忽略），并自动创建一笔 payment
+        const oldReceived = +(record['已收金额'] || 0);
+        if (oldReceived > 0) {
+          const main = records[records.length - 1];
+          records.push(createSpacePayment({
+            spaceUsageId: main.id,
+            paymentDate: record['结束日期'] || record['日期'] || todayStr(),
+            amount: oldReceived,
+            paymentMethod: '原CSV迁移',
+            notes: '从老 CSV 已收金额字段迁移'
+          }));
+        }
       } else if (type === 'gallery') {
         records.push(createGallerySale({
           date: record['日期'] || '', artworkName: record['作品名称'] || '', artist: record['艺术家'] || '',

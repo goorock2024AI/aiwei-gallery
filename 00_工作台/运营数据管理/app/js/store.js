@@ -49,7 +49,11 @@ const Store = {
   async getAll(type) {
     try {
       const table = this._table(type);
-      return await this._request('GET', `/rest/v1/${table}?order=created_at.desc&limit=5000`) || [];
+      // 空间使用读视图（带 payments 子表聚合 + receivedTotal）
+      const path = type === 'space'
+        ? `/rest/v1/space_usage_with_payments?order=date.desc&limit=5000`
+        : `/rest/v1/${table}?order=created_at.desc&limit=5000`;
+      return await this._request('GET', path) || [];
     } catch (e) {
       this._handleError(e, '查询');
       return [];
@@ -59,8 +63,12 @@ const Store = {
   async getById(type, id) {
     try {
       const table = this._table(type);
-      const row = await this._request('GET', `/rest/v1/${table}?id=eq.${id}`);
-      return row || null;
+      const path = type === 'space'
+        ? `/rest/v1/space_usage_with_payments?id=eq.${id}`
+        : `/rest/v1/${table}?id=eq.${id}`;
+      const row = await this._request('GET', path);
+      // 视图查询返回数组，单条取 [0]；普通表也是数组
+      return (Array.isArray(row) ? row[0] : row) || null;
     } catch (e) {
       this._handleError(e, '查询');
       return null;

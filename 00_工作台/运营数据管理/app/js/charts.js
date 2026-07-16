@@ -62,24 +62,37 @@ var Charts = {
 
     const revenues = await Store.getByYear('revenue', year);
     const galleryAll = await Store.getByYear('gallery', year);
-    const spaceAll = await Store.getByYear('space', year);
+    // space 走视图路径（含 payments 子表），按到账日期 (paymentDate) 时间维度
+    const spaceAll = await Store.getAll('space');
 
     // month 为空表示全年，否则按指定月份过滤
-    let monthRev, monthGal, monthSpace, title;
+    let monthRev, monthGal, spaceRentIncome = 0, title;
     if (month) {
       const ym = year + '-' + month;
       monthRev = revenues.filter(r => (r.date||'').startsWith(ym));
       monthGal = galleryAll.filter(r => (r.date||'').startsWith(ym));
-      monthSpace = spaceAll.filter(r => (r.date||'').startsWith(ym));
+      // 场地已收款按到账日（paymentDate）过滤
+      spaceAll.forEach(s => {
+        if (s.rentalType !== '付费') return;
+        const payments = s.payments || [];
+        payments.forEach(p => {
+          if ((p.paymentDate || '').startsWith(ym)) spaceRentIncome += +p.amount || 0;
+        });
+      });
       title = year + '年' + parseInt(month) + '月';
     } else {
       monthRev = revenues;
       monthGal = galleryAll;
-      monthSpace = spaceAll;
+      // 场地全年已收款（按 paymentDate 落在全年）
+      spaceAll.forEach(s => {
+        if (s.rentalType !== '付费') return;
+        const payments = s.payments || [];
+        payments.forEach(p => {
+          if ((p.paymentDate || '').startsWith(year)) spaceRentIncome += +p.amount || 0;
+        });
+      });
       title = year + '年全年';
     }
-
-    const spaceRentIncome = monthSpace.filter(s => s.rentalType === '付费').reduce((s, r) => s + (r.receivedAmount || 0), 0);
 
     const totalRevenue = monthRev.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0)
       + monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0)
@@ -90,7 +103,7 @@ var Charts = {
     const coffeeTotal = monthRev.reduce((s, r) => s + (r.coffeeAmount||0), 0);
     const workshopTotal = monthRev.reduce((s, r) => s + (r.workshopAmount||0), 0);
     const creativeTotal = monthRev.reduce((s, r) => s + (r.retailAmount||0) + (r.creativeAmount||0), 0);
-    const venueTotal = monthRev.reduce((s, r) => s + (r.venueAmount||0), 0) + spaceRentIncome;
+    const venueTotal = spaceRentIncome;
     const galleryTotal = monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
     const otherTotal = monthRev.reduce((s, r) => s + (r.otherAmount||0), 0);
 
@@ -176,7 +189,7 @@ var Charts = {
 
     const months = await Store.getMonthlySummary('revenue', year);
     const galleryMonths = await Store.getMonthlySummary('gallery', year);
-    const spaceAll = await Store.getByYear('space', year);
+    const spaceAll = await Store.getAll('space');
     const labels = [];
     const ticketData = [];
     const comboData = [];
@@ -186,6 +199,18 @@ var Charts = {
     const venueData = [];
     const galleryData = [];
     const otherData = [];
+
+    // 按到账月（paymentDate）预聚合空间收入 — 避免与 revenue.venueAmount 重复计入
+    const spacePaymentsByMonth = {};
+    spaceAll.forEach(s => {
+      if (s.rentalType !== '付费') return;
+      (s.payments || []).forEach(p => {
+        const pd = p.paymentDate || '';
+        if (!pd.startsWith(year)) return;
+        const mm = pd.slice(5, 7);
+        spacePaymentsByMonth[mm] = (spacePaymentsByMonth[mm] || 0) + (+p.amount || 0);
+      });
+    });
 
     for (let m = 1; m <= 12; m++) {
       const ms = String(m).padStart(2, '0');
@@ -199,18 +224,18 @@ var Charts = {
         cb += r.comboAmount || 0;
         c += r.coffeeAmount || 0;
         w += r.workshopAmount || 0;
-        cr += r.creativeAmount || 0;
+        cr += (r.retailAmount || 0) + (r.creativeAmount || 0);
         v += r.venueAmount || 0;
         o += r.otherAmount || 0;
       });
       grecs.forEach(r => { g += (r.price||0) - (r.commission||0); });
-      spRecs.forEach(r => { v += r.receivedAmount || 0; });
       ticketData.push(t);
       comboData.push(cb);
       coffeeData.push(c);
       workshopData.push(w);
       creativeData.push(cr);
-      venueData.push(v);
+      // venue 字段用空间付款聚合（不再累加 revenue.venueAmount + 视图 receivedAmount）
+      venueData.push(spacePaymentsByMonth[ms] || 0);
       galleryData.push(g);
       otherData.push(o);
     }
@@ -271,7 +296,8 @@ var Charts = {
     // 获取当月所有收入数据
     const revenues = await Store.getByMonth('revenue', ym);
     const galleryAll = await Store.getByMonth('gallery', ym);
-    const spaceAll = await Store.getByMonth('space', ym);
+    // space 走视图（拿到实时聚合的 payments）
+    const spaceAll = await Store.getAll('space');
 
     const labels = [];
     const ticketData = [];
@@ -297,11 +323,14 @@ var Charts = {
         c += r.coffeeAmount || 0;
         w += r.workshopAmount || 0;
         cr += (r.retailAmount || 0) + (r.creativeAmount || 0);
-        v += r.venueAmount || 0;
         o += r.otherAmount || 0;
       });
       dayGal.forEach(r => { g += (r.price || 0) - (r.commission || 0); });
-      daySpace.forEach(r => { v += r.receivedAmount || 0; });
+      // 空间已收按 paymentDate == ds 精确匹配到日
+      spaceAll.forEach(s => {
+        if (s.rentalType !== '付费') return;
+        (s.payments || []).forEach(p => { if (p.paymentDate === ds) v += +p.amount || 0; });
+      });
       ticketData.push(t);
       comboData.push(cb);
       coffeeData.push(c);
@@ -366,18 +395,25 @@ var Charts = {
     const recs = await Store.getByMonth('revenue', ym);
     const grecs = await Store.getByMonth('gallery', ym);
     const spRecs = await Store.getByMonth('space', ym);
+    // 兜底：若 space 走旧路径没数据，改走视图拿实时聚合 payments
+    const spaceView = await Store.getAll('space');
     let ticket = 0, combo = 0, coffee = 0, workshop = 0, creative = 0, venue = 0, other = 0, gallery = 0;
     recs.forEach(r => {
       ticket += r.ticketAmount || 0;
       combo += r.comboAmount || 0;
       coffee += r.coffeeAmount || 0;
       workshop += r.workshopAmount || 0;
-      creative += r.creativeAmount || 0;
-      venue += r.venueAmount || 0;
+      creative += (r.retailAmount || 0) + (r.creativeAmount || 0);
       other += r.otherAmount || 0;
     });
     grecs.forEach(r => { gallery += (r.price||0) - (r.commission||0); });
-    spRecs.filter(s => s.rentalType === '付费').forEach(r => { venue += r.receivedAmount || 0; });
+    // 场地已收：按 paymentDate 落在 ym 内聚合（避免与 revenue.venueAmount 重复）
+    spaceView.forEach(s => {
+      if (s.rentalType !== '付费') return;
+      (s.payments || []).forEach(p => {
+        if ((p.paymentDate || '').startsWith(ym)) venue += +p.amount || 0;
+      });
+    });
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-structure'] = new Chart(ctx, {

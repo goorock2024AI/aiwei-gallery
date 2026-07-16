@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS expense (
 );
 CREATE INDEX IF NOT EXISTS idx_expense_date ON expense(date);
 
--- 3. 空间使用表
+-- 3. 空间使用表（重构 2026-07-10：加 expected_payment_date；received_amount 由 space_payments 子表聚合）
 CREATE TABLE IF NOT EXISTS space_usage (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
@@ -60,16 +60,57 @@ CREATE TABLE IF NOT EXISTS space_usage (
   status TEXT DEFAULT '筹备中',
   rental_type TEXT DEFAULT '付费',
   receivable_amount NUMERIC(12,2) DEFAULT 0,
-  received_amount NUMERIC(12,2) DEFAULT 0,
+  expected_payment_date TEXT DEFAULT '',
   notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_space_usage_date ON space_usage(date);
+CREATE INDEX IF NOT EXISTS idx_space_usage_expected ON space_usage(expected_payment_date);
+
+-- 3.1 空间使用付款明细子表（重构 2026-07-10：一笔到账一条记录，支持分期）
+CREATE TABLE IF NOT EXISTS space_payments (
+  id TEXT PRIMARY KEY,
+  space_usage_id TEXT NOT NULL REFERENCES space_usage(id) ON DELETE CASCADE,
+  payment_date TEXT NOT NULL,
+  amount NUMERIC(12,2) DEFAULT 0,
+  payment_method TEXT DEFAULT '转账',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_space_payments_usage ON space_payments(space_usage_id);
+CREATE INDEX IF NOT EXISTS idx_space_payments_date  ON space_payments(payment_date);
+ALTER TABLE space_payments DISABLE ROW LEVEL SECURITY;
+
+-- 3.2 视图：前端一次拿全主表 + 子表聚合（带 payments JSON 数组 + receivedAmount）
+-- 注意：列名用 received_amount 让视图与普通表列名一致，server.js toCamel 后统一得到 receivedAmount
+CREATE OR REPLACE VIEW space_usage_with_payments AS
+SELECT
+  s.id, s.date, s.end_date, s.space, s.project_name, s.type, s.client,
+  s.status, s.rental_type, s.receivable_amount, s.expected_payment_date,
+  s.notes, s.created_at,
+  COALESCE(
+    (SELECT json_agg(json_build_object(
+       'id', p.id,
+       'paymentDate', p.payment_date,
+       'amount', p.amount,
+       'paymentMethod', p.payment_method,
+       'notes', p.notes,
+       'createdAt', p.created_at
+     ) ORDER BY p.payment_date)
+     FROM space_payments p WHERE p.space_usage_id = s.id),
+    '[]'::json
+  ) AS payments,
+  COALESCE(
+    (SELECT SUM(amount) FROM space_payments p WHERE p.space_usage_id = s.id),
+    0
+  ) AS received_amount
+FROM space_usage s;
 
 -- 4. 画廊销售表
 CREATE TABLE IF NOT EXISTS gallery_sales (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
+  artwork_no TEXT DEFAULT '',
   artwork_name TEXT DEFAULT '',
   artist TEXT DEFAULT '',
   price NUMERIC(12,2) DEFAULT 0,
@@ -80,9 +121,11 @@ CREATE TABLE IF NOT EXISTS gallery_sales (
   status TEXT DEFAULT '已售出',
   handler TEXT DEFAULT '',
   notes TEXT DEFAULT '',
+  sale_quantity INTEGER DEFAULT 1,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_gallery_sales_date ON gallery_sales(date);
+CREATE INDEX IF NOT EXISTS idx_gallery_sales_artwork_no ON gallery_sales(artwork_no) WHERE artwork_no <> '';
 
 -- 5. 应用配置表
 CREATE TABLE IF NOT EXISTS app_config (
@@ -139,9 +182,10 @@ CREATE TABLE IF NOT EXISTS inventory (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 10. 艺术品表
+-- 10. 艺术品表（重构 2026-07-10：加 image_url；2026-07-11：加 settlement_price / retail_price；2026-07-12：加 artwork_no + total_qty + sold_qty）
 CREATE TABLE IF NOT EXISTS artworks (
   id TEXT PRIMARY KEY,
+  artwork_no TEXT DEFAULT '',
   title TEXT NOT NULL,
   artist TEXT DEFAULT '',
   year TEXT DEFAULT '',
@@ -149,10 +193,16 @@ CREATE TABLE IF NOT EXISTS artworks (
   dimensions TEXT DEFAULT '',
   location TEXT DEFAULT '',
   status TEXT DEFAULT '在库',
+  image_url TEXT DEFAULT '',
+  settlement_price NUMERIC DEFAULT 0,
+  retail_price NUMERIC DEFAULT 0,
+  total_qty INTEGER DEFAULT 1,
+  sold_qty INTEGER DEFAULT 0,
   notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS artworks_artwork_no_unique ON artworks(artwork_no) WHERE artwork_no <> '';
 
 -- 11. 合作伙伴表
 CREATE TABLE IF NOT EXISTS partners (
