@@ -71,6 +71,7 @@
 ```
 宿主机 /opt/aiwei/                容器内                     说明
 ─────────────────                ───────                    ────
+./VERSION                         （无容器内映射，元数据）     当前云端值 1.2.0；不是 nginx / api 容器内文件
 ./app/                           /usr/share/nginx/html/     Nginx 静态 root
   ├─ index.html                                            ⚠️ 容器内是「扁平」的，没有 /usr/share/nginx/html/app/ 这一层
   ├─ css/style.css                                         浏览器访问 http://122.51.56.50/css/style.css（不是 /app/css/style.css）
@@ -111,6 +112,15 @@ scp <local-file> root@122.51.56.50:/opt/aiwei/app/<同相对路径>
 # 例：scp app/js/ui.js root@122.51.56.50:/opt/aiwei/app/js/ui.js
 # 上传即生效，浏览器需刷缓存（index.html 的 ?v= token 升级强制刷新）
 ```
+
+**修改 `VERSION`（版本号文件）**：每次升级 `APP_VERSION` 时**同步 scp 到云端**，否则云端无对照、运营侧读不到真值：
+```bash
+scp VERSION root@122.51.56.50:/opt/aiwei/VERSION
+# 路径：/opt/aiwei/VERSION（与 app/ 同级，**不带** app/ 前缀；不是 nginx 容器内）
+# 当前云端值：1.2.0（2026-07-16 起的云端基线）
+```
+
+> 注：当前前端 `app.js` 用**硬编码常量** `const APP_VERSION = 'x.x.x'` 而非读 VERSION 文件，所以云端 VERSION 暂未被任何运行时消费。保留是为后续 build-version.js 切换为占位符机制时打好基础。
 
 **修改 `server.js`（API 后端）**：
 ```bash
