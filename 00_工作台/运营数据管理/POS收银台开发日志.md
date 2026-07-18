@@ -858,3 +858,117 @@ PRD 中 P1 需求的账号登录系统和操作日志，本次先实现用户登
 - [ ] 多用户权限体系细化
 - [ ] 收银交易记录支持打印小票
 - [ ] 日结/交班报表
+
+---
+
+## 2026-07-18 第十七期：「新增作品」弹窗溢出修复（CSS 单文件改动）
+
+**背景**
+
+用户反馈「产品管理 → 画廊 → 新增作品」弹窗字段过多，无法滚动，底部「创建作品」按钮被截在屏幕外。
+
+**根因**
+
+`app/css/style.css` 中 `.modal-card`（line ~1252）只设 `width: 420px + padding`，**没有 max-height 与 overflow-y**。该 modal 含 14 个字段（编号/标题/艺术家/年份/材质/尺寸/位置/总件数/已售件数/可用库存/结算价/零售价/状态/图片上传块/备注），实测 scrollHeight = 1573px，远超 85vh 视口（约 664px），整张卡片超出屏幕。
+
+对比同期类似 modal（line 392「选择文创产品」）用内联 `style="max-height:80vh;overflow-y:auto"` 兜底，但「新增作品」忘了加。
+
+**改动**：仅 `app/css/style.css`（~10 行新增）
+
+```css
+.modal-card {
+  width: 420px;
+  max-height: 85vh;
+  overflow-y: auto;
+  ...
+}
+.modal-card:has(.form-grid) { width: 520px; }
+.modal-card::-webkit-scrollbar { width: 8px; }
+.modal-card::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
+.modal-card::-webkit-scrollbar-thumb:hover { background: var(--gray-500); }
+```
+
+**关键技术点**
+
+- **通用解而非补丁**：改全局 `.modal-card` 而不是给单个 modal 加内联样式，未来任何 modal 字段增多都自动受惠
+- **`:has(.form-grid)` 自动加宽**：表单类 modal 内容多，420px 太窄；用 CSS `:has()` 选择器识别是否有 `.form-grid` 子元素决定宽度，无需 JS
+- **scrollbar 美化**：webkit 浏览器滚动条改为灰色细条，与系统 UI 风格一致
+- **不影响 `.modal-mask` 类的"快速到账"**：那是一条独立的 CSS 路径（line 716），但它只有 4 字段，不会溢出，本次不动
+
+**预防性受益**
+
+5 个 `.modal-overlay` 类 modal 全部受惠：
+- ✅ 384/1775/2912：字段少（< 5 项），本就不溢出
+- ✅ 2688「新增作品」：本次直接修复
+- ⚠️→✅ 3140「新增文创产品」：8 字段 + form-grid，原本就有溢出风险但未触发，本次顺手覆盖
+- ✅ 3594「编辑用户」：2 字段无风险
+
+**部署**
+
+- 单文件 scp（避免多文件静默跳过）：`scp -C -o ServerAliveInterval=30 -o ConnectTimeout=30 style.css root@122.51.56.50:/opt/aiwei/app/css/style.css`
+- 冒烟验证：`ls -la` 确认 mtime + `curl http://122.51.56.50/css/style.css?v=20260718` 确认 HTTP 200 + 34768 bytes + `grep max-height` 命中
+
+**沉淀**
+
+新 memory `feedback_modal_overflow_default`：未来新增 modal 无需再补内联 `max-height:80vh;overflow-y:auto`，通用 CSS 已覆盖；如仍溢出先查是否漏加 `.modal-overlay` 父类或 `.form-grid` 子类。
+
+**Why 这不是大版本**：CSS 单文件 10 行，不涉及 JS / DB / 接口变更，跳过版本号升号（保持 v1.2.0）；下次累积多项改动再升 v1.2.1 或 v1.3.0。
+
+---
+
+## 2026-07-18 第十八期：画廊销售统计卡 + 新增销售表单 UI 重构
+
+**背景**
+
+两件改动一起做（同页 + 同一次部署，节省 ssh 抖动成本）：
+
+1. 用户要求画廊销售页顶部加 3 张统计卡（本年/本月/本日）
+2. 用户反馈「新增画廊销售记录」表单 16 字段扁平堆叠视觉混乱
+
+### 改动 1：画廊销售统计卡
+
+**位置**：`renderGalleryPage()` HTML 模板顶部插入 `<div class="stats-grid" id="gallery-sales-stats">`
+
+**取数**：一次 `Store.getAll('gallery')` + 内存按日期前缀过滤（避免 3 次网络往返），用 `calcGalleryNet(price, commission)` 复用已有工具函数
+
+**口径**：净收入 = price - commission，与全代码一致（charts.js line 251/348/457、`import-export.js` line 57、dashboard line 114 同款公式）
+
+**新增函数**：`_renderGallerySalesStats()` 放在 `_renderGalleryList` 之后
+
+### 改动 2：表单 UI 重构
+
+**位置**：`renderGalleryPage()` 内 `<div class="form-grid">` 区域
+
+**4 分组**：
+1. 📅 交易信息 — 日期 + 状态
+2. 🖼️ 作品信息 — 作品名（带「📋 选作品」按钮）+ 编号（只读）+ 艺术家 + 关联展览
+3. 💰 价格明细 — 数量 + 单价 + 佣金 + 总金额/净收入（卡片化）
+4. 📝 收单与备注 — 买家 + 收款方式 + 经手人 + 备注
+
+**视觉改造**：
+- 必填项 label 加红色 `<span class="required-mark">*</span>`（4 个：日期/作品名/数量/单价）
+- 价格明细组加「⟳ 自动计算」徽章
+- 总金额/净收入从"伪 input"升级为并排卡片（22px 大字 + 金/绿色对比）
+- 选作品按钮下加 helper text「从作品库选择可自动填充编号与艺术家」
+- 4 个分组用浅灰底色 + 绿色 section title 视觉分隔
+
+**关键设计决策**：
+- **零 JS 改动**：所有 `gal-*` id 完整保留 → `_updateGalleryNet` / `_saveGallerySale` / `_fillGalleryForm` / `_pickGalleryArtwork` 无须改
+- **不写死 padding 颜色**：用 CSS 变量 `var(--gray-50)` / `var(--green-700)` / `var(--gold)` / `var(--red)`，跟随全局主题
+- **新样式类在 `style.css` line ~199 区域独立块**：`.form-section` / `.form-section-title` / `.form-section-badge` / `.required-mark` / `.form-hint` / `.calc-summary` / `.calc-cell` / `.calc-value`，可被其他表单复用
+
+**涉及文件**：
+- `app/js/ui.js`（line 1877-1985 区域 HTML 重构 + 新增 `_renderGallerySalesStats` 函数）
+- `app/css/style.css`（line 199 后 ~75 行新增样式）
+
+**为什么不算大版本**：纯前端改造 + 统计卡新增功能，不改 DB schema / 不改接口 / 不动统计口径；累计 16/17/18 三次单文件改动，下次统一升 v1.3.1
+
+**部署**：
+- scp 3 文件：ui.js + style.css + app.js（时间戳更新到 2026-07-18 19:15）
+- 每个文件 sleep 5-15s 防 SSH 抖动
+- mtime + curl 冒烟 + sidebar 时间戳 reload 后确认
+
+**沉淀**：
+
+- 改动 1 暂无新增 memory（沿用 `feedback_revenue_aggregate_consistency` 口径一致原则即可）
+- 改动 2 暂无新增 memory（`.form-section` 通用样式未来其他长表单可复用，但暂不批量改造）

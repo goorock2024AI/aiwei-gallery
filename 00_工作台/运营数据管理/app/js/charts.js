@@ -1,6 +1,8 @@
 // charts.js — Chart.js 图表渲染（Supabase 异步版）
 var Charts = {
   _charts: {},
+  _revStructPeriod: 'month', // 收入结构卡片期间维度：'month' 月度 / 'year' 年度
+  _expCatPeriod: 'month',    // 支出分类卡片期间维度：'month' 月度 / 'year' 年度
 
   _destroy(id) {
     if (this._charts[id]) { this._charts[id].destroy(); delete this._charts[id]; }
@@ -28,10 +30,27 @@ var Charts = {
     html(container, `
       <div class="chart-grid">
         <div class="chart-box full"><div class="chart-title">月度收入趋势</div><canvas id="chart-revenue-trend"></canvas></div>
-        <div class="chart-box"><div class="chart-title">收入结构</div><canvas id="chart-revenue-structure"></canvas></div>
+        <div class="chart-box">
+          <div class="chart-title-row">
+            <div class="chart-title" id="rev-struct-title">收入结构</div>
+            <div class="chart-toggle" id="rev-struct-toggle">
+              <button type="button" data-period="month" class="active">月度</button>
+              <button type="button" data-period="year">年度</button>
+            </div>
+          </div>
+          <canvas id="chart-revenue-structure"></canvas>
+        </div>
         <div class="chart-box"><div class="chart-title">工坊项目销量排名</div><canvas id="chart-workshop-rank"></canvas></div>
-        <div class="chart-box"><div class="chart-title">支出分类汇总</div><canvas id="chart-expense-category"></canvas></div>
-        <div class="chart-box"><div class="chart-title">空间使用统计</div><canvas id="chart-space-usage"></canvas></div>
+        <div class="chart-box">
+          <div class="chart-title-row">
+            <div class="chart-title" id="exp-cat-title">支出分类汇总</div>
+            <div class="chart-toggle" id="exp-cat-toggle">
+              <button type="button" data-period="month" class="active">月度</button>
+              <button type="button" data-period="year">年度</button>
+            </div>
+          </div>
+          <canvas id="chart-expense-category"></canvas>
+        </div>
         <div class="chart-box"><div class="chart-title">月度支出趋势</div><canvas id="chart-expense-trend"></canvas></div>
       </div>
     `);
@@ -50,9 +69,10 @@ var Charts = {
     await this.renderRevenueTrend(year);
     await this.renderDailyRevenueTrend();
     await this.renderRevenueStructure();
+    this._bindRevStructToggle();
     await this.renderWorkshopRank();
     await this.renderExpenseCategory();
-    await this.renderSpaceUsage();
+    this._bindExpCatToggle();
     await this.renderExpenseTrend(year);
   },
 
@@ -387,18 +407,44 @@ var Charts = {
     });
   },
 
+  _bindRevStructToggle() {
+    const toggle = document.getElementById('rev-struct-toggle');
+    if (!toggle || toggle._bound) return;
+    toggle._bound = true;
+    toggle.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-period]');
+      if (!btn) return;
+      const period = btn.dataset.period;
+      if (period === this._revStructPeriod) return;
+      this._revStructPeriod = period;
+      toggle.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+      this.renderRevenueStructure();
+    });
+  },
+
   async renderRevenueStructure() {
     const canvas = $('#chart-revenue-structure');
     if (!canvas) return;
     this._destroy('revenue-structure');
 
     const { year, month } = this._getYM();
-    const ym = month ? year + '-' + month : todayStr().slice(0, 7);
-    const recs = await Store.getByMonth('revenue', ym);
-    const grecs = await Store.getByMonth('gallery', ym);
-    const spRecs = await Store.getByMonth('space', ym);
-    // 兜底：若 space 走旧路径没数据，改走视图拿实时聚合 payments
+    const isYear = this._revStructPeriod === 'year';
+    // 月度：优先用已选月份，否则回退当前月；年度：整年
+    const targetMonth = month || todayStr().slice(5, 7);
+    const ym = year + '-' + targetMonth;
+
+    let recs, grecs;
+    if (isYear) {
+      recs = await Store.getByYear('revenue', year);
+      grecs = await Store.getByYear('gallery', year);
+    } else {
+      recs = await Store.getByMonth('revenue', ym);
+      grecs = await Store.getByMonth('gallery', ym);
+    }
+    // space 走视图拿实时聚合 payments
     const spaceView = await Store.getAll('space');
+    const periodPrefix = isYear ? year : ym;
+
     let ticket = 0, combo = 0, coffee = 0, workshop = 0, creative = 0, venue = 0, other = 0, gallery = 0;
     recs.forEach(r => {
       ticket += r.ticketAmount || 0;
@@ -409,13 +455,21 @@ var Charts = {
       other += r.otherAmount || 0;
     });
     grecs.forEach(r => { gallery += (r.price||0) - (r.commission||0); });
-    // 场地已收：按 paymentDate 落在 ym 内聚合（避免与 revenue.venueAmount 重复）
+    // 场地已收：按 paymentDate 落在期间内聚合（避免与 revenue.venueAmount 重复）
     spaceView.forEach(s => {
       if (s.rentalType !== '付费') return;
       (s.payments || []).forEach(p => {
-        if ((p.paymentDate || '').startsWith(ym)) venue += +p.amount || 0;
+        if ((p.paymentDate || '').startsWith(periodPrefix)) venue += +p.amount || 0;
       });
     });
+
+    // 更新标题为可确认的具体期间
+    const titleEl = document.getElementById('rev-struct-title');
+    if (titleEl) {
+      titleEl.textContent = isYear
+        ? `收入结构（${year}年全年）`
+        : `收入结构（${year}年${parseInt(targetMonth)}月）`;
+    }
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-structure'] = new Chart(ctx, {
@@ -430,7 +484,32 @@ var Charts = {
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
-          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          legend: {
+            position: 'right',
+            labels: {
+              boxWidth: 12,
+              padding: 8,
+              font: { size: 11 },
+              // 图例每项显示：分类名 ¥金额 占比%
+              generateLabels: function(chart) {
+                const ds = chart.data.datasets[0];
+                const data = ds.data || [];
+                const total = data.reduce((a, b) => a + (+b || 0), 0);
+                return chart.data.labels.map((label, i) => {
+                  const val = +data[i] || 0;
+                  const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
+                  return {
+                    text: `${label}  ¥${val.toFixed(0)} (${pct}%)`,
+                    fillStyle: ds.backgroundColor[i],
+                    strokeStyle: ds.backgroundColor[i],
+                    lineWidth: 0,
+                    hidden: false,
+                    index: i
+                  };
+                });
+              }
+            }
+          },
           tooltip: {
             callbacks: {
               label: function(context) {
@@ -454,7 +533,8 @@ var Charts = {
     const all = await Store.getAll('revenue');
     const counts = {};
     all.forEach(r => {
-      (r.workshopItems || []).forEach(item => {
+      // JSONB 数组防御：脏数据可能是对象 {} 而非数组，(x||[]) 无法防御
+      (Array.isArray(r.workshopItems) ? r.workshopItems : []).forEach(item => {
         const name = item.name || '其他';
         counts[name] = (counts[name] || 0) + (+item.qty || 0);
       });
@@ -485,14 +565,34 @@ var Charts = {
     });
   },
 
+  _bindExpCatToggle() {
+    const toggle = document.getElementById('exp-cat-toggle');
+    if (!toggle || toggle._bound) return;
+    toggle._bound = true;
+    toggle.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-period]');
+      if (!btn) return;
+      const period = btn.dataset.period;
+      if (period === this._expCatPeriod) return;
+      this._expCatPeriod = period;
+      toggle.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+      this.renderExpenseCategory();
+    });
+  },
+
   async renderExpenseCategory() {
     const canvas = $('#chart-expense-category');
     if (!canvas) return;
     this._destroy('expense-category');
 
     const { year, month } = this._getYM();
-    const ym = month ? year + '-' + month : todayStr().slice(0, 7);
-    const recs = await Store.getByMonth('expense', ym);
+    const isYear = this._expCatPeriod === 'year';
+    const targetMonth = month || todayStr().slice(5, 7);
+    const ym = year + '-' + targetMonth;
+
+    const recs = isYear
+      ? await Store.getByYear('expense', year)
+      : await Store.getByMonth('expense', ym);
     const cats = {};
     recs.forEach(r => {
       if (r.type === '备用金支出') cats[r.category] = (cats[r.category] || 0) + (r.amount||0);
@@ -501,6 +601,15 @@ var Charts = {
     const entries = Object.entries(cats).sort((a, b) => b[1] - a[1]);
     const labels = entries.map(e => e[0]);
     const data = entries.map(e => e[1]);
+
+    // 更新标题为可确认的具体期间
+    const periodLabel = isYear ? `${year}年全年` : `${year}年${parseInt(targetMonth)}月`;
+    const titleEl = document.getElementById('exp-cat-title');
+    if (titleEl) {
+      titleEl.textContent = labels.length
+        ? `支出分类汇总（${periodLabel}）`
+        : `支出分类汇总（${periodLabel}·暂无数据）`;
+    }
     if (!labels.length) return;
 
     const colors = ['#c0392b','#e67e22','#f1c40f','#2c6b9e','#27ae60','#8e44ad','#7ab88a','#b8863a','#8a8578','#5c574a'];
@@ -508,29 +617,47 @@ var Charts = {
     this._charts['expense-category'] = new Chart(ctx, {
       type: 'pie',
       data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, labels.length) }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10 } } } }
-    });
-  },
-
-  async renderSpaceUsage() {
-    const canvas = $('#chart-space-usage');
-    if (!canvas) return;
-    this._destroy('space-usage');
-
-    const all = await Store.getAll('space');
-    const counts = {};
-    all.forEach(r => { counts[r.space] = (counts[r.space] || 0) + 1; });
-
-    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    const labels = entries.map(e => e[0]);
-    const data = entries.map(e => e[1]);
-    if (!labels.length) return;
-
-    const ctx = canvas.getContext('2d');
-    this._charts['space-usage'] = new Chart(ctx, {
-      type: 'bar',
-      data: { labels, datasets: [{ label: '使用次数', data, backgroundColor: '#2c6b9e', borderRadius: 4 }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: {
+              boxWidth: 12,
+              padding: 8,
+              font: { size: 11 },
+              // 图例每项显示：分类名 ¥金额 占比%
+              generateLabels: function(chart) {
+                const ds = chart.data.datasets[0];
+                const arr = ds.data || [];
+                const total = arr.reduce((a, b) => a + (+b || 0), 0);
+                return chart.data.labels.map((label, i) => {
+                  const val = +arr[i] || 0;
+                  const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
+                  return {
+                    text: `${label}  ¥${val.toFixed(0)} (${pct}%)`,
+                    fillStyle: ds.backgroundColor[i],
+                    strokeStyle: ds.backgroundColor[i],
+                    lineWidth: 0,
+                    hidden: false,
+                    index: i
+                  };
+                });
+              }
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                const val = context.parsed || 0;
+                const pct = total > 0 ? (val / total * 100).toFixed(1) : 0;
+                return context.label + ': ¥' + val.toFixed(2) + ' (' + pct + '%)';
+              }
+            }
+          }
+        }
+      }
     });
   },
 

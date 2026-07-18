@@ -1875,45 +1875,98 @@ const UI = {
     await this._loadArtworks();
 
     html(page, `
+      <div class="stats-grid" id="gallery-sales-stats">
+        <div class="stat-card"><div class="stat-label">本年画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+        <div class="stat-card"><div class="stat-label">本月画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+        <div class="stat-card"><div class="stat-label">本日画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+      </div>
       <div class="card">
         <div class="card-title">${editing ? '编辑画廊销售记录' : '新增画廊销售记录'}</div>
         <div class="form-grid">
-          <div class="form-group">
-            <label>日期</label>
-            <div style="display:flex;gap:6px"><input type="date" id="gal-date" value="${todayStr()}" style="flex:1">${this._todayBtn('gal-date')}</div>
-          </div>
-          <div class="form-group">
-            <label>作品名称</label>
-            <div style="display:flex;gap:6px">
-              <input type="text" id="gal-artwork" placeholder="请输入或从作品库选择" required style="flex:1">
-              <button type="button" class="btn btn-secondary" onclick="UI._pickGalleryArtwork()" title="从产品库-画廊的作品档案中选择">📋 选作品</button>
+          <div class="form-section">
+            <div class="form-section-title">📅 交易信息</div>
+            <div class="form-group"><label>日期<span class="required-mark">*</span></label>
+              <div style="display:flex;gap:6px"><input type="date" id="gal-date" value="${todayStr()}" style="flex:1">${this._todayBtn('gal-date')}</div>
+            </div>
+            <div class="form-group"><label>状态</label>
+              <select id="gal-status">
+                <option value="已售出">已售出</option>
+                <option value="已预定">已预定</option>
+                <option value="已退款">已退款</option>
+              </select>
             </div>
           </div>
-          <div class="form-group"><label>作品编号</label><input type="text" id="gal-artwork-no" placeholder="选品后自动填充" readonly style="background:var(--cream);font-family:monospace"></div>
-          <div class="form-group"><label>艺术家</label><input type="text" id="gal-artist" placeholder="艺术家姓名（选填）"></div>
-          <div class="form-group"><label>成交数量 <span id="gal-max-qty-hint" style="font-size:11px;color:var(--gray-500);font-weight:normal"></span></label><input type="number" id="gal-quantity" min="1" step="1" value="1" required oninput="UI._updateGalleryNet()"></div>
-          <div class="form-group"><label>成交单价（元）</label><input type="number" id="gal-price" min="0" step="0.01" placeholder="0.00" required oninput="UI._updateGalleryNet()"></div>
-          <div class="form-group"><label>总金额 <span style="font-size:11px;color:var(--gray-500);font-weight:normal">(单价×数量)</span></label><div id="gal-amount" style="padding:8px;background:var(--cream);border-radius:var(--radius-sm);font-weight:bold;color:var(--gold)">¥0.00</div></div>
-          <div class="form-group"><label>佣金/手续费（元）</label><input type="number" id="gal-commission" min="0" step="0.01" placeholder="0.00" value="0" oninput="UI._updateGalleryNet()"></div>
-          <div class="form-group"><label>净收入 <span id="gal-net" style="font-weight:bold;color:var(--green-700)">¥0.00</span></label></div>
-          <div class="form-group"><label>买家</label><input type="text" id="gal-buyer" placeholder="买家姓名（选填）"></div>
-          <div class="form-group"><label>收款方式</label>
-            <select id="gal-payment">
-              <option value="扫码支付">扫码支付</option>
-              <option value="现金">现金</option>
-              <option value="对公转账">对公转账</option>
-            </select>
+
+          <div class="form-section">
+            <div class="form-section-title">🖼️ 作品信息</div>
+            <div class="form-group full">
+              <label>作品名称<span class="required-mark">*</span></label>
+              <div style="display:flex;gap:6px">
+                <input type="text" id="gal-artwork" placeholder="请输入或从作品库选择" required style="flex:1">
+                <button type="button" class="btn btn-secondary" onclick="UI._pickGalleryArtwork()" title="从产品库-画廊的作品档案中选择">📋 选作品</button>
+              </div>
+              <div class="form-hint">从作品库选择可自动填充编号与艺术家</div>
+            </div>
+            <div class="form-group"><label>作品编号</label>
+              <input type="text" id="gal-artwork-no" placeholder="选品后自动填充" readonly style="background:var(--cream);font-family:monospace">
+            </div>
+            <div class="form-group"><label>艺术家</label>
+              <input type="text" id="gal-artist" placeholder="选填">
+            </div>
+            <div class="form-group full"><label>关联展览</label>
+              <input type="text" id="gal-exhibition" placeholder="选填，如：云南重彩画展">
+            </div>
           </div>
-          <div class="form-group"><label>状态</label>
-            <select id="gal-status">
-              <option value="已售出">已售出</option>
-              <option value="已预定">已预定</option>
-              <option value="已退款">已退款</option>
-            </select>
+
+          <div class="form-section">
+            <div class="form-section-title">
+              💰 价格明细
+              <span class="form-section-badge">⟳ 自动计算</span>
+            </div>
+            <div class="form-group"><label>成交数量<span class="required-mark">*</span></label>
+              <input type="number" id="gal-quantity" min="1" step="1" value="1" required oninput="UI._updateGalleryNet()">
+              <div class="form-hint" id="gal-max-qty-hint"></div>
+            </div>
+            <div class="form-group"><label>成交单价（元）<span class="required-mark">*</span></label>
+              <input type="number" id="gal-price" min="0" step="0.01" placeholder="0.00" required oninput="UI._updateGalleryNet()">
+            </div>
+            <div class="form-group"><label>佣金/手续费（元）</label>
+              <input type="number" id="gal-commission" min="0" step="0.01" placeholder="0.00" value="0" oninput="UI._updateGalleryNet()">
+            </div>
+            <div class="form-group full">
+              <div class="calc-summary">
+                <div class="calc-cell">
+                  <div class="calc-label">总金额（单价×数量）</div>
+                  <div class="calc-value calc-gold" id="gal-amount">¥0.00</div>
+                </div>
+                <div class="calc-cell calc-cell-divider">
+                  <div class="calc-label">净收入</div>
+                  <div class="calc-value calc-green" id="gal-net">¥0.00</div>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="form-group"><label>关联展览</label><input type="text" id="gal-exhibition" placeholder="关联展览名称（选填）"></div>
-          <div class="form-group"><label>经手人</label><input type="text" id="gal-handler" placeholder="经手人姓名"></div>
-          <div class="form-group full"><label>备注</label><input type="text" id="gal-notes" placeholder="备注（选填）"></div>
+
+          <div class="form-section">
+            <div class="form-section-title">📝 收单与备注</div>
+            <div class="form-group"><label>买家</label>
+              <input type="text" id="gal-buyer" placeholder="选填">
+            </div>
+            <div class="form-group"><label>收款方式</label>
+              <select id="gal-payment">
+                <option value="扫码支付">扫码支付</option>
+                <option value="现金">现金</option>
+                <option value="对公转账">对公转账</option>
+              </select>
+            </div>
+            <div class="form-group"><label>经手人</label>
+              <input type="text" id="gal-handler" placeholder="经手人姓名">
+            </div>
+            <div class="form-group full"><label>备注</label>
+              <input type="text" id="gal-notes" placeholder="选填">
+            </div>
+          </div>
+
           <div class="form-actions full">
             <button type="button" class="btn btn-primary" onclick="UI._saveGallerySale()">${editing ? '保存修改' : '保存记录'}</button>
             ${editing ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditGallery()">取消编辑</button>' : ''}
@@ -1939,6 +1992,7 @@ const UI = {
     }
     this._updateGalleryNet();
     await this._renderGalleryList();
+    await this._renderGallerySalesStats();
   },
 
   _updateGalleryNet() {
@@ -2097,6 +2151,42 @@ const UI = {
     });
     h += '</tbody></table></div>';
     html(el, h);
+  },
+
+  /**
+   * 画廊销售统计卡：全年 / 本月 / 本日（净收入 = price - commission，与全代码口径一致）
+   * 一次 getAll + 内存按日期前缀过滤，避免多次网络往返
+   */
+  async _renderGallerySalesStats() {
+    const wrap = document.getElementById('gallery-sales-stats');
+    if (!wrap) return;
+    const today = todayStr();
+    const ym = today.slice(0, 7);
+    const year = today.slice(0, 4);
+    let all = [];
+    try {
+      all = await Store.getAll('gallery') || [];
+    } catch (e) {
+      console.warn('[gallery-stats] getAll failed:', e);
+    }
+    const buckets = { year: { sum: 0, count: 0 }, month: { sum: 0, count: 0 }, day: { sum: 0, count: 0 } };
+    all.forEach(r => {
+      const d = String(r.date || '').slice(0, 10);
+      const net = calcGalleryNet(r.price, r.commission);
+      if (d.startsWith(year))    { buckets.year.sum  += net; buckets.year.count++; }
+      if (d.startsWith(ym))      { buckets.month.sum += net; buckets.month.count++; }
+      if (d === today)           { buckets.day.sum   += net; buckets.day.count++; }
+    });
+    const cards = wrap.querySelectorAll('.stat-card');
+    const set = (i, label, sum, count, sub) => {
+      const c = cards[i]; if (!c) return;
+      c.querySelector('.stat-label').textContent = label;
+      c.querySelector('.stat-value').textContent = '¥' + this._fmt(Math.max(0, sum));
+      c.querySelector('.stat-sub').textContent = sub;
+    };
+    set(0, '本年画廊销售', buckets.year.sum,  buckets.year.count,  `${year} 年 · ${buckets.year.count} 笔`);
+    set(1, '本月画廊销售', buckets.month.sum, buckets.month.count, `${ym} · ${buckets.month.count} 笔`);
+    set(2, '本日画廊销售', buckets.day.sum,   buckets.day.count,   `今天 · ${buckets.day.count} 笔`);
   },
 
   async _editGallery(id) {

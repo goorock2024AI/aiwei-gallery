@@ -195,6 +195,82 @@ body {
   box-shadow: 0 0 0 2px var(--green-100);
 }
 .form-group textarea { resize: vertical; min-height: 60px; }
+
+/* ===== 表单分组 + 视觉层次（2026-07-18 画廊销售表单重构） ===== */
+.form-section {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--gray-50, #f7f8fa);
+  border: 1px solid var(--gray-200, #e5e7eb);
+  border-radius: var(--radius-sm);
+}
+.form-section-title {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--green-700, #15803d);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px dashed var(--gray-300, #d1d5db);
+}
+.form-section-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--gold, #b8893b);
+  background: rgba(184, 137, 59, 0.08);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.required-mark {
+  color: var(--red, #dc2626);
+  margin-left: 2px;
+  font-weight: 600;
+}
+.form-hint {
+  font-size: 11px;
+  color: var(--gray-500, #6b7280);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* 价格明细计算结果卡片 */
+.calc-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  background: var(--white);
+  border: 1px solid var(--gray-200, #e5e7eb);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.calc-cell {
+  padding: 14px 18px;
+  text-align: center;
+}
+.calc-cell-divider {
+  border-left: 1px solid var(--gray-200, #e5e7eb);
+}
+.calc-label {
+  font-size: 11px;
+  color: var(--gray-500, #6b7280);
+  margin-bottom: 4px;
+  letter-spacing: 0.3px;
+}
+.calc-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.calc-gold { color: var(--gold, #b8893b); }
+.calc-green { color: var(--green-700, #15803d); }
+
 .form-group .amount-display {
   padding: 8px 10px;
   background: var(--gray-100);
@@ -323,6 +399,7 @@ table.data-table .tag {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+  align-items: start;
 }
 .chart-box {
   background: var(--white);
@@ -336,6 +413,34 @@ table.data-table .tag {
   font-weight: 600;
   color: var(--green-700);
   margin-bottom: 10px;
+}
+/* 图表标题 + 右侧切换按钮 一行两端对齐 */
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.chart-title-row .chart-title { margin-bottom: 0; }
+.chart-toggle {
+  display: inline-flex;
+  border: 1px solid var(--green-300);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.chart-toggle button {
+  border: none;
+  background: var(--white);
+  color: var(--green-700);
+  font-size: 12px;
+  padding: 3px 12px;
+  cursor: pointer;
+  line-height: 1.6;
+}
+.chart-toggle button + button { border-left: 1px solid var(--green-300); }
+.chart-toggle button.active {
+  background: var(--green-700);
+  color: var(--white);
 }
 .chart-box canvas { max-height: 300px; }
 
@@ -436,7 +541,11 @@ table.data-table .tag {
   .pos-fixed-bottom { margin: 0 -12px; padding: 10px 12px; }
   .form-grid { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .chart-grid { grid-template-columns: 1fr; }
+  .chart-grid { grid-template-columns: 1fr; gap: 12px; }
+  .chart-box { padding: 12px; }
+  /* 窄屏标题与切换按钮换行，避免挤压 */
+  .chart-title-row { flex-wrap: wrap; gap: 6px; }
+  .chart-box canvas { max-height: 260px; }
   .dynamic-row { grid-template-columns: 1fr 1fr; }
   #main-content { padding: 12px; }
   .pos-fixed-bottom { margin: 0 -12px; padding: 10px 12px; }
@@ -1218,11 +1327,19 @@ input.invalid:focus {
 }
 .modal-card {
   width: 420px;
+  max-height: 85vh;
+  overflow-y: auto;
   background: var(--white);
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
   padding: 28px 32px;
 }
+/* 表单类弹窗：内容多时卡片本身太窄，给个最小宽度 */
+.modal-card:has(.form-grid) { width: 520px; }
+/* 滚动条美化（仅 webkit） */
+.modal-card::-webkit-scrollbar { width: 8px; }
+.modal-card::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
+.modal-card::-webkit-scrollbar-thumb:hover { background: var(--gray-500); }
 .modal-title {
   font-size: 16px;
   font-weight: 600;
