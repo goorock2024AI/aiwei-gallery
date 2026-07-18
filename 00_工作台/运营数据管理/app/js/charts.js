@@ -3,6 +3,7 @@ var Charts = {
   _charts: {},
   _revStructPeriod: 'month', // 收入结构卡片期间维度：'month' 月度 / 'year' 年度
   _expCatPeriod: 'month',    // 支出分类卡片期间维度：'month' 月度 / 'year' 年度
+  _revOverviewPeriod: 'day', // 收入总览卡片期间维度：'day' 本日 / 'month' 本月 / 'year' 本年（默认当日）
 
   _destroy(id) {
     if (this._charts[id]) { this._charts[id].destroy(); delete this._charts[id]; }
@@ -23,8 +24,8 @@ var Charts = {
     const page = document.getElementById('page-reports');
     if (!page) return;
 
-    // 数据总览
-    await this._renderOverview(year, month);
+    // 数据总览（独立周期，与顶部年份/月份 select 解耦）
+    await this._renderRevenueOverview(this._revOverviewPeriod);
 
     const container = document.getElementById('report-charts');
     html(container, `
@@ -76,43 +77,49 @@ var Charts = {
     await this.renderExpenseTrend(year);
   },
 
-  async _renderOverview(year, month) {
+  async _renderRevenueOverview(period) {
     const page = document.getElementById('page-reports');
     if (!page) return;
 
+    period = period || this._revOverviewPeriod || 'day';
+    this._revOverviewPeriod = period;
+
+    const today = todayStr();
+    const ym = today.slice(0, 7);
+    const year = today.slice(0, 4);
+
+    // 一次拉全年，内存按日期前缀过滤（与 _renderGallerySalesStats 同款模式）
     const revenues = await Store.getByYear('revenue', year);
     const galleryAll = await Store.getByYear('gallery', year);
-    // space 走视图路径（含 payments 子表），按到账日期 (paymentDate) 时间维度
     const spaceAll = await Store.getAll('space');
 
-    // month 为空表示全年，否则按指定月份过滤
-    let monthRev, monthGal, spaceRentIncome = 0, title;
-    if (month) {
-      const ym = year + '-' + month;
-      monthRev = revenues.filter(r => (r.date||'').startsWith(ym));
-      monthGal = galleryAll.filter(r => (r.date||'').startsWith(ym));
-      // 场地已收款按到账日（paymentDate）过滤
-      spaceAll.forEach(s => {
-        if (s.rentalType !== '付费') return;
-        const payments = s.payments || [];
-        payments.forEach(p => {
-          if ((p.paymentDate || '').startsWith(ym)) spaceRentIncome += +p.amount || 0;
-        });
+    const periodLabel = period === 'day' ? `本日（${today}）`
+                      : period === 'month' ? `本月（${ym}）`
+                      : `本年（${year}）`;
+    const periodTitle = period === 'day' ? today
+                      : period === 'month' ? year + '年' + parseInt(ym.slice(5)) + '月'
+                      : year + '年全年';
+
+    // 按 period 过滤
+    const inPeriod = (d) => {
+      const ds = String(d || '').slice(0, 10);
+      if (period === 'day') return ds === today;
+      if (period === 'month') return ds.startsWith(ym);
+      return ds.startsWith(year);
+    };
+
+    const monthRev = revenues.filter(r => inPeriod(r.date));
+    const monthGal = galleryAll.filter(r => inPeriod(r.date));
+
+    // 场地按 paymentDate 过滤（口径与现状一致）
+    let spaceRentIncome = 0;
+    spaceAll.forEach(s => {
+      if (s.rentalType !== '付费') return;
+      const payments = s.payments || [];
+      payments.forEach(p => {
+        if (inPeriod(p.paymentDate)) spaceRentIncome += +p.amount || 0;
       });
-      title = year + '年' + parseInt(month) + '月';
-    } else {
-      monthRev = revenues;
-      monthGal = galleryAll;
-      // 场地全年已收款（按 paymentDate 落在全年）
-      spaceAll.forEach(s => {
-        if (s.rentalType !== '付费') return;
-        const payments = s.payments || [];
-        payments.forEach(p => {
-          if ((p.paymentDate || '').startsWith(year)) spaceRentIncome += +p.amount || 0;
-        });
-      });
-      title = year + '年全年';
-    }
+    });
 
     const totalRevenue = monthRev.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0)
       + monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0)
@@ -136,9 +143,16 @@ var Charts = {
     div.className = 'rpt-overview';
     div.innerHTML = `
       <div class="card">
-        <div class="card-title">📊 收入总览（${month ? year + '年' + parseInt(month) + '月' : year + '年全年'}）</div>
-        <div class="stats-grid">
-          <div class="stat-card"><div class="stat-label">总收入</div><div class="stat-value" style="font-size:22px">¥${_fmt(totalRevenue)}</div></div>
+        <div class="chart-title-row">
+          <div class="card-title" style="margin-bottom:0">📊 收入总览（${periodTitle}）</div>
+          <div class="chart-toggle" id="rev-overview-toggle">
+            <button type="button" data-period="day" class="${period === 'day' ? 'active' : ''}">本日</button>
+            <button type="button" data-period="month" class="${period === 'month' ? 'active' : ''}">本月</button>
+            <button type="button" data-period="year" class="${period === 'year' ? 'active' : ''}">本年</button>
+          </div>
+        </div>
+        <div class="stats-grid" style="margin-top:12px">
+          <div class="stat-card"><div class="stat-label">总收入（${periodLabel}）</div><div class="stat-value" style="font-size:22px">¥${_fmt(totalRevenue)}</div></div>
           <div class="stat-card"><div class="stat-label">门票</div><div class="stat-value">¥${_fmt(ticketTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">咖啡套票</div><div class="stat-value">¥${_fmt(comboTotal)}</div></div>
           <div class="stat-card"><div class="stat-label">咖啡</div><div class="stat-value">¥${_fmt(coffeeTotal)}</div></div>
@@ -151,6 +165,23 @@ var Charts = {
       </div>
     `;
     page.insertBefore(div, page.querySelector('.filter-bar')?.nextSibling || null);
+
+    this._bindRevOverviewToggle();
+  },
+
+  _bindRevOverviewToggle() {
+    const toggle = document.getElementById('rev-overview-toggle');
+    if (!toggle || toggle._bound) return;
+    toggle._bound = true;
+    toggle.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-period]');
+      if (!btn) return;
+      const p = btn.dataset.period;
+      if (p === this._revOverviewPeriod) return;
+      toggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      this._renderRevenueOverview(p);
+    });
   },
 
   async renderDashboardTrend() {

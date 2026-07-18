@@ -963,6 +963,18 @@ PRD 中 P1 需求的账号登录系统和操作日志，本次先实现用户登
 
 **为什么不算大版本**：纯前端改造 + 统计卡新增功能，不改 DB schema / 不改接口 / 不动统计口径；累计 16/17/18 三次单文件改动，下次统一升 v1.3.1
 
+---
+
+### v1.3.0 收尾 commit（2026-07-18 同日）
+
+第十八期代码改动 + 之前 7-17 别人留下的「数据报表 UI 改造 + VERSION 1.3.0 升号 + index.html 缓存破坏 token 刷为 reports-ui-20260717」+ 双层日志补齐，**统一打包入单 commit**：
+
+```
+a5d47b4 feat: v1.3.0 收尾 — 数据报表 UI 改造 + 画廊销售页双改造 + 文档
+```
+
+10 文件 +758/-76（详见 `git show --stat a5d47b4`），HEREDOC 传 commit message，git push origin main 一次成功。
+
 **部署**：
 - scp 3 文件：ui.js + style.css + app.js（时间戳更新到 2026-07-18 19:15）
 - 每个文件 sleep 5-15s 防 SSH 抖动
@@ -972,3 +984,76 @@ PRD 中 P1 需求的账号登录系统和操作日志，本次先实现用户登
 
 - 改动 1 暂无新增 memory（沿用 `feedback_revenue_aggregate_consistency` 口径一致原则即可）
 - 改动 2 暂无新增 memory（`.form-section` 通用样式未来其他长表单可复用，但暂不批量改造）
+
+---
+
+## 2026-07-18 第十九期：数据报表「收入总览」卡片默认当日 + 日/月/年切换
+
+**背景**
+
+数据报表页「📊 收入总览」卡片当前按顶部 filter-bar 的「年份+月份」select 聚合（月份空=全年，否则=该月）。用户希望：**默认显示当日**（POS 收银台运营最关心当日），并提供 本日 / 本月 / 本年 三按钮一键切换；与顶部 filter-bar 解耦（顶部 select 仍控制其他 6 个图表的过滤）。
+
+### 改动
+
+**1. `charts.js` 新增状态**：
+```js
+_revOverviewPeriod: 'day', // 'day' | 'month' | 'year'，默认当日
+```
+
+**2. `_renderOverview(year, month)` 重写为 `_renderRevenueOverview(period)`**：
+
+- 标题改为 `${periodTitle}`：本日 → `2026-07-18`；本月 → `2026年7月`；本年 → `2026年全年`
+- 「总收入」stat-card label 加 `（${periodLabel}）` 提示：本日（2026-07-18）/ 本月（2026-07）/ 本年（2026）
+- 复用 `_renderGallerySalesStats` 同款数据获取：`Store.getByYear('revenue', year)` + `Store.getByYear('gallery', year)` + `Store.getAll('space')`，内存按日期前缀过滤（`inPeriod()` 闭包）
+- 场地仍按 `paymentDate` 过滤（口径与现状一致）
+- 渲染完调用 `_bindRevOverviewToggle()` 绑定 3 按钮事件（`_bound` 防重复绑定，每次 remove+rebuild div 后新元素无 `_bound`，安全重新绑定）
+
+**3. 切换事件 `_bindRevOverviewToggle()`**：
+```js
+toggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-period]');
+  const p = btn.dataset.period;
+  if (p === this._revOverviewPeriod) return; // 同周期不重渲染
+  toggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  this._renderRevenueOverview(p);
+});
+```
+
+**4. `renderAll()` 调用改为**：`this._renderRevenueOverview(this._revOverviewPeriod)`（去掉 `(year, month)` 入参）
+
+### 与顶部 filter-bar 的解耦逻辑
+
+顶部「年份+月份」select 仍触发 `renderAll()`，但 `renderAll()` 调用 `_renderRevenueOverview` 时传的是**自有状态 `_revOverviewPeriod`**，不是顶部 select 的值。因此：
+
+| 操作 | 收入总览 | 其他 6 图 |
+|---|---|---|
+| 进入报表页 | 默认「本日」 | 按顶部 select（默认 2026 年 7 月）|
+| 点「本日/本月/本年」按钮 | 切到对应周期 | **不变** |
+| 改顶部 select | **不变**（保持当前周期）| 按新 select 重新聚合 |
+
+### 涉及文件
+
+| 文件 | 改动 |
+|---|---|
+| `app/js/charts.js` | 新增 `_revOverviewPeriod` 状态；`_renderOverview` 重写为 `_renderRevenueOverview(period)`；新增 `_bindRevOverviewToggle()`；`renderAll()` 调用改为传 period |
+
+**未改**：`ui.js`、`style.css`（`.chart-toggle` 样式已有，绿边框+active 填充与现有「收入结构」「支出分类」两处 toggle 视觉一致）。
+
+### 验证
+
+| 检查项 | 结果 |
+|---|---|
+| 默认视图 | 本日（active），总收入 ¥2619.50 ✅ |
+| 本月 | 总收入 ¥20469.60 ✅ |
+| 本年 | 总收入 ¥134778.80 ✅ |
+| 口径交叉验证 | 本日 ¥2619.50 = 收银台顶部 ¥1489.50 + 画廊 ¥980 + 场地 ¥150 ✅ |
+| 顶部 select 切到 6 月 | 收入总览保持「2026-07-18」+「本日」active，「收入结构」自动变「2026年6月」✅ |
+| 控制台 | 0 错误 |
+| 视觉 | 与现有「收入结构」「支出分类」toggle 风格一致（绿边框 + active 绿底白字）|
+
+### 沉淀
+
+- 模式「独立周期卡片 + 与全局 filter 解耦」可复用于其他总览卡片（如未来加支出总览），但本次仅改造收入总览
+- 沿用 `.chart-toggle` 复用原则：未来新加 toggle 卡片直接复制 `<div class="chart-title-row"><div class="chart-title">...</div><div class="chart-toggle">...</div></div>` 模板即可
+- 未触发版本号（纯前端单文件功能改造，下次累积改动再统一升号）
