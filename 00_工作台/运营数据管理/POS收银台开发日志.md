@@ -1123,3 +1123,106 @@ toggle.addEventListener('click', (e) => {
 | 新 memory `feedback_verify_cloud_state_before_redeploy.md` | 新建 30+ 行（AI 行为规范）|
 | `MEMORY.md` 索引 | +1 条目（指向新 memory）|
 | **未改**：任何 `app/*` / `server.js` / `nginx.conf` / `VERSION` / Docker —— 本次 0 行运行时代码改动 |
+
+---
+
+## 2026-07-19 第二十期：数据统计「收入总览」加指定日期切换（v1.3.2）
+
+**背景**
+
+用户在 v1.3.1 落地后反馈：「目前顶部卡片提供，按日、月、年查看收入总览，需要增加一个选定日期查看按钮，可以查看指定日期的收入总览」。
+
+需求拆解：v1.3.1 的「本日/本月/本年」3 按钮只能看当前期，对「上周日活动效果」「五一当天」「春节某天」这类历史单日场景不够。需要第 4 切换项。
+
+**改动 1：`charts.js` 加第 4 切换（精确 6 处）**
+
+| Line | 改动 |
+|---|---|
+| L6 | 状态字段注释扩展 `+'custom'`，新增 `_revOverviewCustomDate: null` |
+| L91 | 在 `year` 计算之后加 `const customDate = this._revOverviewCustomDate || today;` |
+| L96-105 | `periodLabel` / `periodTitle` 三元末尾加分支配 `选定日（${customDate}）` / `customDate` |
+| L111-115 | `inPeriod` 闭包末尾加 `return ds === customDate;`（fall-through，自动接管 custom）|
+| L156-157 | HTML 在 3 按钮后追加 `<input type="date" id="rev-overview-date" class="rev-overview-date-input ${period==='custom'?'active':''}" value="${customDate}" max="${today}" title="..." />` |
+| L181-203 | `_bindRevOverviewToggle` 扩双绑定：保留按钮 click 代理（增加清 input.active 逻辑）+ 新增 `dateInput.addEventListener('change', …)`，沿用 `toggle._bound` 与新增 `dateInput._bound` 防重绑 |
+
+**改动 2：`style.css` 加 13 行**
+
+在 `.chart-toggle button.active` 后追加，复用 .chart-toggle 视觉风格：
+- `border-left` 与 button + button 同款（视觉连续）
+- `.active` 绿底白字
+- `::-webkit-calendar-picker-indicator` 自定义图标透明度（active 态反相为白）
+
+**复用清单**
+
+- v1.3.1 的 `inPeriod` 闭包结构（day/month/year/自定义 一致语义：`===` 或 `startsWith`）
+- 三数据源字段口径（revenue/gallery `r.date`，space `payments[].paymentDate`）— Agent 3 验证 gallery_sales 字段名实为 `date`，与 charts.js 89/93 一致
+- `.chart-toggle` 绿边框+绿底白字 active 视觉
+- `_bound` 防重绑机制（v1.3.1 引入）
+- `todayStr()` 全局函数（`models.js:38`）
+
+**未新增 / 未改**
+
+- 不新增 API / DB / server.js / Docker / nginx.conf
+- 不修改顶部 filter-bar 行为（解耦关系完全保留）
+- 不修改 6 个图表里其他任何一个
+
+**本地 6 项冒烟全过**（test4 账号登入，用 preview 工具驱动）：
+
+| # | 项 | 期望 | 实际 |
+|---|---|---|---|
+| 1 | 默认视图 | active=本日，标题「2026-07-19」 | ✅ ¥135.00 |
+| 2 | 本月 | 切到「2026年7月」 | ✅ ¥21214.60 |
+| 3 | 本年 | 切到「2026年全年」 | ✅ ¥135523.80 |
+| 4 | 选 2026-07-15 | input active+绿底，3 按钮 active 全空，标题「2026-07-15」 | ✅ ¥412.90 |
+| 5 | 切回本月 | input 失活，按钮 active | ✅ title 恢复「2026年7月」 |
+| 6 | 改顶部 select 年份=2025 | 收入总览**不变**，其他图变「2025年7月」 | ✅ 解耦生效 |
+
+控制台 0 错误。
+
+**部署**
+
+- scp 5 文件（每个 sleep 5-15s + scp -C + ServerAliveInterval=30）：
+  1. `app/js/charts.js`（31073 字节）
+  2. `app/js/app.js`（APP_VERSION + LAST_UPDATE）
+  3. `app/css/style.css`
+  4. `app/index.html`（`?v=` token 3 处全升）
+  5. `VERSION`（1.3.1→1.3.2）
+- 云端冒烟（5 项全过）：
+  - mtime：全部 7-19 11:39~11:40 当前
+  - `grep _revOverviewCustomDate\|rev-overview-date\|period === 'custom'` charts.js → 6 处命中
+  - `grep APP_VERSION='1.3.2'` app.js → 命中
+  - `grep rev-overview-date-input` style.css → 4 处命中
+  - `index.html` ?v= token 3 处全 `rev-overview-date-20260719`
+
+**git**
+
+- `03e9bbf feat: v1.3.2 — 数据统计「收入总览」加指定日期查看`（5 文件 +46/-11，HEREDOC 传 message）
+- `3617f5b docs: 补 v1.3.1 推送异常 + 7-19 二次核实 + SSH 公钥破局指引`（2 文件 +155/-1）
+- ⚠️→ ✅ **`git push origin main` 一次成功**：`a5d47b4..3617f5b main -> main`（HTTPS 443 不再阻断，3 commit 含历史 c637e30 全部上远端）。相比 7-18 / 7-19 上午两次失败，本次网络已自动恢复
+- **关键观察**：本次 push 与上次失败间隔仅 1 小时，**无任何配置改动**，表明网络层非永久故障，是偶发/阶段性封堵。日后遇到 443 阻断不应放弃，可多次尝试或等数小时
+
+**版本号**
+
+v1.3.1 → **v1.3.2**。理由（与 v1.3.1 同款）：
+- 新增用户可感知的交互（指定日期切换）
+- 与顶部 select 解耦关系不变（独立能力）
+- 累积两期 UI 改造已可独立命名
+
+**未做的事**（按 CLAUDE.md「不超出任务」）
+
+- 没加「昨天/上周/本月至今」快捷按钮（用户未要求批量扩）
+- 没改 `_renderRevenueTrend` 中漏加 `comboAmount` / `retailAmount` 的 bug（独立 issue）
+- 没把"自定义日期"模式扩展到「收入结构」「支出分类」等其他总览卡片（用户只问收入总览）
+- `feedback_verify_cloud_state_before_redeploy` memory 已在 7-19 上午沉淀，无需再补
+
+**涉及文件**
+
+| 文件 | 改动 |
+|---|---|
+| `app/js/charts.js` | 6 处（状态 + 闭包 + HTML + 绑定）共 +28/-3 |
+| `app/css/style.css` | +13 行（.rev-overview-date-input + .active + indicator）|
+| `app/js/app.js` | 2 处（APP_VERSION + LAST_UPDATE）|
+| `app/index.html` | 3 处（?v= token 升级）|
+| `VERSION` | 1 字节（1.3.2）|
+| `00_工作台/工作日志/202607-工作日志.md` | +24 行（v1.3.2 部署段 + git 节）|
+| **未改**：`server.js` / `nginx.conf` / `docker-compose.yml` / DB schema / `ui.js` / 其他 6 个图表 |
