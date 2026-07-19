@@ -1056,4 +1056,70 @@ toggle.addEventListener('click', (e) => {
 
 - 模式「独立周期卡片 + 与全局 filter 解耦」可复用于其他总览卡片（如未来加支出总览），但本次仅改造收入总览
 - 沿用 `.chart-toggle` 复用原则：未来新加 toggle 卡片直接复制 `<div class="chart-title-row"><div class="chart-title">...</div><div class="chart-toggle">...</div></div>` 模板即可
-- 未触发版本号（纯前端单文件功能改造，下次累积改动再统一升号）
+
+### 部署
+
+- **scp 4 文件**（每个 sleep 5-15s 防 SSH 抖动）：
+  1. `app/js/charts.js` → `/opt/aiwei/app/js/charts.js`（核心改动 29921 bytes）
+  2. `app/js/app.js` → `/opt/aiwei/app/js/app.js`（APP_VERSION + LAST_UPDATE）
+  3. `app/index.html` → `/opt/aiwei/app/index.html`（`?v=` token 升 `rev-overview-20260718`）
+  4. `VERSION` → `/opt/aiwei/VERSION`（1.3.0 → 1.3.1）
+- **冒烟全过**：4 文件 mtime 全部 17:26-17:27 当前 + `diff -q` 字节级一致 + `grep _revOverviewPeriod` 5 处命中 + `grep APP_VERSION='1.3.1'` 命中
+- **版本号升号**：v1.3.0 → **v1.3.1**（修正上方「未触发版本号」表述 —— 本次功能改造独立可发版，理由：① 新增用户可感知的交互（本日/本月/本年切换）② 与顶部 select 解耦属独立能力 ③ 累积 3 期 UI 改造已可独立命名）
+- **未改**：API / DB / server.js / Docker 镜像
+
+### git
+
+- `c637e30 feat: v1.3.1 — 数据报表「收入总览」卡片默认当日 + 日/月/年切换`（6 文件 +163/-41，HEREDOC 传 message）
+- ⚠️ **`git push origin main` 未成功**（7-18 + 7-19 两次会话均失败）：`Failed to connect to github.com port 443` 网络层持续 21s 超时阻断；同期 `gh api` 仍可达，SSH 验证 `Permission denied (publickey)`（GitHub 无公钥）
+- **唯一可行路径**：用户在 https://github.com/settings/keys 加 `cat ~/.ssh/id_rsa.pub` 公钥 → `git remote set-url origin git@github.com:goorock2024AI/aiwei-gallery.git` → `git push origin main`
+- 详细异常分析与三步上链命令见 `202607-工作日志.md` 7-19 「推送异常记录」章节（含 HTTPS/SSH/API 三条路线全部失败的实证记录）
+- **commit 已落地本地仓库**：`git log --oneline -1` 可查看；网络恢复后 `git push origin main` 一条命令即可同步
+
+---
+
+## 2026-07-19 云端 v1.3.1 二次核实（第十九期延续）
+
+**触发**：用户说"放弃恢复，新建部署任务，部署到腾讯云"。本会话开始按新部署规划（4 文件 scp + 清理 ui.js.bak + 冒烟全套），第一步用 ssh 探针查云端实际状态，**意外发现 v1.3.1 早已部署完毕**——7-18 那次会话虽然 `git push origin` 失败，但 4 文件 scp 全成功。
+
+**6 项独立实测**（每项命令 + 期望 + 实际）：
+
+| 项 | 命令 | 期望 | 实际 |
+|---|---|---|---|
+| 1. charts.js 内容 | `curl /js/charts.js?v=rev-overview-20260718 \| grep -c _revOverviewPeriod` | ≥ 5 | ✅ **9** 处命中（`_revOverviewPeriod` + `_renderRevenueOverview` + `_bindRevOverviewToggle` 各 3 处）|
+| 2. charts.js 字节数 | `curl /js/charts.js -w "%{size_download}"` | 29921 | ✅ 29921B |
+| 3. app.js APP_VERSION | `curl /js/app.js \| grep APP_VERSION` | `'1.3.1'` | ✅ `'1.3.1'` |
+| 4. app.js LAST_UPDATE | `curl /js/app.js \| grep LAST_UPDATE` | `'2026-07-18 20:30'` | ✅ `'2026-07-18 20:30'` |
+| 5. index.html cache-bust | `curl / \| grep -E 'js/(charts\|app)\.js\?v='` | `rev-overview-20260718` | ✅ 两处命中 |
+| 6. VERSION 文件 | `ssh root@122.51.56.50 cat /opt/aiwei/VERSION` | `1.3.1` 5 字节 | ✅ `1.3.1` 5 字节 root:root 7-18 17:27 |
+| 7. 三容器 | `ssh docker compose -f /opt/aiwei/docker-compose.yml ps` | 全 Up | ✅ api 7d / db 2w / nginx 7d |
+| 8. 无老备份 | `ssh ls /opt/aiwei/app/js/ \| grep bak` | 空 | ✅ |
+
+> **重要演示**：`curl -sS http://122.51.56.50/VERSION` 返回的是 `<!DOCTYPE html>` 完整 HTML（100+ 行），**不是** Nginx 渲染了 VERSION 文件。Nginx 的 `try_files` 把不存在的 `/VERSION` fallback 到 `/index.html`。验证静态 / 隐藏文件必须 ssh cat，**绝不能信 curl**。这一点 CLAUDE.md「不要做的事」已列入，但本会话初次确实差点踩坑。
+
+### 结论
+
+**云端 v1.3.1 部署完整**，无需任何文件再 scp。直接向用户报告「已就绪」并附上 8 项验证表 + 数据。
+
+**未做的事**（按 CLAUDE.md「不超出任务」原则）：
+- 没有 scp 任何文件（云端已就绪，scp 是浪费带宽 + 触发 SSH MaxStartups 抖动）
+- 没有 `docker compose build api` / `restart nginx`（这次只读不改）
+- 没有 commit / push（仅工作区 modify 2 份日志 + 1 份 new memory file）
+
+### 沉淀
+
+- **新增 memory**：`feedback_verify_cloud_state_before_redeploy`（在 `C:\Users\goorock\.claude\projects\D-------00----------\memory\` 下）
+  - 核心规则：收到"部署/同步到云端"类指令前，先 ssh + curl 验证云端状态再决定是否要做 scp；已就绪就别机械重做
+  - 边界：VERSION 类隐藏文件必须 `ssh cat`，不能 `curl`（fallback 陷阱）
+- **业务日志同时追加 7-19 段**：见 `00_工作台/工作日志/202607-工作日志.md` 13-49 行
+- **与第十九期正文的差异**：本次补的是"git 失败后的二次核实"，并非新的一期功能；不为这次核实升 v1.3.1.1，仍按 v1.3.1 累计
+
+### 涉及文件
+
+| 文件 | 改动 |
+|---|---|
+| `POS收银台开发日志.md`（本文件）| +44 行（本次"云端 v1.3.1 二次核实"小节）|
+| `00_工作台/工作日志/202607-工作日志.md` | +38 行（7-19 段：推送二次失败 + 部署二次核实 + memory 沉淀）|
+| 新 memory `feedback_verify_cloud_state_before_redeploy.md` | 新建 30+ 行（AI 行为规范）|
+| `MEMORY.md` 索引 | +1 条目（指向新 memory）|
+| **未改**：任何 `app/*` / `server.js` / `nginx.conf` / `VERSION` / Docker —— 本次 0 行运行时代码改动 |
