@@ -3,7 +3,8 @@ var Charts = {
   _charts: {},
   _revStructPeriod: 'month', // 收入结构卡片期间维度：'month' 月度 / 'year' 年度
   _expCatPeriod: 'month',    // 支出分类卡片期间维度：'month' 月度 / 'year' 年度
-  _revOverviewPeriod: 'day', // 收入总览卡片期间维度：'day' 本日 / 'month' 本月 / 'year' 本年（默认当日）
+  _revOverviewPeriod: 'day', // 收入总览卡片期间维度：'day' 本日 / 'month' 本月 / 'year' 本年 / 'custom' 选定日（默认当日）
+  _revOverviewCustomDate: null, // 选定日期模式下的目标日期（YYYY-MM-DD），首次进入时取 todayStr()
 
   _destroy(id) {
     if (this._charts[id]) { this._charts[id].destroy(); delete this._charts[id]; }
@@ -87,6 +88,7 @@ var Charts = {
     const today = todayStr();
     const ym = today.slice(0, 7);
     const year = today.slice(0, 4);
+    const customDate = this._revOverviewCustomDate || today;
 
     // 一次拉全年，内存按日期前缀过滤（与 _renderGallerySalesStats 同款模式）
     const revenues = await Store.getByYear('revenue', year);
@@ -95,17 +97,20 @@ var Charts = {
 
     const periodLabel = period === 'day' ? `本日（${today}）`
                       : period === 'month' ? `本月（${ym}）`
-                      : `本年（${year}）`;
+                      : period === 'year' ? `本年（${year}）`
+                      : `选定日（${customDate}）`;
     const periodTitle = period === 'day' ? today
                       : period === 'month' ? year + '年' + parseInt(ym.slice(5)) + '月'
-                      : year + '年全年';
+                      : period === 'year' ? year + '年全年'
+                      : customDate;
 
     // 按 period 过滤
     const inPeriod = (d) => {
       const ds = String(d || '').slice(0, 10);
       if (period === 'day') return ds === today;
       if (period === 'month') return ds.startsWith(ym);
-      return ds.startsWith(year);
+      if (period === 'year') return ds.startsWith(year);
+      return ds === customDate;
     };
 
     const monthRev = revenues.filter(r => inPeriod(r.date));
@@ -149,6 +154,7 @@ var Charts = {
             <button type="button" data-period="day" class="${period === 'day' ? 'active' : ''}">本日</button>
             <button type="button" data-period="month" class="${period === 'month' ? 'active' : ''}">本月</button>
             <button type="button" data-period="year" class="${period === 'year' ? 'active' : ''}">本年</button>
+            <input type="date" id="rev-overview-date" class="rev-overview-date-input ${period === 'custom' ? 'active' : ''}" value="${customDate}" max="${today}" title="选择任意历史日期查看当日收入总览" />
           </div>
         </div>
         <div class="stats-grid" style="margin-top:12px">
@@ -178,10 +184,22 @@ var Charts = {
       if (!btn) return;
       const p = btn.dataset.period;
       if (p === this._revOverviewPeriod) return;
-      toggle.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      toggle.querySelectorAll('button[data-period], input.rev-overview-date-input').forEach(el => el.classList.remove('active'));
       btn.classList.add('active');
       this._renderRevenueOverview(p);
     });
+    const dateInput = document.getElementById('rev-overview-date');
+    if (dateInput && !dateInput._bound) {
+      dateInput._bound = true;
+      dateInput.addEventListener('change', (e) => {
+        const v = e.target.value;
+        if (!v) return;
+        this._revOverviewCustomDate = v;
+        toggle.querySelectorAll('button[data-period]').forEach(b => b.classList.remove('active'));
+        dateInput.classList.add('active');
+        this._renderRevenueOverview('custom');
+      });
+    }
   },
 
   async renderDashboardTrend() {

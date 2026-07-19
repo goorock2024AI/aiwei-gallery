@@ -442,6 +442,23 @@ table.data-table .tag {
   background: var(--green-700);
   color: var(--white);
 }
+.rev-overview-date-input {
+  border: none;
+  border-left: 1px solid var(--green-300);
+  background: var(--white);
+  color: var(--green-700);
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+  line-height: 1.6;
+  font-family: inherit;
+}
+.rev-overview-date-input.active {
+  background: var(--green-700);
+  color: var(--white);
+}
+.rev-overview-date-input::-webkit-calendar-picker-indicator { opacity: 0.6; cursor: pointer; }
+.rev-overview-date-input.active::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.9; }
 .chart-box canvas { max-height: 300px; }
 
 /* 工坊动态行 */
