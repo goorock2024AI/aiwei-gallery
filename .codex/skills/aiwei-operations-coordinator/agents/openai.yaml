@@ -1,0 +1,7 @@
+interface:
+  display_name: "助理"
+  short_description: "美术馆运营总协调，统筹项目、任务、复盘与团队能力建设。"
+  default_prompt: "Use $aiwei-operations-coordinator, 助理，to review current priorities and create an actionable operating brief."
+
+policy:
+  allow_implicit_invocation: true

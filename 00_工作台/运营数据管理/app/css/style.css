@@ -307,7 +307,7 @@ body {
 }
 
 /* 表格 */
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 table.data-table {
   width: 100%;
   border-collapse: collapse;
@@ -812,13 +812,6 @@ input.invalid:focus {
   display: flex; align-items: center; justify-content: center;
   z-index: 1000;
 }
-.modal-card {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.2);
-  width: 480px; max-width: calc(100% - 32px);
-  overflow: hidden;
-}
 .modal-header {
   padding: 14px 18px;
   font-size: 15px; font-weight: 600;
@@ -867,9 +860,7 @@ input.invalid:focus {
 }
 
 /* 修正旧的 modal-mask 与 quick-collect-modal 冲突 */
-.modal-card.quick-collect-modal {
-  width: 480px;
-}
+.modal-card.quick-collect-modal { padding: 0; }
 
 /* 收银台当日统计 */
 .pos-today-stats {
@@ -1340,10 +1331,12 @@ input.invalid:focus {
 .modal-overlay {
   position: fixed; inset: 0; z-index: 3000;
   display: flex; align-items: center; justify-content: center;
+  padding: 16px;
   background: rgba(0,0,0,0.4);
 }
+.modal-mask { z-index: 3000; padding: 16px; }
 .modal-card {
-  width: 420px;
+  width: min(var(--modal-width, 480px), calc(100vw - 32px));
   max-height: 85vh;
   overflow-y: auto;
   background: var(--white);
@@ -1351,8 +1344,13 @@ input.invalid:focus {
   box-shadow: var(--shadow-lg);
   padding: 28px 32px;
 }
+.modal-card-sm { --modal-width: 420px; }
+.modal-card-md { --modal-width: 480px; }
+.modal-card-form { --modal-width: 520px; }
+.modal-card-wide { --modal-width: 720px; }
 /* 表单类弹窗：内容多时卡片本身太窄，给个最小宽度 */
-.modal-card:has(.form-grid) { width: 520px; }
+.modal-card:has(.form-grid) { --modal-width: 520px; }
+.modal-table-scroll { max-height: 50vh; overflow-y: auto; }
 /* 滚动条美化（仅 webkit） */
 .modal-card::-webkit-scrollbar { width: 8px; }
 .modal-card::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
@@ -1451,4 +1449,139 @@ table.data-table tr[data-artwork-id]:hover { background: rgba(201, 162, 39, 0.04
 .stat-period-toggle:hover:not(.active) {
   border-color: var(--gold);
   color: var(--gray-800);
+}
+
+/* ===== 响应式 — 移动端友好（2026-07-21） ===== */
+
+/* 汉堡按钮（移动端显示） */
+.sidebar-toggle {
+  display: none;
+  position: fixed;
+  top: 12px; left: 12px;
+  z-index: 101;
+  width: 44px; height: 44px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--green-700);
+  color: var(--white);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.sidebar-toggle:active { background: var(--green-900); }
+
+/* 抽屉遮罩 */
+.sidebar-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 99;
+}
+.sidebar-overlay.show { display: block; }
+
+/* 表格容器移动端触摸滚动提示 */
+@media (max-width: 768px) {
+  .table-wrap { position: relative; }
+  .table-wrap::after {
+    content: '';
+    position: absolute; top: 0; right: 0; bottom: 0;
+    width: 24px;
+    background: linear-gradient(to right, transparent, rgba(0,0,0,0.04));
+    pointer-events: none;
+  }
+}
+
+/* ===== 平板（769–1024px）：侧边栏缩到 64px 图标+文字 ===== */
+@media (max-width: 1024px) and (min-width: 769px) {
+  #sidebar { width: 64px; }
+  .sidebar-header { padding: 16px 4px 10px; }
+  .sidebar-header h1 { font-size: 0; }
+  .sidebar-header h1::before { content: "艾"; font-size: 16px; }
+  .sidebar-subtitle { display: none; }
+  #sidebar-nav .tab-btn {
+    padding: 10px 4px;
+    font-size: 0;
+    text-align: center;
+    border-left: none;
+    line-height: 1.3;
+  }
+  #sidebar-nav .tab-btn::before { font-size: 18px; }
+  #sidebar-version, #sidebar-updated, .sidebar-user { display: none; }
+  #main-area { margin-left: 64px; }
+  #main-content { padding: 16px; }
+  .stats-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ===== 移动端（≤768px）：抽屉式侧边栏 + 单列布局 ===== */
+@media (max-width: 768px) {
+  .sidebar-toggle { display: flex; align-items: center; justify-content: center; }
+
+  #sidebar {
+    width: 260px;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 200;
+  }
+  #sidebar.open { transform: translateX(0); }
+
+  #main-area { margin-left: 0; }
+  #main-content { padding: 56px 12px 12px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .chart-grid { grid-template-columns: 1fr; gap: 12px; }
+  .chart-box { padding: 12px; }
+  .chart-title-row { flex-wrap: wrap; gap: 6px; }
+  .chart-box canvas { max-height: 240px; }
+  .filter-bar { gap: 8px; }
+  .filter-bar .form-group { min-width: 0; flex: 1 1 100%; }
+
+  /* touch 目标最小 44px */
+  #sidebar-nav .tab-btn { padding: 14px 16px; font-size: 14px; }
+  .btn, button { min-height: 40px; }
+  input, select, textarea { font-size: 16px; } /* 16px 防止 iOS 自动放大 */
+
+  /* 表格行高加大，方便触屏点击 */
+  table.data-table th, table.data-table td { padding: 12px 10px; }
+
+  /* modal 全屏 */
+  .modal-card,
+  .login-card {
+    width: 100%;
+    max-width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-body { padding: 14px; overflow-y: auto; flex: 1; }
+  .modal-actions { padding: 12px 14px; }
+  /* login-card 移动端调整 */
+  .login-card { height: auto; max-height: 90vh; flex-direction: column; padding: 24px 20px; }
+
+  /* POS 按钮加大 */
+  .pos-ticket-btn { min-width: 100px; padding: 14px 12px; }
+  .pos-payment-btn { min-width: 80px; padding: 12px 10px; font-size: 14px; }
+  .pos-fixed-bottom { margin: 0 -12px; padding: 12px; }
+
+  /* 甘特图紧凑 */
+  .gantt-grid { grid-template-columns: 90px repeat(var(--days), 14px) !important; }
+  .gantt-bar { font-size: 0; padding: 0; }
+  .gantt-bar::after { content: ''; display: block; height: 8px; }
+
+  /* 空间统计卡 */
+  .rent-stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* 隐藏冗余文字/版本信息 */
+  .sidebar-version, .sidebar-updated, .sidebar-user { display: none; }
+
+  /* 二级标签 */
+  .sub-tabs .sub-tab-btn { padding: 8px 10px; font-size: 13px; }
+}
+
+/* ===== 超窄屏（≤380px）：单列紧凑 ===== */
+@media (max-width: 380px) {
+  .stats-grid { grid-template-columns: 1fr; }
+  #main-content { padding: 56px 8px 8px; }
 }

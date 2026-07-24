@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="艾维美术馆会员制艺术阅读会方案">
+  <title>会员制艺术阅读会方案 | 艾维美术馆</title>
+  <style>
+    :root {
+      --pine: #123b3a;
+      --ink: #1c2422;
+      --muted: #62716c;
+      --red: #e60012;
+      --blue: #2e6682;
+      --mist: #edf3ef;
+      --line: #d9e1dc;
+      --paper: #fbfcfa;
+      --white: #ffffff;
+      --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif;
+      --sans: "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
+      --content: min(1120px, calc(100% - 48px));
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.7;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; text-decoration-color: color-mix(in srgb, var(--red) 55%, transparent); text-underline-offset: 3px; }
+    a:hover { color: var(--red); }
+    button { font: inherit; }
+
+    .masthead {
+      min-height: 92px;
+      color: var(--white);
+      background: var(--pine);
+      display: flex;
+      align-items: center;
+    }
+    .masthead__inner {
+      width: var(--content);
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand-logo {
+      width: 230px;
+      height: auto;
+      display: block;
+      object-fit: contain;
+      object-position: left center;
+    }
+    .doc-meta {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: #d5e2dd;
+      font-size: 12px;
+      letter-spacing: .08em;
+      white-space: nowrap;
+    }
+    .doc-meta__dot { width: 5px; height: 5px; border-radius: 50%; background: var(--red); }
+
+    .hero { border-bottom: 1px solid var(--line); background: var(--white); }
+    .hero__inner {
+      width: var(--content);
+      min-height: 420px;
+      margin: 0 auto;
+      padding: 78px 0 64px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(220px, .45fr);
+      gap: 56px;
+      align-items: end;
+    }
+    .eyebrow {
+      margin: 0 0 20px;
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: 0; }
+    h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(43px, 6.4vw, 80px);
+      line-height: 1.1;
+      text-wrap: balance;
+    }
+    .hero__lead {
+      max-width: 630px;
+      margin: 30px 0 0;
+      color: #3d4d48;
+      font-size: 19px;
+      line-height: 1.85;
+      text-wrap: pretty;
+    }
+    .hero__side {
+      align-self: stretch;
+      border-left: 1px solid #bcd0c8;
+      padding: 8px 0 8px 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 20px;
+    }
+    .fact-label { display: block; color: var(--muted); font-size: 12px; letter-spacing: .09em; }
+    .fact-value { display: block; margin-top: 3px; color: var(--pine); font-size: 16px; font-weight: 700; }
+
+    .section-nav {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--paper) 94%, transparent);
+      backdrop-filter: blur(12px);
+    }
+    .section-nav__inner {
+      width: var(--content);
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .section-nav__inner::-webkit-scrollbar { display: none; }
+    .section-nav a {
+      flex: 0 0 auto;
+      padding: 14px 0 12px;
+      color: #52625d;
+      font-size: 13px;
+      text-decoration: none;
+      border-bottom: 2px solid transparent;
+    }
+    .section-nav a:hover, .section-nav a.is-active { color: var(--pine); border-color: var(--red); }
+
+    main { width: var(--content); margin: 0 auto; }
+    section { padding: 86px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 52px; }
+    .section-kicker { color: var(--red); font-size: 12px; font-weight: 700; letter-spacing: .12em; }
+    h2 { margin: 12px 0 24px; color: var(--pine); font-size: clamp(29px, 3.8vw, 46px); line-height: 1.18; }
+    h3 { margin: 42px 0 14px; color: var(--pine); font-size: 25px; line-height: 1.3; }
+    p { max-width: 800px; margin: 0 0 17px; text-wrap: pretty; }
+    .intro-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr); gap: 64px; align-items: start; }
+    .status-block { border-top: 3px solid var(--red); padding-top: 18px; }
+    .status-block strong { display: block; color: var(--pine); font-family: var(--serif); font-size: 30px; line-height: 1.2; }
+    .status-block p { margin-top: 10px; color: var(--muted); font-size: 14px; }
+    .principles { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-left: 1px solid var(--line); margin-top: 34px; }
+    .principle { min-height: 155px; padding: 24px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--white); }
+    .principle__index { display: block; color: var(--red); font-family: var(--serif); font-size: 21px; }
+    .principle h3 { margin: 9px 0 5px; font-family: var(--sans); font-size: 16px; }
+    .principle p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+
+    .table-wrap { overflow-x: auto; margin-top: 24px; border-top: 2px solid var(--pine); }
+    table { width: 100%; min-width: 680px; border-collapse: collapse; background: var(--white); }
+    th, td { padding: 16px 17px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: var(--pine); background: #f3f7f4; font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+    td { font-size: 14px; line-height: 1.62; }
+    td:first-child { font-weight: 700; color: var(--pine); }
+    .note { margin-top: 18px; padding-left: 18px; border-left: 3px solid var(--red); color: #4c5b56; font-size: 14px; }
+
+    .product-flow { display: grid; grid-template-columns: 1fr 64px 1fr; gap: 0; align-items: stretch; margin-top: 32px; }
+    .flow-stage { padding: 30px; background: var(--mist); }
+    .flow-stage--annual { background: var(--pine); color: var(--white); }
+    .flow-stage h3 { margin: 0 0 12px; font-size: 28px; }
+    .flow-stage--annual h3 { color: var(--white); }
+    .flow-stage p { margin: 0; font-size: 15px; }
+    .flow-stage--annual p { color: #d7e4df; }
+    .flow-arrow { position: relative; background: var(--paper); }
+    .flow-arrow::before { content: ""; position: absolute; left: 14px; right: 14px; top: 50%; height: 1px; background: var(--red); }
+    .flow-arrow::after { content: ""; position: absolute; right: 14px; top: calc(50% - 4px); width: 8px; height: 8px; border-top: 1px solid var(--red); border-right: 1px solid var(--red); transform: rotate(45deg); }
+
+    .rights-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(310px, .66fr); gap: 48px; align-items: start; }
+    .right-list { list-style: none; padding: 0; margin: 0; border-top: 2px solid var(--pine); }
+    .right-list li { display: grid; grid-template-columns: 56px 1fr; gap: 16px; padding: 19px 0; border-bottom: 1px solid var(--line); }
+    .right-list strong { display: block; color: var(--pine); font-size: 17px; }
+    .right-list span { display: block; margin-top: 4px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .right-number { color: var(--red); font-family: var(--serif); font-size: 24px; line-height: 1.1; }
+    .side-note { padding: 27px; color: var(--white); background: var(--pine); }
+    .side-note h3 { margin: 0 0 12px; color: var(--white); font-size: 25px; }
+    .side-note p { margin: 0; color: #d6e4df; font-size: 15px; }
+    .side-note ul { margin: 18px 0 0; padding-left: 18px; color: #e8f0ed; font-size: 14px; }
+    .side-note li + li { margin-top: 8px; }
+
+    .split-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 2px solid var(--pine); }
+    .split-grid > div { padding: 28px; background: var(--white); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .split-grid > div:last-child { border-right: 0; }
+    .split-grid h3 { margin: 0 0 12px; font-family: var(--sans); font-size: 19px; }
+    .split-grid ul { margin: 0; padding-left: 18px; font-size: 14px; }
+    .split-grid li + li { margin-top: 8px; }
+
+    .schedule { margin-top: 26px; border-top: 2px solid var(--pine); }
+    .schedule-row { display: grid; grid-template-columns: 130px 1fr 1.35fr; gap: 24px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+    .schedule-row b { color: var(--red); font-size: 13px; letter-spacing: .07em; }
+    .schedule-row strong { color: var(--pine); }
+    .schedule-row span { color: var(--muted); font-size: 14px; }
+
+    .price-grid { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 28px; border-top: 2px solid var(--pine); border-left: 1px solid var(--line); }
+    .price { min-height: 254px; padding: 23px 20px; background: var(--white); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .price--emphasis { background: var(--pine); color: var(--white); }
+    .price small { display: block; min-height: 39px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .price--emphasis small { color: #c8dcd5; }
+    .price strong { display: block; margin: 18px 0 8px; color: var(--pine); font-family: var(--serif); font-size: 34px; line-height: 1; }
+    .price--emphasis strong { color: var(--white); }
+    .price p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .price--emphasis p { color: #d7e4df; }
+
+    .checklist { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); margin-top: 28px; border-top: 2px solid var(--pine); }
+    .check { padding: 22px 24px; background: var(--white); }
+    .check h3 { margin: 0 0 7px; font-family: var(--sans); font-size: 16px; }
+    .check p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+
+    .decision { display: grid; grid-template-columns: 1.2fr .8fr; gap: 54px; padding: 55px 0 0; }
+    .decision h2 { margin-top: 0; }
+    .decision-list { margin: 0; padding: 0; list-style: none; border-top: 2px solid var(--pine); }
+    .decision-list li { padding: 14px 0 14px 32px; position: relative; border-bottom: 1px solid var(--line); font-size: 15px; }
+    .decision-list li::before { content: "0" counter(item); counter-increment: item; position: absolute; left: 0; color: var(--red); font-family: var(--serif); font-size: 18px; }
+    .decision-list { counter-reset: item; }
+    .decision-aside { border-top: 3px solid var(--red); padding-top: 18px; }
+    .decision-aside strong { display: block; color: var(--pine); font-family: var(--serif); font-size: 27px; line-height: 1.28; }
+    .decision-aside p { margin-top: 12px; color: var(--muted); font-size: 14px; }
+
+    footer { color: #d7e4df; background: var(--pine); }
+    .footer__inner { width: var(--content); margin: 0 auto; padding: 28px 0; display: flex; justify-content: space-between; gap: 24px; font-size: 12px; }
+    .footer__inner span:last-child { text-align: right; }
+
+    @media (max-width: 860px) {
+      :root { --content: min(100% - 34px, 1120px); }
+      .masthead { min-height: 74px; }
+      .brand-logo { width: 178px; }
+      .doc-meta { display: none; }
+      .hero { background: var(--white); }
+      .hero__inner { min-height: auto; padding: 58px 0 48px; grid-template-columns: 1fr; gap: 34px; }
+      .hero__side { border-left: 0; border-top: 1px solid #bcd0c8; padding: 20px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); }
+      .intro-grid, .rights-layout, .decision { grid-template-columns: 1fr; gap: 34px; }
+      .principles { grid-template-columns: 1fr; }
+      .product-flow { grid-template-columns: 1fr; }
+      .flow-arrow { min-height: 48px; }
+      .flow-arrow::before { left: 50%; top: 8px; bottom: 8px; width: 1px; height: auto; }
+      .flow-arrow::after { left: calc(50% - 4px); right: auto; top: auto; bottom: 9px; }
+      .split-grid { grid-template-columns: 1fr; }
+      .split-grid > div { border-right: 0; }
+      .schedule-row { grid-template-columns: 74px 1fr; gap: 8px 16px; }
+      .schedule-row span { grid-column: 2; }
+      .price-grid { grid-template-columns: 1fr 1fr; }
+      .checklist { grid-template-columns: 1fr; }
+      section { padding: 62px 0; }
+    }
+
+    @media (max-width: 520px) {
+      body { font-size: 15px; }
+      .hero__lead { font-size: 17px; }
+      .hero__side { grid-template-columns: 1fr; gap: 12px; }
+      .price-grid { grid-template-columns: 1fr; }
+      .section-nav__inner { gap: 17px; }
+      .section-nav a { font-size: 12px; }
+      .footer__inner { flex-direction: column; }
+      .footer__inner span:last-child { text-align: left; }
+    }
+
+    @media print {
+      .section-nav { position: static; }
+      .hero { background: var(--white); }
+      .hero__inner { min-height: 0; padding: 36px 0; }
+      section { break-inside: avoid; padding: 42px 0; }
+      .masthead, footer { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead__inner">
+      <img class="brand-logo" src="assets/aiwei-brand/logo.png" alt="艾维美术馆">
+      <div class="doc-meta"><span>项目方案 / AR-01</span><i class="doc-meta__dot"></i><span>2026.07.23</span></div>
+    </div>
+  </header>
+
+  <div class="hero">
+    <div class="hero__inner">
+      <div>
+        <p class="eyebrow">Aiwei Art Museum / Membership Program</p>
+        <h1>会员制艺术<br>阅读会方案</h1>
+        <p class="hero__lead">一个由艺术类书籍、稳定主理人与美术馆空间共同构成的长期阅读社群。让阅读从一次活动，变成持续进入艾维的方式。</p>
+      </div>
+      <aside class="hero__side" aria-label="方案摘要">
+        <div><span class="fact-label">首期结构</span><span class="fact-value">3 个月 / 12 场</span></div>
+        <div><span class="fact-label">主要客群</span><span class="fact-value">昆明文化艺术爱好者</span></div>
+        <div><span class="fact-label">当前状态</span><span class="fact-value">待立项确认</span></div>
+      </aside>
+    </div>
+  </div>
+
+  <nav class="section-nav" aria-label="方案目录">
+    <div class="section-nav__inner">
+      <a href="#vision">愿景</a>
+      <a href="#product">产品</a>
+      <a href="#membership">会员权益</a>
+      <a href="#partner">主理人合作</a>
+      <a href="#content">内容与流程</a>
+      <a href="#pricing">价格</a>
+      <a href="#launch">上线准备</a>
+    </div>
+  </nav>
+
+  <main>
+    <section id="vision">
+      <div class="intro-grid">
+        <div>
+          <span class="section-kicker">01 / 项目愿景</span>
+          <h2>让阅读空间成为<br>持续发生的文化关系</h2>
+          <p>会员制艺术阅读会以艺术类书籍和主题讨论为核心，连接艺术家、展览、影像、策展、云南在地文化与当代生活。它不定位为普通读书会，也不以售卖图书为主要目标。</p>
+          <p>项目的价值在于建立本地观众关系、激活美术馆阅读空间，并发展可复盘的非票务收入产品。</p>
+        </div>
+        <aside class="status-block">
+          <span class="section-kicker">当前决策</span>
+          <strong>先做创始试读季，<br>再决定全年。</strong>
+          <p>三个月的试运行用于验证主理人匹配度、到场率、社群氛围、续费意愿与现场服务流程。</p>
+        </aside>
+      </div>
+      <div class="principles">
+        <article class="principle"><span class="principle__index">01</span><h3>艺术是主轴</h3><p>从艺术阅读出发，而非泛知识或单向讲座。</p></article>
+        <article class="principle"><span class="principle__index">02</span><h3>成员是共同体</h3><p>会员购买的是持续参与和稳定关系，而非活动次数。</p></article>
+        <article class="principle"><span class="principle__index">03</span><h3>美术馆是现场</h3><p>展览、导览、空间与观众体验构成不可替代的差异。</p></article>
+      </div>
+    </section>
+
+    <section id="product">
+      <span class="section-kicker">02 / 产品结构</span>
+      <h2>先把一年拆成一个<br>可信的第一季</h2>
+      <div class="product-flow">
+        <article class="flow-stage">
+          <h3>创始试读季</h3>
+          <p>3 个月、连续 12 个周六。招募前公布全部主题与书单，限 20-30 位创始会员，并保留少量访客席。</p>
+        </article>
+        <div class="flow-arrow" aria-hidden="true"></div>
+        <article class="flow-stage flow-stage--annual">
+          <h3>年度会员制</h3>
+          <p>以四季制规划全年 48 场常规活动。为假期、布撤展和特别活动保留弹性，不承诺 52 个周六全部举行。</p>
+        </article>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>项目</th><th>首期标准</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>举办时间</td><td>每周六下午</td><td>具体时段根据昆明本地会员出行、空间和饮品服务能力确认。</td></tr>
+            <tr><td>内容节奏</td><td>12 场主题与书单</td><td>每月形成一个递进的小主题，避免 12 本书松散排列。</td></tr>
+            <tr><td>单场体验</td><td>约 2 小时</td><td>主题导入、共读讨论、延伸观看与自由交流。</td></tr>
+            <tr><td>主要客群</td><td>本地会员 + 少量访客</td><td>以昆明文化艺术爱好者为主，同时接受游客临时报名参加。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="membership">
+      <span class="section-kicker">03 / 会员权益</span>
+      <h2>不是一张优惠卡，<br>而是进入艾维的资格</h2>
+      <div class="rights-layout">
+        <ol class="right-list">
+          <li><b class="right-number">01</b><div><strong>创始会员礼盒</strong><span>仅面向首批创始会员；对外标示价值 198 元前，确认礼盒内容和实际零售价。</span></div></li>
+          <li><b class="right-number">02</b><div><strong>美术馆全年观展</strong><span>建议覆盖馆方自主常规展览；外部租赁展、特别收费展提供会员价。</span></div></li>
+          <li><b class="right-number">03</b><div><strong>24 杯手冲咖啡</strong><span>一年内限会员本人使用，每次限一杯；明确基础饮品范围，升级饮品补差。</span></div></li>
+          <li><b class="right-number">04</b><div><strong>24 次图书借阅</strong><span>需在上线前明确每次可借册数、借期、逾期、遗失赔偿和图书目录。</span></div></li>
+          <li><b class="right-number">05</b><div><strong>全年线下读书会</strong><span>对应全年规划的常规阅读会，实行预约制；高成本特别活动另行说明。</span></div></li>
+        </ol>
+        <aside class="side-note">
+          <h3>建议补充的关系型权益</h3>
+          <p>不增加过多履约成本，但让会员真正感到被优先对待。</p>
+          <ul>
+            <li>提前 7 天预约与会员保留席位</li>
+            <li>2 张仅限新人的访客体验券</li>
+            <li>年度 2 次会员专场导览或策展对谈</li>
+            <li>特别活动的优先报名与会员专属价</li>
+            <li>季度主题书单、延伸观看清单和讨论摘要</li>
+          </ul>
+        </aside>
+      </div>
+      <p class="note">不建议现阶段承诺：无限饮品、免费赠书、所有特别活动免费，或尚未建立合作机制的外部商家折扣。</p>
+    </section>
+
+    <section id="partner">
+      <span class="section-kicker">04 / 主理人合作</span>
+      <h2>主理人负责内容，<br>美术馆负责会员关系</h2>
+      <p>主理人是内容与社群动员的合作方，不是场地租赁客户。会员数据、报名记录、活动素材、品牌使用权和对外宣传口径由美术馆统一管理。</p>
+      <div class="split-grid">
+        <div><h3>美术馆负责</h3><ul><li>主题方向最终确认、品牌与场地</li><li>招募、报名、收款与会员服务</li><li>饮品、借阅、现场体验与传播</li><li>数据记录、活动复盘与年度转化</li></ul></div>
+        <div><h3>主理人负责</h3><ul><li>12 场主题和书单设计</li><li>每场讨论准备与现场带领</li><li>个人社群的内容动员</li><li>为美术馆提供内容建议与反馈</li></ul></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>结算原则</th><th>建议口径</th></tr></thead>
+          <tbody>
+            <tr><td>主理人收入</td><td>基础服务费 + 读书会会费净实收 × 约定分成比例。</td></tr>
+            <tr><td>净实收定义</td><td>协议中明确退款、支付手续费、优惠、赠送名额和单场访客票的处理规则。</td></tr>
+            <tr><td>不参与分成</td><td>饮品、文创、书籍、艺术品及其他衍生消费。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="content">
+      <span class="section-kicker">05 / 内容与现场</span>
+      <h2>一季不是 12 本书，<br>而是一条阅读线索</h2>
+      <p>第一季必须在招募前确认全部主题、核心书目、延伸材料和主理人准备要求。至少一部分主题应与当期展览、馆藏、艺术家或云南在地文化发生连接。</p>
+      <div class="schedule">
+        <div class="schedule-row"><b>20 分钟</b><strong>签到与饮品</strong><span>会员核销、领取饮品、自由交流。</span></div>
+        <div class="schedule-row"><b>15 分钟</b><strong>主题导入</strong><span>说明书目、讨论问题与当期艺术关联。</span></div>
+        <div class="schedule-row"><b>60 分钟</b><strong>共读与讨论</strong><span>主理人引导，成员分享；设置完整阅读与轻量参与路径。</span></div>
+        <div class="schedule-row"><b>20 分钟</b><strong>延伸观看</strong><span>结合展览、图像、影像或成员回应。</span></div>
+        <div class="schedule-row"><b>15 分钟</b><strong>交流与反馈</strong><span>收集现场反馈，预告下一期。</span></div>
+      </div>
+    </section>
+
+    <section id="pricing">
+      <span class="section-kicker">06 / 市场定价</span>
+      <h2>用市场定位价格，<br>用运营数据检验可持续性</h2>
+      <p>公开市场中，线上或轻社群读书会年费常见 199-365 元；昆明森蓝读书会以 365 元年费提供 12 次线下活动、借阅与咖啡权益；高频书店社群年卡可见 576 元；主流美术馆个人会员多在 199-580 元区间。艾维的产品包含限定社群、固定艺术主题、外部主理人和饮品服务，应定位于大众读书会员之上。</p>
+      <p class="note">以下为建议价格，待馆长确认。市场参考：<a href="https://www.sohu.com/a/859205199_121124759" target="_blank" rel="noreferrer">昆明森蓝读书会</a>、<a href="https://www.sohu.com/a/920558473_121124608" target="_blank" rel="noreferrer">樊登书店读书会</a>、<a href="https://www.cafamuseum.org/gallery/passport" target="_blank" rel="noreferrer">CAFAM</a>、<a href="https://www.a4artmuseum.com/join-support/become-a-member/" target="_blank" rel="noreferrer">A4 美术馆</a>。</p>
+      <div class="price-grid">
+        <article class="price"><small>游客 / 单次体验</small><strong>89</strong><p>元 / 场<br>含基础饮品</p></article>
+        <article class="price price--emphasis"><small>创始试读季 / 前 20 名</small><strong>599</strong><p>元 / 12 场<br>约 50 元 / 场</p></article>
+        <article class="price"><small>创始试读季 / 常规</small><strong>699</strong><p>元 / 12 场<br>约 58 元 / 场</p></article>
+        <article class="price"><small>年度会员 / 首季续费</small><strong>1,980</strong><p>元 / 年<br>续费激励价</p></article>
+        <article class="price"><small>年度会员 / 常规</small><strong>2,280</strong><p>元 / 年<br>四季 / 48 场规划</p></article>
+      </div>
+    </section>
+
+    <section id="launch">
+      <span class="section-kicker">07 / 上线准备</span>
+      <h2>在开始招募之前，<br>先确保每项承诺都能被履行</h2>
+      <div class="checklist">
+        <article class="check"><h3>阅读空间</h3><p>固定桌椅、照明、空调、音响、清洁、签到与饮品服务条件是否具备。</p></article>
+        <article class="check"><h3>图书借阅</h3><p>书目、借期、遗失赔偿、库存管理与电子核销方式是否明确。</p></article>
+        <article class="check"><h3>饮品履约</h3><p>基础菜单、出品能力、单次服务上限和咖啡权益核销方式是否明确。</p></article>
+        <article class="check"><h3>主理人协议</h3><p>服务费、分成比例、12 场交付、替补和取消条款是否落定。</p></article>
+        <article class="check"><h3>内容与价格</h3><p>第一季主题、书单、日期、主理人介绍、退款与转让规则能否对外说明。</p></article>
+        <article class="check"><h3>会员系统</h3><p>会员登记、预约、核销、退款和数据统计能否由现有系统支持。</p></article>
+      </div>
+    </section>
+
+    <section id="decision">
+      <div class="decision">
+        <div>
+          <span class="section-kicker">08 / 下一项决策</span>
+          <h2>批准创始试读季，<br>不直接承诺全年。</h2>
+          <ol class="decision-list">
+            <li>确认是否进入主理人定向邀约或公开招募。</li>
+            <li>在招募前完成 12 场内容框架、书单与活动日期。</li>
+            <li>确认六楼阅读、饮品、借阅与核销能力。</li>
+            <li>达到最低开班人数后，再启动第一季。</li>
+            <li>在首季第 8 周起，根据到场与续费意向评估年度会员销售。</li>
+          </ol>
+        </div>
+        <aside class="decision-aside">
+          <span class="section-kicker">当前状态</span>
+          <strong>方案已形成，<br>等待立项确认。</strong>
+          <p>首期的真正目标，是验证一群人是否愿意持续回到美术馆阅读、讨论并彼此认识。</p>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer__inner"><span>艾维美术馆 · 会员制艺术阅读会方案</span><span>内部方案文件 · 2026.07.23</span></div>
+  </footer>
+
+  <script>
+    const links = [...document.querySelectorAll('.section-nav a')];
+    const sections = links.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+    const observer = new IntersectionObserver(entries => {
+      const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      links.forEach(link => link.classList.toggle('is-active', link.getAttribute('href') === '#' + visible.target.id));
+    }, { rootMargin: '-20% 0px -65% 0px', threshold: [0.1, 0.3, 0.6] });
+    sections.forEach(section => observer.observe(section));
+  </script>
+</body>
+</html>

@@ -79,6 +79,12 @@ __pycache__/
 .claude/
 supabase/.temp/
 
+# Aiwei operation database backup artifacts
+00_工作台/运营数据管理/local-backups/
+00_工作台/运营数据管理/backups/
+00_工作台/运营数据管理/鏈湴澶囦唤/
+00_工作台/运营数据管理/**/*.dump
+
 # wrangler files
 .wrangler
 .dev.vars*

@@ -3,8 +3,11 @@
 const XLSX = require('xlsx');
 const { createClient } = require('@supabase/supabase-js');
 
-const SUPABASE_URL = 'https://pyzitexdzfrbexwgoqpz.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_wLj18C-NsgFqmjbk8QiAMg_bTuZCBOP';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://pyzitexdzfrbexwgoqpz.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+if (!SUPABASE_ANON_KEY) {
+  throw new Error('SUPABASE_ANON_KEY environment variable is required');
+}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
 

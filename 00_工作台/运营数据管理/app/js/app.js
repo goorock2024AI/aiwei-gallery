@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-  const APP_VERSION = '1.3.2';
-  const LAST_UPDATE = '2026-07-19 12:00';
+  const APP_VERSION = '1.3.3';
+  const LAST_UPDATE = '2026-07-21 12:50';
   (function fillVersion() {
     const el = document.getElementById('sidebar-version');
     if (el) el.textContent = 'v' + APP_VERSION;
@@ -35,6 +35,12 @@
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     const page = document.getElementById('page-' + tab);
     if (page) page.classList.add('active');
+
+    // 移动端抽屉：选中 tab 后自动关闭
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.classList.remove('open');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (overlay) overlay.classList.remove('show');
 
     // 异步渲染
     try {
@@ -126,6 +132,23 @@
       }
     }
   });
+
+  // 移动端：汉堡按钮打开/关闭侧边栏抽屉
+  function _toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (!sidebar) return;
+    sidebar.classList.toggle('open');
+    overlay?.classList.toggle('show');
+  }
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('#sidebar-overlay')) {
+      const sidebar = document.getElementById('sidebar');
+      sidebar?.classList.remove('open');
+      document.getElementById('sidebar-overlay')?.classList.remove('show');
+    }
+  });
+  document.getElementById('sidebar-toggle')?.addEventListener('click', _toggleSidebar);
 
   // 进入主应用
   function _enterApp() {

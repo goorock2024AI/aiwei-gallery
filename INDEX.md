@@ -24,7 +24,7 @@
 | 项目 | 内容 |
 |------|------|
 | 访问地址 | http://122.51.56.50 |
-| 管理员账号 | admin / admin888 |
+| 管理员账号 | admin / <redacted-admin-password> |
 | 部署方式 | 腾讯云轻量服务器 + Docker Compose 3 容器 |
 | 技术栈 | Nginx + Node.js API + PostgreSQL 17 |
 | Git 仓库 | https://github.com/goorock/aiwei-gallery.git |

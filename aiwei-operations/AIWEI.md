@@ -110,7 +110,7 @@ docker compose exec db psql -U postgres  # 直接操作数据库
 
 | 用户名 | 密码 | 角色 |
 |--------|------|------|
-| admin | admin888 | 管理员（操作入口：http://122.51.56.50）|
+| admin | <redacted-admin-password> | 管理员（操作入口：http://122.51.56.50）|
 
 ## 数据迁移来源
 - 旧 Supabase 实例：`https://pyzitexdzfrbexwgoqpz.supabase.co`

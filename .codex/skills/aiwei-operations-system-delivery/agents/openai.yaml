@@ -1,0 +1,3 @@
+display_name: 艾维系统交付
+short_description: 受理、开发、测试和发布运营数据管理系统需求。
+default_prompt: 使用艾维系统交付流程处理运营数据管理系统的需求、缺陷、测试或发布任务。

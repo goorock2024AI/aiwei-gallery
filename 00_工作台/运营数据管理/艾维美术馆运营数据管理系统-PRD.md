@@ -6,7 +6,7 @@
 
 > **部署变更：** 本系统已完成从 Supabase 到腾讯云自托管 PostgreSQL 的迁移。
 > 当前架构：腾讯云轻量服务器 → Docker Nginx + Node.js API + PostgreSQL 17
-> 访问地址：http://122.51.56.50 | 管理员：admin / admin888
+> 访问地址：http://122.51.56.50 | 管理员：admin / <redacted-admin-password>
 > 详见：[部署与运维文档](./艾维美术馆运营数据管理系统-部署方案.md)
 
 ---

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>艾维美术馆 · 运营数据管理</title>
-<link rel="stylesheet" href="css/style.css?v=rev-overview-date-20260719">
+<link rel="stylesheet" href="css/style.css?v=responsive-20260721c">
 </head>
 <body>
 <div id="login-overlay" class="login-overlay">
@@ -41,16 +41,15 @@
     </div>
     <nav id="sidebar-nav">
       <button class="tab-btn active" data-tab="revenue">💰 收银台</button>
-      <button class="tab-btn" data-tab="expense">🧾 支出录入</button>
       <button class="tab-btn" data-tab="gallery">🖼️ 画廊销售</button>
       <button class="tab-btn" data-tab="space">🏛 空间使用</button>
+      <button class="tab-btn" data-tab="reports">📊 数据看板</button>
+      <button class="tab-btn" data-tab="expense">🧾 支出记录</button>
       <button class="tab-btn" data-tab="project-list">📋 项目清单</button>
-      <button class="tab-btn" data-tab="reports">📊 数据报表</button>
-      <button class="tab-btn tab-btn-admin" data-tab="manage">⚙️ 数据管理</button>
       <button class="tab-btn tab-btn-admin" data-tab="products">📦 产品管理</button>
+      <button class="tab-btn tab-btn-admin" data-tab="manage">⚙️ 数据管理</button>
       <button class="tab-btn tab-btn-admin" data-tab="users">👥 用户管理</button>
       <button class="tab-btn tab-btn-admin" data-tab="logs">📋 操作日志</button>
-      <button class="tab-btn" data-tab="test">🧪 测试</button>
       <div class="nav-divider"></div>
       <button class="tab-btn tab-btn-logout" onclick="Auth.logout()">🚪 退出</button>
     </nav>
@@ -61,6 +60,10 @@
     <div id="sidebar-version">v1.1.0</div>
     <div id="sidebar-updated">__LAST_UPDATE__</div>
   </aside>
+
+  <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="打开菜单">☰</button>
+  <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
   <div id="main-area">
     <main id="main-content">
       <div id="page-dashboard" class="page"></div>
@@ -88,8 +91,8 @@
 <script src="js/ui.js?v=0716-batch-deploy"></script>
 <script src="js/charts.js?v=rev-overview-date-20260719"></script>
 <script src="js/import-export.js?v=0716-batch-deploy"></script>
-<script src="js/auth.js?v=0716-batch-deploy"></script>
+<script src="js/auth.js?v=hashfix-20260721"></script>
 <script src="js/operation-logger.js?v=0716-batch-deploy"></script>
-<script src="js/app.js?v=rev-overview-date-20260719"></script>
+<script src="js/app.js?v=responsive-20260721b"></script>
 </body>
 </html>

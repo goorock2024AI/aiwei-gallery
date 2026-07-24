@@ -144,7 +144,7 @@ kex_exchange_identification: Connection closed by remote host
 
 | 冒烟项 | 端点 | 期望 | 实际 |
 |---|---|---|---|
-| 1. 登录 | POST /rest/v1/login (test4/test1234) | 200 + role=admin | ✅ |
+| 1. 登录 | POST /rest/v1/login (test4/<redacted-test-password>) | 200 + role=admin | ✅ |
 | 2. 视图聚合 | GET space_usage_with_payments | 含 payments 数组 + receivedAmount 聚合 | ✅ 4150+4150=8300 一致 |
 | 3. artwork 白名单 | POST artworks (8 字段) | 201 + 8 字段全保留 | ✅ HTTP 201 |
 | 4. spacePayment 白名单 | POST space_payments (5 字段) | 201 + 5 字段全保留 | ✅ HTTP 201 |
@@ -156,7 +156,7 @@ kex_exchange_identification: Connection closed by remote host
 
 1. **accessMap 漏登记 → admin 也被拒**：见「项目清单页」段落。修复 1 行 `auth.js`。
 2. **批量 scp SSH 抖动**：腾讯云轻量服务器短时间内收到 ≥3 个 scp 会断连（Connection reset / abort / banner exchange failed）。每个 scp 之间 sleep 5-15s + 加 `scp -C` + `ServerAliveInterval=30` 才稳定。详见 memory `feedback_ssh_disconnect_during_batch_scp`。
-3. **test4 密码无法反推**：库里存的哈希 `937e8d5f...` 不匹配任何常见候选（88888888 / goorock888 / admin888 / 888888 / goorock / test4 / aiwei2024 全部 sha256 不命中）。改用 change-password 重置为 `test1234` 完成冒烟测试，原哈希保留为「未知」状态。
+3. **test4 密码无法反推**：库里存的哈希 `937e8d5f...` 不匹配任何常见候选（88888888 / goorock888 / <redacted-admin-password> / 888888 / goorock / test4 / aiwei2024 全部 sha256 不命中）。改用 change-password 重置为 `<redacted-test-password>` 完成冒烟测试，原哈希保留为「未知」状态。
 
 ### 涉及文件
 
@@ -212,7 +212,7 @@ kex_exchange_identification: Connection closed by remote host
 - [ ] 项目清单页导出 CSV（合同明细 + 到账明细）
 - [ ] 收银台编辑模式点击项目名跳转项目清单
 - [ ] 文创库存自动扣减（销售触发）
-- [ ] test4 密码由用户决定（保留 test1234 / 还是改其他）
+- [ ] test4 密码由用户决定（保留 <redacted-test-password> / 还是改其他）
 
 ---
 
@@ -742,7 +742,7 @@ d71ab81 feat: 侧边栏底部添加版本号 v1.0.0
 
 | 用户名 | 密码 | 角色 |
 |--------|------|------|
-| admin | admin888 | 管理员（首次登录建议改密）|
+| admin | <redacted-admin-password> | 管理员（首次登录建议改密）|
 | 顾睿 | 原密码 | 查看者 |
 | 杨东东 | 原密码 | 编辑者 |
 | test4 | 原密码 | 管理员 |
@@ -807,7 +807,7 @@ PRD 中 P1 需求的账号登录系统和操作日志，本次先实现用户登
 - 刷新页面 → sessionStorage 保持登录态
 
 **用户体系：**
-- 内置管理员账号：`admin` / `admin888`（首次登录强制改密）
+- 内置管理员账号：`admin` / `<redacted-admin-password>`（首次登录强制改密）
 - 无用户注册功能，管理员在「用户管理」页创建普通账号
 - 普通账号默认密码 `88888888`，首次登录强制改密
 - 管理员菜单控制：仅 admin 角色可见「数据管理」「产品管理」「用户管理」

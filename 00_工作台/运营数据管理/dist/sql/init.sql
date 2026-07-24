@@ -217,7 +217,7 @@ INSERT INTO app_config (key, value) VALUES
 ('spaces', '[{"name":"1号厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"2号厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"美学空间","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"多功能厅","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"六楼综合空间","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"走廊画廊","dailyPrice":0,"halfDayPrice":0,"desc":""},{"name":"户外露台","dailyPrice":0,"halfDayPrice":0,"desc":""}]')
 ON CONFLICT (key) DO NOTHING;
 
--- 默认管理员（密码: admin888）
+-- 默认管理员（密码: <redacted-admin-password>）
 INSERT INTO users (id, username, display_name, password_hash, role, is_active) VALUES
 ('usr_admin_init', 'admin', '管理员', '__need_change__:9f6e6800cfae7749eb6c8036192359176c43e0f113492473ac8c9535bdb7e7f8', 'admin', true)
 ON CONFLICT (username) DO NOTHING;

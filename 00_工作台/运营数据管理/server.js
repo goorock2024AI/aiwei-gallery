@@ -13,7 +13,10 @@ const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;  // 5MB
 
 const DB_HOST = process.env.DB_HOST || '127.0.0.1';
-const DB_PASS = process.env.DB_PASS || 'Aiwei2024Gallery';
+const DB_PASS = process.env.DB_PASS || process.env.DB_PASSWORD;
+if (!DB_PASS) {
+  throw new Error('DB_PASS or DB_PASSWORD environment variable is required');
+}
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = process.env.STATIC_DIR || '/var/www/aiwei';
 
@@ -184,17 +187,69 @@ async function handleLogin(req, res) {
   });
 }
 
-// --- POST /rest/v1/change-password --- 修改密码
+// --- POST /rest/v1/change-password --- 修改密码（带可选 oldPassword 校验，前后端都走 Node crypto）
 async function handleChangePassword(req, res) {
   let body = '';
   req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
-      const { userId, newPassword } = JSON.parse(body);
+      const { userId, newPassword, oldPassword } = JSON.parse(body);
       if (!userId || !newPassword) return sendError(res, 400, '参数不完整');
       if (newPassword.length < 6) return sendError(res, 400, '密码长度至少 6 位');
+      if (oldPassword !== undefined && oldPassword !== null && oldPassword !== '') {
+        const r = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+        if (r.rows.length === 0) return sendError(res, 404, '用户不存在');
+        let stored = r.rows[0].password_hash || '';
+        if (stored.startsWith('__need_change__:')) stored = stored.slice('__need_change__:'.length);
+        if (sha256(oldPassword) !== stored) return sendError(res, 401, '当前密码错误');
+      }
       const hash = sha256(newPassword);
       await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, userId]);
+      sendJSON(res, 200, { success: true });
+    } catch (e) { sendError(res, 400, e.message); }
+  });
+}
+
+// --- POST /rest/v1/users/create --- admin 新建用户（后端算 hash，避免前后端 SHA-256 不一致）
+async function handleCreateUser(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', async () => {
+    try {
+      const { username, displayName, role, password } = JSON.parse(body);
+      if (!username) return sendError(res, 400, '请输入用户名');
+      const pwd = password || '88888888';
+      if (pwd.length < 6) return sendError(res, 400, '密码长度至少 6 位');
+      const exists = await pool.query('SELECT 1 FROM users WHERE username = $1', [username]);
+      if (exists.rows.length > 0) return sendError(res, 409, '用户名已存在');
+      const id = 'usr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const hash = sha256(pwd);
+      const stored = '__need_change__:' + hash;
+      await pool.query(
+        `INSERT INTO users (id, username, display_name, password_hash, role, is_active)
+         VALUES ($1, $2, $3, $4, $5, true)`,
+        [id, username, displayName || username, stored, role || 'editor']
+      );
+      sendJSON(res, 201, { id, username, displayName: displayName || username, role: role || 'editor' });
+    } catch (e) { sendError(res, 400, e.message); }
+  });
+}
+
+// --- POST /rest/v1/users/reset-password --- admin 重置密码（后端算 hash）
+async function handleResetPassword(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', async () => {
+    try {
+      const { userId, password } = JSON.parse(body);
+      if (!userId) return sendError(res, 400, '缺少 userId');
+      const pwd = password || '88888888';
+      if (pwd.length < 6) return sendError(res, 400, '密码长度至少 6 位');
+      const r = await pool.query('SELECT 1 FROM users WHERE id = $1', [userId]);
+      if (r.rows.length === 0) return sendError(res, 404, '用户不存在');
+      const hash = sha256(pwd);
+      const stored = '__need_change__:' + hash;
+      await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [stored, userId]);
       sendJSON(res, 200, { success: true });
     } catch (e) { sendError(res, 400, e.message); }
   });
@@ -578,6 +633,10 @@ const server = http.createServer((req, res) => {
       handleLogin(req, res);
     } else if (parts[2] === 'change-password' && req.method === 'POST') {
       handleChangePassword(req, res);
+    } else if (parts[2] === 'users' && parts[3] === 'create' && req.method === 'POST') {
+      handleCreateUser(req, res);
+    } else if (parts[2] === 'users' && parts[3] === 'reset-password' && req.method === 'POST') {
+      handleResetPassword(req, res);
     } else if (parts[2] === 'space_usage' && parts[3] === 'check-conflict' && req.method === 'POST') {
       handleSpaceConflict(req, res);
     } else if (parts[2] === 'artworks' && parts[3] === 'upload' && req.method === 'POST') {

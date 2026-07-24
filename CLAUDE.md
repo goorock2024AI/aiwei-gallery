@@ -32,7 +32,7 @@
 ## 运营数据系统信息
 
 - 访问地址：http://122.51.56.50
-- 管理员账号：admin / admin888
+- 管理员账号：admin / <redacted-admin-password>
 - 测试账号：test4（admin 权限），所有测试通过此账号进行，测试完成后必须清理产生的业务数据
 - 部署方式：腾讯云轻量服务器 Docker（Nginx + Node.js API + PostgreSQL 17）
 - 仓库位置：`00_工作台/运营数据管理/`（核心文件：server.js + app/）
@@ -63,7 +63,7 @@
 | `aiwei-db-1` | `postgres:17-alpine` | — | 5432 | PostgreSQL 17 | 60 MB |
 
 - **端口监听**：对外仅 Nginx:80；api:3000 在 docker 网络 `aiwei-net` 内，外部不可直连（必须经 Nginx 反代 `/rest/*`）；5432 在宿主机监听 `0.0.0.0`（依赖腾讯云安全组限制外网访问）。
-- **数据库名**：`postgres`，用户 `postgres`，密码在 `/opt/aiwei/.env` 的 `DB_PASSWORD=Aiwei2024Gallery!`。
+- **数据库名**：`postgres`，用户 `postgres`，密码在 `/opt/aiwei/.env` 的 `DB_PASSWORD=<redacted-db-password>`。
 - **数据库现有表（13 张）**：app_config / artworks / content_posts / creative_products / expense / gallery_sales / inventory / operation_logs / partners / project_registry / revenue / space_usage / users。**新功能建表前先确认是否已有同名表，避免重复创建。**
 
 #### 路径映射（最容易出错的点）

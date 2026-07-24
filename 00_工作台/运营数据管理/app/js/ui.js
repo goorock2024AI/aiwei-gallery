@@ -389,7 +389,7 @@ const UI = {
         <span style="color:var(--green-700)">¥${(+p.retailPrice||0).toFixed(2)} <span style="color:var(--gray-500);font-size:12px">库存:${p.stock||0}${p.unit||'个'}</span></span>
       </div>`).join('') || '<div style="padding:20px;text-align:center;color:var(--gray-500)">无可用产品</div>';
     overlay.innerHTML = `
-      <div class="modal-card" style="min-width:400px;max-height:80vh;overflow-y:auto">
+      <div class="modal-card modal-card-md">
         <div class="modal-title">📦 选择文创产品</div>
         <div style="margin-bottom:10px"><input type="text" id="cp-search-pos" placeholder="搜索产品..." style="width:100%;padding:6px 10px" oninput="UI._filterCPSearch(this.value)"></div>
         <div id="cp-select-list">${listHtml}</div>
@@ -1071,7 +1071,7 @@ const UI = {
 
     const modal = document.createElement('div');
     modal.id = 'quick-collect-modal';
-    modal.className = 'modal-mask';
+    modal.className = 'modal-overlay';
     modal.innerHTML = `
       <div class="modal-card quick-collect-modal" onclick="event.stopPropagation()">
         <div class="modal-header">💰 快速到账 — ${this._escHtml(r.projectName || '')} <span style="float:right;cursor:pointer;font-size:20px;color:var(--gray-500)" onclick="document.getElementById('quick-collect-modal').remove()">×</span></div>
@@ -1816,7 +1816,7 @@ const UI = {
       }).join('');
     };
     overlay.innerHTML = `
-      <div class="modal-card" style="min-width:720px;max-width:90vw">
+      <div class="modal-card modal-card-wide">
         <div class="modal-title">📋 从作品库选择</div>
         <div class="filter-bar" style="margin-bottom:12px">
           <div class="form-group" style="flex:1;margin-bottom:0">
@@ -1825,7 +1825,7 @@ const UI = {
           </div>
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto">共 ${list.length} 件</span>
         </div>
-        <div class="table-wrap" style="max-height:50vh;overflow-y:auto">
+        <div class="table-wrap modal-table-scroll">
           <table class="data-table">
             <thead><tr><th style="width:80px">编号</th><th style="width:60px">缩略图</th><th>标题</th><th>艺术家</th><th>状态</th><th style="width:90px">库存</th><th style="width:100px">零售价</th><th style="width:80px">操作</th></tr></thead>
             <tbody id="picker-tbody"></tbody>
@@ -2782,7 +2782,7 @@ const UI = {
     const initialNo = d.artworkNo || d.artwork_no || (isEdit ? '' : this._nextArtworkNo());
     const initialImg = this._resolveImageUrl(d.imageUrl || d.image_url || '');
     overlay.innerHTML = `
-      <div class="modal-card" style="min-width:520px">
+      <div class="modal-card modal-card-form">
         <div class="modal-title">${isEdit ? '编辑作品' : '新增作品'}</div>
         <div class="form-grid">
           <div class="form-group"><label>作品编号</label>
@@ -3003,7 +3003,7 @@ const UI = {
     overlay.style.display = 'flex';
     const d = item || {};
     overlay.innerHTML = `
-      <div class="modal-card" style="min-width:420px">
+      <div class="modal-card modal-card-sm">
         <div class="modal-title">${isEdit ? '编辑' + label : '新增' + label}</div>
         <div class="form-grid">
           <div class="form-group full"><label>名称 *</label><input type="text" id="cfg-name" value="${this._escHtml(d.name || '')}" placeholder="如 普通票 / 手冲咖啡 / 果壳风铃" autofocus></div>
@@ -3233,7 +3233,7 @@ const UI = {
     overlay.style.display = 'flex';
     const d = data || {};
     overlay.innerHTML = `
-      <div class="modal-card" style="min-width:480px">
+      <div class="modal-card modal-card-md">
         <div class="modal-title">${isEdit ? '编辑文创产品' : '新增文创产品'}</div>
         <div class="form-grid">
           <div class="form-group"><label>产品名称 *</label><input type="text" id="cp-name" value="${d.name || ''}" placeholder="必填"></div>
