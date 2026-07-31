@@ -1829,3 +1829,32 @@ P0-02A 新增收入/画廊调整字段后，`createRevenue()` 和 `createGallery
 - `node --check app/js/ui.js` 通过。
 - 线上 `GET http://122.51.56.50/` 返回 200，包含 `expense-p2-upload-ui-20260731`。
 - 线上 `GET /js/ui.js?v=expense-p2-upload-ui-20260731` 返回 200，包含“上传票据”和 `_uploadSelectedExpenseAttachment`。
+
+---
+
+## 2026-07-31 支出记录模块热修：图片上传反馈与兼容
+
+**背景**
+
+实际使用中，支出票据图片上传后没有可见的成功或失败提示。排查确认上传接口可返回 201，但 toast 层级低于弹窗层级，提示被弹窗遮住；弹窗内状态也没有在成功后留下明确结果。
+
+**本次改动**
+
+- 将 toast 层级提升到弹窗之上，确保上传成功/失败提示可见。
+- 上传卡片新增明确状态样式：待选择、上传中、上传成功、上传失败。
+- 上传过程中禁用上传按钮，避免重复点击。
+- 上传成功后在弹窗内显示“上传成功：N 张图片已保存”。
+- 上传失败时在弹窗内和 toast 同时显示具体错误。
+- 前端增加 5MB 单文件校验。
+- 后端 multipart boundary 解析兼容带引号或附加参数的 `Content-Type`。
+- `app/index.html` 更新 `style.css` 和 `ui.js` cache-bust token 为 `expense-upload-feedback-20260731`。
+
+**验证**
+
+- `node --check app/js/ui.js` 通过。
+- `node --check server.js` 通过。
+- 线上 `GET http://122.51.56.50/` 返回 200，包含 `expense-upload-feedback-20260731`。
+- 线上 `GET /js/ui.js?v=expense-upload-feedback-20260731` 返回 200，包含“上传成功：”和 `upload-status`。
+- 线上 `GET /css/style.css?v=expense-upload-feedback-20260731` 返回 200，包含 `z-index: 5000` 和 `.upload-status-success`。
+- 线上完整烟测：创建临时支出、上传 1x1 PNG、写入 `expense_attachments`、读取到 1 条附件记录、删除测试附件/支出/远端图片，均通过。
+- API 容器日志无错误。

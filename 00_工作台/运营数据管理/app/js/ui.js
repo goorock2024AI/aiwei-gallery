@@ -1778,14 +1778,15 @@ const UI = {
 
   _renderExpenseAttachmentUploadBox(expenseId, type, title) {
     const inputId = `expense-attach-${type}`;
+    const buttonId = `${inputId}-button`;
     return `
       <div class="card" style="margin:0">
         <div class="card-title">${title}</div>
         <input type="file" id="${inputId}" accept="image/*" multiple>
         <div style="font-size:12px;color:var(--gray-500);margin-top:6px">支持 jpg/png/webp/gif，单张不超过 5MB，可多选。</div>
-        <div id="${inputId}-status" style="font-size:12px;color:var(--gray-500);margin-top:6px"></div>
+        <div id="${inputId}-status" class="upload-status upload-status-muted">请选择图片后点击上传。</div>
         <div class="form-actions" style="margin-top:10px">
-          <button type="button" class="btn btn-sm btn-primary" onclick="UI._uploadExpenseAttachments('${expenseId}', '${type}', '${inputId}')">上传</button>
+          <button type="button" id="${buttonId}" class="btn btn-sm btn-primary" onclick="UI._uploadExpenseAttachments('${expenseId}', '${type}', '${inputId}')">上传</button>
         </div>
       </div>`;
   },
@@ -1832,13 +1833,28 @@ const UI = {
   async _uploadExpenseAttachments(expenseId, type, inputId) {
     const input = document.getElementById(inputId);
     const status = document.getElementById(inputId + '-status');
+    const button = document.getElementById(inputId + '-button');
     const files = Array.from(input?.files || []);
-    if (!files.length) { this.toast('请先选择图片', 'error'); return; }
+    const setStatus = (message, state = 'muted') => {
+      if (!status) return;
+      status.textContent = message;
+      status.className = `upload-status upload-status-${state}`;
+    };
+    if (!files.length) {
+      setStatus('请先选择图片。', 'error');
+      this.toast('请先选择图片', 'error');
+      return;
+    }
     try {
-      if (status) status.textContent = `上传中 0/${files.length}...`;
+      if (button) {
+        button.disabled = true;
+        button.textContent = '上传中...';
+      }
+      setStatus(`上传中 0/${files.length}...`, 'working');
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         if (!file.type.startsWith('image/')) throw new Error(`${file.name} 不是图片文件`);
+        if (file.size > 5 * 1024 * 1024) throw new Error(`${file.name} 超过 5MB`);
         const uploaded = await Store.uploadExpenseAttachmentFile(file, type);
         await Store.add('expenseAttachments', createExpenseAttachment({
           expenseId,
@@ -1848,15 +1864,22 @@ const UI = {
           fileSize: uploaded.size || file.size,
           mimeType: uploaded.mimeType || file.type
         }));
-        if (status) status.textContent = `上传中 ${i + 1}/${files.length}...`;
+        setStatus(`上传中 ${i + 1}/${files.length}...`, 'working');
       }
       await Store.update('expense', expenseId, type === 'invoice' ? { invoiceStatus: '有发票' } : { receiptStatus: '有凭证' });
       input.value = '';
-      this.toast('票据图片已上传');
+      setStatus(`上传成功：${files.length} 张图片已保存。`, 'success');
+      this.toast(`票据图片已上传（${files.length}张）`);
       await this._refreshExpenseAttachmentList(expenseId);
     } catch (e) {
-      this.toast('上传失败：' + (e.message || e), 'error');
-      if (status) status.textContent = '上传失败';
+      const message = e.message || e;
+      setStatus('上传失败：' + message, 'error');
+      this.toast('上传失败：' + message, 'error');
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = '上传';
+      }
     }
   },
 

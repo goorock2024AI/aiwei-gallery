@@ -148,6 +148,11 @@ function sanitizeUploadName(name) {
   return String(name || 'file').replace(/[^\w.-]+/g, '_').slice(0, 80);
 }
 
+function getMultipartBoundary(contentType) {
+  const m = String(contentType || '').match(/(?:^|;)\s*boundary=(?:"([^"]+)"|([^;]+))/i);
+  return m ? (m[1] || m[2] || '').trim() : '';
+}
+
 function collectJSON(req, cb) {
   let body = '';
   req.on('data', chunk => body += chunk.toString('utf8'));
@@ -339,9 +344,11 @@ async function handleResetPassword(req, res) {
 // 返回 { url: '/uploads/artworks/xxx.jpg' }
 function handleArtworkUpload(req, res) {
   const contentType = req.headers['content-type'] || '';
-  const m = contentType.match(/^multipart\/form-data;\s*boundary=(.+)$/);
-  if (!m) return sendError(res, 400, 'Content-Type 必须是 multipart/form-data');
-  const boundary = '--' + m[1];
+  const boundaryValue = getMultipartBoundary(contentType);
+  if (!/^multipart\/form-data/i.test(contentType) || !boundaryValue) {
+    return sendError(res, 400, 'Content-Type 必须是 multipart/form-data');
+  }
+  const boundary = '--' + boundaryValue;
 
   const chunks = [];
   let totalLen = 0;
@@ -390,9 +397,11 @@ function handleArtworkUpload(req, res) {
 function handleExpenseAttachmentUpload(req, res, query) {
   const type = query.type === 'payment' ? 'payment' : 'invoice';
   const contentType = req.headers['content-type'] || '';
-  const m = contentType.match(/^multipart\/form-data;\s*boundary=(.+)$/);
-  if (!m) return sendError(res, 400, 'Content-Type 必须是 multipart/form-data');
-  const boundary = '--' + m[1];
+  const boundaryValue = getMultipartBoundary(contentType);
+  if (!/^multipart\/form-data/i.test(contentType) || !boundaryValue) {
+    return sendError(res, 400, 'Content-Type 必须是 multipart/form-data');
+  }
+  const boundary = '--' + boundaryValue;
 
   const chunks = [];
   let totalLen = 0;
