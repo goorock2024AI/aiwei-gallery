@@ -7,6 +7,7 @@ RUN npm install --production && \
     npm cache clean --force
 
 COPY server.js ./
+COPY fonts ./fonts
 
 EXPOSE 3000
 

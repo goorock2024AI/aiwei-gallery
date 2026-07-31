@@ -165,8 +165,10 @@ function collectJSON(req, cb) {
 function getPdfFontPath() {
   const candidates = [
     PDF_FONT_PATH,
+    path.join(__dirname, 'fonts', 'NotoSansSC-VF.ttf'),
     path.join(__dirname, 'fonts', 'NotoSansSC-Regular.otf'),
     path.join(__dirname, 'fonts', 'NotoSansSC-Regular.ttf'),
+    path.join(__dirname, 'fonts', 'NotoSansCJKsc-Regular.otf'),
     '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf',
     '/usr/share/fonts/noto/NotoSansCJK-Regular.ttc',
@@ -611,27 +613,93 @@ function generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, opti
         doc.registerFont('CJK', fontPath);
         doc.font('CJK');
       } catch (e) {
-        doc.font('Helvetica');
+        return reject(new Error('中文字体加载失败：' + e.message));
       }
     } else {
-      doc.font('Helvetica');
+      return reject(new Error('未找到中文字体，无法生成中文报销 PDF'));
     }
 
     drawPdfSummary(doc, expenses, options);
     expenses.forEach((expense, idx) => {
-      drawExpenseDetailPage(doc, expense, idx + 1, expenses.length);
       const rows = attachmentsByExpense[expense.id] || [];
-      rows.filter(a => a.attachment_type === 'invoice').forEach((a, i) => {
-        drawAttachmentPage(doc, expense, a, `发票 ${i + 1}`);
+      const invoices = rows.filter(a => a.attachment_type === 'invoice');
+      const payments = rows.filter(a => a.attachment_type === 'payment');
+
+      if (invoices.length) {
+        invoices.forEach((a, i) => drawInvoicePage(doc, expense, a, i + 1, invoices.length, idx + 1, expenses.length));
+      } else {
+        drawMissingInvoicePage(doc, expense, idx + 1, expenses.length);
+      }
+
+      if (payments.length) {
+        payments.forEach((a, i) => drawPaymentInfoPage(doc, expense, a, i + 1, payments.length, idx + 1, expenses.length));
+      } else {
+        drawPaymentInfoPage(doc, expense, null, 0, 0, idx + 1, expenses.length);
+      }
+      const unsupported = rows.filter(a => !['invoice', 'payment'].includes(a.attachment_type));
+      unsupported.forEach((a, i) => {
+        drawAttachmentNoticePage(doc, expense, a, `其他附件 ${i + 1}`);
       });
-      rows.filter(a => a.attachment_type === 'payment').forEach((a, i) => {
-        drawAttachmentPage(doc, expense, a, `支付凭证 ${i + 1}`);
-      });
-      if (!rows.length) drawMissingAttachmentPage(doc, expense);
     });
 
     doc.end();
   });
+}
+
+function drawPageTitle(doc, title, subtitle = '') {
+  doc.fontSize(16).fillColor('#111').text(title, 42, 42, { width: 511 });
+  if (subtitle) doc.fontSize(9).fillColor('#555').text(subtitle, 42, 66, { width: 511 });
+  doc.moveTo(42, 86).lineTo(553, 86).strokeColor('#ddd').stroke();
+}
+
+function drawExpenseInfoBox(doc, r, x, y, w) {
+  const rows = [
+    ['日期', r.date || '-'],
+    ['项目', r.project || '-'],
+    ['类别', r.category || '-'],
+    ['金额', '¥' + formatMoney(r.amount)],
+    ['经手人', r.handler || '-'],
+    ['发票状态', r.invoice_status || '-'],
+    ['支付凭证状态', r.receipt_status || '-'],
+    ['报销状态', r.reimbursement_status || '-'],
+    ['关联活动', r.related_activity || '-'],
+    ['支出说明', r.description || '-']
+  ];
+  doc.roundedRect(x, y, w, 130, 4).strokeColor('#ddd').stroke();
+  doc.fontSize(9);
+  rows.slice(0, 8).forEach(([label, value], idx) => {
+    const col = idx % 2;
+    const row = Math.floor(idx / 2);
+    const tx = x + 12 + col * (w / 2);
+    const ty = y + 12 + row * 20;
+    doc.fillColor('#666').text(label + '：', tx, ty, { continued: true });
+    doc.fillColor('#111').text(String(value), { width: w / 2 - 64 });
+  });
+  doc.fillColor('#666').text('关联活动：', x + 12, y + 92, { continued: true });
+  doc.fillColor('#111').text(String(rows[8][1]), { width: w - 90 });
+  doc.fillColor('#666').text('支出说明：', x + 12, y + 108, { continued: true });
+  doc.fillColor('#111').text(String(rows[9][1]), { width: w - 90, height: 28 });
+}
+
+function drawImageOrNotice(doc, attachment, x, y, fitW, fitH) {
+  if (!attachment) {
+    doc.roundedRect(x, y, fitW, fitH, 4).strokeColor('#ddd').stroke();
+    doc.fontSize(12).fillColor('#b45309').text('尚未上传对应图片。', x + 16, y + 20, { width: fitW - 32 });
+    return;
+  }
+  const filePath = uploadUrlToPath(attachment.file_url);
+  const ext = path.extname(filePath).toLowerCase();
+  if (filePath && fs.existsSync(filePath) && ['.jpg', '.jpeg', '.png'].includes(ext)) {
+    try {
+      doc.image(filePath, x, y, { fit: [fitW, fitH], align: 'center', valign: 'center' });
+      return;
+    } catch (e) {
+      // fall through to notice
+    }
+  }
+  doc.roundedRect(x, y, fitW, fitH, 4).strokeColor('#ddd').stroke();
+  doc.fontSize(11).fillColor('#b45309').text('该附件格式暂不能嵌入 PDF，请通过原始附件链接查看：', x + 16, y + 20, { width: fitW - 32 });
+  doc.fillColor('#2563eb').text(attachment.file_url || '-', x + 16, y + 48, { width: fitW - 32, underline: true });
 }
 
 function drawPdfSummary(doc, expenses, options = {}) {
@@ -671,54 +739,53 @@ function drawPdfSummary(doc, expenses, options = {}) {
   });
 }
 
-function drawExpenseDetailPage(doc, r, index, total) {
+function drawInvoicePage(doc, expense, attachment, index, total, expenseIndex, expenseTotal) {
   doc.addPage();
-  doc.fontSize(16).fillColor('#111').text(`支出说明 ${index}/${total}`);
-  doc.moveDown(0.8);
-  const fields = [
-    ['日期', r.date],
-    ['项目', r.project],
-    ['类别', r.category],
-    ['金额', '¥' + formatMoney(r.amount)],
-    ['经手人', r.handler || '-'],
-    ['发票状态', r.invoice_status || '-'],
-    ['支付凭证状态', r.receipt_status || '-'],
-    ['报销状态', r.reimbursement_status || '-'],
-    ['关联活动', r.related_activity || '-'],
-    ['支出说明', r.description || '-']
-  ];
-  doc.fontSize(11);
-  fields.forEach(([label, value]) => {
-    doc.fillColor('#555').text(label + '：', { continued: true });
-    doc.fillColor('#111').text(String(value || '-'));
-    doc.moveDown(0.35);
-  });
+  drawPageTitle(
+    doc,
+    `发票 ${index}/${total}`,
+    `第 ${expenseIndex}/${expenseTotal} 笔｜${expense.project || '-'}｜¥${formatMoney(expense.amount)}｜${attachment.original_name || ''}`
+  );
+  drawImageOrNotice(doc, attachment, 42, 104, 511, 680);
 }
 
-function drawAttachmentPage(doc, expense, attachment, title) {
+function drawMissingInvoicePage(doc, expense, expenseIndex, expenseTotal) {
   doc.addPage();
-  doc.fontSize(13).fillColor('#111').text(`${title}｜${expense.project || '-'}｜¥${formatMoney(expense.amount)}`);
-  doc.fontSize(9).fillColor('#555').text(`说明：${expense.description || '-'}    文件：${attachment.original_name || ''}`);
-  doc.moveDown(0.8);
-  const filePath = uploadUrlToPath(attachment.file_url);
-  const ext = path.extname(filePath).toLowerCase();
-  if (filePath && fs.existsSync(filePath) && ['.jpg', '.jpeg', '.png'].includes(ext)) {
-    try {
-      doc.image(filePath, 42, doc.y, { fit: [511, 650], align: 'center', valign: 'top' });
-      return;
-    } catch (e) {
-      // fall through to text notice
-    }
-  }
-  doc.fontSize(11).fillColor('#b45309').text('该附件格式暂不能嵌入 PDF，请通过原始附件链接查看：');
-  doc.fillColor('#2563eb').text(attachment.file_url || '-', { underline: true });
+  drawPageTitle(
+    doc,
+    '发票缺失',
+    `第 ${expenseIndex}/${expenseTotal} 笔｜${expense.project || '-'}｜¥${formatMoney(expense.amount)}`
+  );
+  drawExpenseInfoBox(doc, expense, 42, 108, 511);
+  drawImageOrNotice(doc, null, 42, 248, 511, 260);
 }
 
-function drawMissingAttachmentPage(doc, expense) {
+function drawPaymentInfoPage(doc, expense, attachment, index, total, expenseIndex, expenseTotal) {
   doc.addPage();
-  doc.fontSize(13).fillColor('#111').text(`票据缺失｜${expense.project || '-'}｜¥${formatMoney(expense.amount)}`);
-  doc.moveDown(1);
-  doc.fontSize(11).fillColor('#b45309').text('该笔支出尚未上传发票或支付凭证图片。');
+  const paymentTitle = total ? `付款凭证 ${index}/${total} + 单据信息` : '付款凭证缺失 + 单据信息';
+  drawPageTitle(
+    doc,
+    paymentTitle,
+    `第 ${expenseIndex}/${expenseTotal} 笔｜${expense.project || '-'}｜¥${formatMoney(expense.amount)}${attachment ? '｜' + (attachment.original_name || '') : ''}`
+  );
+  drawExpenseInfoBox(doc, expense, 42, 104, 511);
+  drawImageOrNotice(doc, attachment, 42, 246, 511, 538);
+}
+
+function drawAttachmentNoticePage(doc, expense, attachment, title) {
+  doc.addPage();
+  drawPageTitle(
+    doc,
+    title,
+    `${expense.project || '-'}｜¥${formatMoney(expense.amount)}｜${attachment.original_name || ''}`
+  );
+  drawAttachmentNotice(doc, attachment, 42, 120, 511, 220);
+}
+
+function drawAttachmentNotice(doc, attachment, x, y, w, h) {
+  doc.roundedRect(x, y, w, h, 4).strokeColor('#ddd').stroke();
+  doc.fontSize(11).fillColor('#b45309').text('该附件暂不能归类为发票或支付凭证，请通过原始附件链接查看：', x + 16, y + 20, { width: w - 32 });
+  doc.fillColor('#2563eb').text(attachment.file_url || '-', x + 16, y + 48, { width: w - 32, underline: true });
 }
 
 // --- REST API ---
