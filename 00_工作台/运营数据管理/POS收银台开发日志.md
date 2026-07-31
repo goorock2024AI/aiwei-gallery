@@ -1913,3 +1913,39 @@ P0-02A 新增收入/画廊调整字段后，`createRevenue()` 和 `createGallery
 - 返回 `pdfUrl` 为同名中文 PDF 的 URL 编码路径。
 - 下载测试 PDF 返回 200，大小约 18KB。
 - 烟测后已清理测试支出、PDF 记录和远端测试 PDF 文件。
+
+---
+
+## 2026-07-31 支出记录模块 P3：票据图片与报销 PDF 留存清理
+
+**背景**
+
+P0-P2 已完成运营支出记录、票据图片上传和报销 PDF 生成。按照需求，报销 PDF 生成后，对应图片只保留 60 天，PDF 文件只保留 365 天，以控制服务器存储空间。
+
+**本次改动**
+
+- 后端新增支出票据与报销 PDF 留存清理任务。
+- 默认留存规则：
+  - `expense_attachments` 图片附件：60 天。
+  - `expense_reimbursements` 报销 PDF：365 天。
+- 支持环境变量调整：
+  - `EXPENSE_IMAGE_RETENTION_DAYS`
+  - `EXPENSE_PDF_RETENTION_DAYS`
+- API 启动 60 秒后自动执行一次清理，之后每 24 小时执行一次。
+- 每次最多清理 500 条图片附件、200 条 PDF，避免一次性大批量删除影响服务。
+- 过期图片：删除对应文件和 `expense_attachments` 记录。
+- 过期 PDF：删除对应 PDF 文件和 `expense_reimbursements` 记录。
+- 不删除原始 `expense` 支出记录，运营支出账目长期保留。
+- 新增只读 dry-run 接口：`GET /rest/v1/expense_artifacts/retention?dryRun=true`，用于查看候选清理数量，不执行删除。
+- 修复中文 PDF URL 到文件路径的解码逻辑，确保中文文件名 PDF 也能被清理任务找到。
+
+**验证**
+
+- `node --check server.js` 通过。
+- 代码扫描确认清理常量、dry-run 路由、每日调度、中文 URL 解码均已存在。
+
+**风险与边界**
+
+- dry-run 接口只读；实际删除只由服务端定时任务执行。
+- 留存清理会删除附件/PDF 记录，避免前端留下不可打开的死链接。
+- 本次不清理原始支出记录，也不清理画廊作品图片等其他上传文件。

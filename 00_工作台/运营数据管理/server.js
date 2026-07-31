@@ -17,6 +17,9 @@ try { fs.mkdirSync(EXPENSE_PDF_DIR, { recursive: true }); } catch (e) {}
 const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;  // 5MB
 const PDF_FONT_PATH = process.env.PDF_FONT_PATH || '';
+const EXPENSE_IMAGE_RETENTION_DAYS = parseInt(process.env.EXPENSE_IMAGE_RETENTION_DAYS || '60', 10);
+const EXPENSE_PDF_RETENTION_DAYS = parseInt(process.env.EXPENSE_PDF_RETENTION_DAYS || '365', 10);
+const RETENTION_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const DB_HOST = process.env.DB_HOST || '127.0.0.1';
 const DB_PASS = process.env.DB_PASS || process.env.DB_PASSWORD;
@@ -182,7 +185,8 @@ function getPdfFontPath() {
 
 function uploadUrlToPath(fileUrl) {
   if (!fileUrl || !fileUrl.startsWith('/uploads/')) return '';
-  const rel = fileUrl.replace(/^\/uploads\/+/, '').replace(/\\/g, '/');
+  let rel = fileUrl.replace(/^\/uploads\/+/, '').replace(/\\/g, '/');
+  try { rel = decodeURIComponent(rel); } catch {}
   const full = path.resolve(UPLOAD_DIR, rel);
   const root = path.resolve(UPLOAD_DIR);
   if (!full.startsWith(root)) return '';
@@ -820,6 +824,96 @@ function drawAttachmentNotice(doc, attachment, x, y, w, h) {
   doc.fillColor('#2563eb').text(attachment.file_url || '-', x + 16, y + 48, { width: w - 32, underline: true });
 }
 
+async function cleanupExpenseArtifacts(options = {}) {
+  const dryRun = options.dryRun !== false;
+  const imageDays = Number.isFinite(options.imageDays) ? options.imageDays : EXPENSE_IMAGE_RETENTION_DAYS;
+  const pdfDays = Number.isFinite(options.pdfDays) ? options.pdfDays : EXPENSE_PDF_RETENTION_DAYS;
+  const result = {
+    dryRun,
+    imageRetentionDays: imageDays,
+    pdfRetentionDays: pdfDays,
+    imageCandidates: 0,
+    pdfCandidates: 0,
+    imageRowsDeleted: 0,
+    pdfRowsDeleted: 0,
+    filesDeleted: 0,
+    filesMissing: 0,
+    fileErrors: []
+  };
+
+  const imageRows = await pool.query(
+    `SELECT id, file_url
+       FROM expense_attachments
+      WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
+      ORDER BY created_at ASC
+      LIMIT 500`,
+    [imageDays]
+  );
+  result.imageCandidates = imageRows.rows.length;
+
+  const pdfRows = await pool.query(
+    `SELECT id, pdf_url
+       FROM expense_reimbursements
+      WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
+      ORDER BY created_at ASC
+      LIMIT 200`,
+    [pdfDays]
+  );
+  result.pdfCandidates = pdfRows.rows.length;
+
+  if (dryRun) return result;
+
+  const deleteFile = fileUrl => {
+    const filePath = uploadUrlToPath(fileUrl || '');
+    if (!filePath) return;
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        result.filesDeleted += 1;
+      } else {
+        result.filesMissing += 1;
+      }
+    } catch (e) {
+      result.fileErrors.push({ fileUrl, message: e.message });
+    }
+  };
+
+  for (const row of imageRows.rows) deleteFile(row.file_url);
+  for (const row of pdfRows.rows) deleteFile(row.pdf_url);
+
+  if (imageRows.rows.length) {
+    const ids = imageRows.rows.map(r => r.id);
+    const deleted = await pool.query(`DELETE FROM expense_attachments WHERE id = ANY($1::text[])`, [ids]);
+    result.imageRowsDeleted = deleted.rowCount || 0;
+  }
+  if (pdfRows.rows.length) {
+    const ids = pdfRows.rows.map(r => r.id);
+    const deleted = await pool.query(`DELETE FROM expense_reimbursements WHERE id = ANY($1::text[])`, [ids]);
+    result.pdfRowsDeleted = deleted.rowCount || 0;
+  }
+
+  console.log('[expense-retention]', JSON.stringify(result));
+  return result;
+}
+
+function handleExpenseArtifactRetention(req, res, query) {
+  const dryRun = query.dryRun !== 'false';
+  if (!dryRun) return sendError(res, 403, '该接口只支持 dryRun=true；实际清理由服务器定时任务执行');
+  cleanupExpenseArtifacts({ dryRun: true })
+    .then(result => sendJSON(res, 200, result))
+    .catch(e => sendError(res, 500, '留存清理检查失败：' + e.message));
+}
+
+function scheduleExpenseArtifactRetention() {
+  const run = () => {
+    cleanupExpenseArtifacts({ dryRun: false }).catch(e => {
+      console.error('[expense-retention] cleanup failed:', e.message);
+    });
+  };
+  setTimeout(run, 60 * 1000);
+  setInterval(run, RETENTION_CLEANUP_INTERVAL_MS);
+}
+
 // --- REST API ---
 
 async function handleREST(req, res, urlInfo) {
@@ -1079,6 +1173,8 @@ const server = http.createServer((req, res) => {
       handleExpenseAttachmentUpload(req, res, urlInfo.query);
     } else if (parts[2] === 'expense_reimbursements' && parts[3] === 'generate' && req.method === 'POST') {
       handleExpensePdfGenerate(req, res);
+    } else if (parts[2] === 'expense_artifacts' && parts[3] === 'retention' && req.method === 'GET') {
+      handleExpenseArtifactRetention(req, res, urlInfo.query);
     } else {
       handleREST(req, res, urlInfo);
     }
@@ -1089,4 +1185,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('AIWEI API server running on port ' + PORT);
+  scheduleExpenseArtifactRetention();
 });
