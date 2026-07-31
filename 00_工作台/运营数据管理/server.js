@@ -193,6 +193,38 @@ function formatMoney(n) {
   return Number(n || 0).toFixed(2);
 }
 
+function beijingDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date).reduce((acc, p) => {
+    acc[p.type] = p.value;
+    return acc;
+  }, {});
+  return `${parts.year}${parts.month}${parts.day}`;
+}
+
+async function nextExpensePdfTitle() {
+  const dateKey = beijingDateKey();
+  const prefix = `运营支出报销凭证${dateKey}`;
+  const result = await pool.query(
+    `SELECT title
+       FROM expense_reimbursements
+      WHERE title LIKE $1
+      ORDER BY title DESC
+      LIMIT 1`,
+    [prefix + '%']
+  );
+  let nextNo = 1;
+  const lastTitle = result.rows[0]?.title || '';
+  const m = lastTitle.match(/(\d{3})$/);
+  if (m) nextNo = parseInt(m[1], 10) + 1;
+  if (nextNo > 999) throw new Error(`当天报销 PDF 编号已超过 999：${dateKey}`);
+  return prefix + String(nextNo).padStart(3, '0');
+}
+
 // camelCase to snake_case (递归支持数组)
 function toSnake(obj) {
   if (Array.isArray(obj)) return obj.map(v => toSnake(v));
@@ -575,13 +607,13 @@ async function handleExpensePdfGenerate(req, res) {
       }, {});
 
       const id = 'pdf_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
-      const filename = id + '.pdf';
+      const title = await nextExpensePdfTitle();
+      const filename = title + '.pdf';
       const outputPath = path.join(EXPENSE_PDF_DIR, filename);
-      await generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, body);
+      await generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, { ...body, title });
       const stat = fs.statSync(outputPath);
-      const pdfUrl = '/uploads/expense-pdfs/' + filename;
+      const pdfUrl = '/uploads/expense-pdfs/' + encodeURIComponent(filename);
       const totalAmount = expenses.reduce((s, r) => s + (+r.amount || 0), 0);
-      const title = body.title || `运营支出报销凭证包 ${new Date().toISOString().slice(0, 10)}`;
       const generatedBy = body.generatedBy || '';
 
       const saved = await pool.query(
