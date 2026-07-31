@@ -31,6 +31,16 @@ const MODELS = {
   ]
 };
 
+const EXPENSE_RECORD_TYPES = {
+  operational: '运营支出',
+  legacyExpense: '备用金支出',
+  legacyBorrow: '备用金借入'
+};
+
+function isOperationalExpenseRecord(record = {}) {
+  return (record.type || EXPENSE_RECORD_TYPES.operational) !== EXPENSE_RECORD_TYPES.legacyBorrow;
+}
+
 function createId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
@@ -72,6 +82,11 @@ function createRevenue(data = {}) {
     projectName: data.projectName || '',
     handler: data.handler || '',
     notes: data.notes || '',
+    status: data.status || '正常',
+    refundAmount: +data.refundAmount || +data.refund_amount || 0,
+    adjustedAt: data.adjustedAt || data.adjusted_at || null,
+    adjustedBy: data.adjustedBy || data.adjusted_by || '',
+    adjustmentReason: data.adjustmentReason || data.adjustment_reason || '',
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
@@ -104,7 +119,7 @@ function createExpense(data = {}) {
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
-    type: data.type || '备用金支出',
+    type: isOperationalExpenseRecord(data) ? EXPENSE_RECORD_TYPES.operational : EXPENSE_RECORD_TYPES.legacyBorrow,
     project: data.project || '运营',
     category: data.category || '材料',
     amount: +data.amount || 0,
@@ -112,8 +127,23 @@ function createExpense(data = {}) {
     handler: data.handler || '',
     invoiceStatus: data.invoiceStatus || '待补',
     receiptStatus: data.receiptStatus || '待补',
+    reimbursementStatus: data.reimbursementStatus || '未报销',
     relatedActivity: data.relatedActivity || '',
     createdAt: data.createdAt || new Date().toISOString()
+  };
+}
+
+function createExpenseAttachment(data = {}) {
+  return {
+    id: data.id || createId(),
+    expenseId: data.expenseId || data.expense_id || '',
+    attachmentType: data.attachmentType || data.attachment_type || 'invoice',
+    fileUrl: data.fileUrl || data.file_url || '',
+    originalName: data.originalName || data.original_name || '',
+    fileSize: +data.fileSize || +data.file_size || 0,
+    mimeType: data.mimeType || data.mime_type || '',
+    uploadedBy: data.uploadedBy || data.uploaded_by || Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
   };
 }
 
@@ -190,12 +220,76 @@ function createGallerySale(data = {}) {
     handler: data.handler || '',
     notes: data.notes || '',
     saleQuantity: +data.saleQuantity || +data.sale_quantity || 1,
+    refundAmount: +data.refundAmount || +data.refund_amount || 0,
+    adjustedAt: data.adjustedAt || data.adjusted_at || null,
+    adjustedBy: data.adjustedBy || data.adjusted_by || '',
+    adjustmentReason: data.adjustmentReason || data.adjustment_reason || '',
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
 
 function calcGalleryNet(price, commission) {
   return (+price || 0) - (+commission || 0);
+}
+
+function createTransactionAdjustment(data = {}) {
+  return {
+    id: data.id || createId(),
+    targetType: data.targetType || data.target_type || '',
+    targetId: data.targetId || data.target_id || '',
+    action: data.action || '',
+    amount: +data.amount || 0,
+    reason: data.reason || '',
+    operatorId: data.operatorId || data.operator_id || Auth.currentUser?.id || '',
+    operatorName: data.operatorName || data.operator_name || Auth.currentUser?.displayName || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
+  };
+}
+
+function createCashMovement(data = {}) {
+  return {
+    id: data.id || createId(),
+    date: data.date || todayStr(),
+    type: data.type || '',
+    amount: +data.amount || 0,
+    sourceType: data.sourceType || data.source_type || '',
+    sourceId: data.sourceId || data.source_id || '',
+    accountChannel: data.accountChannel || data.account_channel || '',
+    operatorId: data.operatorId || data.operator_id || Auth.currentUser?.id || '',
+    operatorName: data.operatorName || data.operator_name || Auth.currentUser?.displayName || '',
+    reason: data.reason || '',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
+  };
+}
+
+function createDailyClosing(data = {}) {
+  const systemNetAmount = +data.systemNetAmount || +data.system_net_amount || 0;
+  const confirmedAmount = +data.confirmedAmount || +data.confirmed_amount || 0;
+  const differenceAmount = data.differenceAmount !== undefined
+    ? +data.differenceAmount
+    : data.difference_amount !== undefined
+      ? +data.difference_amount
+      : confirmedAmount - systemNetAmount;
+  return {
+    id: data.id || createId(),
+    date: data.date || todayStr(),
+    systemNetAmount,
+    confirmedAmount,
+    differenceAmount,
+    revenueSummary: data.revenueSummary || data.revenue_summary || {},
+    paymentSummary: data.paymentSummary || data.payment_summary || {},
+    expenseSummary: data.expenseSummary || data.expense_summary || {},
+    adjustmentSummary: data.adjustmentSummary || data.adjustment_summary || {},
+    cashSummary: data.cashSummary || data.cash_summary || {},
+    closerId: data.closerId || data.closer_id || Auth.currentUser?.id || '',
+    closerName: data.closerName || data.closer_name || Auth.currentUser?.displayName || '',
+    reviewerName: data.reviewerName || data.reviewer_name || '',
+    status: data.status || '草稿',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+    updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()
+  };
 }
 
 // 文创产品

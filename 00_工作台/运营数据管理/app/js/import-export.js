@@ -44,8 +44,9 @@ const ImportExport = {
           return [r.date, r.ticketQty||0, r.ticketAmount||0, r.coffeeQty||0, r.coffeeAmount||0, r.workshopAmount||0, workshopDetail, retailAmt, retailDetail, r.venueAmount||0, r.otherAmount||0, r.otherDesc||'', r.cashAmount||0, r.accountAmount||0, r.handler||'', r.notes||'', r.createdAt||''];
         });
       } else if (type === 'expense') {
-      headers = ['日期','类型','项目','类别','金额','内容说明','经手人','发票状态','凭证状态','关联活动','创建时间'];
-      rows = records.map(r => [r.date, r.type, r.project, r.category, r.amount, r.description||'', r.handler||'', r.invoiceStatus, r.receiptStatus, r.relatedActivity||'', r.createdAt||'']);
+      const expenseRecords = records.filter(isOperationalExpenseRecord);
+      headers = ['日期','项目','类别','金额','内容说明','经手人','发票状态','凭证状态','报销状态','关联活动','创建时间'];
+      rows = expenseRecords.map(r => [r.date, r.project, r.category, r.amount, r.description||'', r.handler||'', r.invoiceStatus, r.receiptStatus, r.reimbursementStatus || '未报销', r.relatedActivity||'', r.createdAt||'']);
     } else if (type === 'space') {
       headers = ['日期','结束日期','空间','项目名称','类型','客户','状态','应收金额','预计到账日','到账明细','备注','创建时间'];
       rows = records.map(r => {
@@ -186,10 +187,12 @@ const ImportExport = {
           projectName: record['关联项目'] || '', handler: record['经手人'] || '', notes: record['备注'] || ''
         }));
       } else if (type === 'expense') {
+        if (record['类型'] === '备用金借入') continue;
         records.push(createExpense({
-          date: record['日期'] || '', type: record['类型'] || '备用金支出', project: record['项目'] || '运营',
+          date: record['日期'] || '', project: record['项目'] || '运营',
           category: record['类别'] || '材料', amount: +record['金额'] || 0, description: record['内容说明'] || '',
           handler: record['经手人'] || '', invoiceStatus: record['发票状态'] || '待补', receiptStatus: record['凭证状态'] || '待补',
+          reimbursementStatus: record['报销状态'] || '未报销',
           relatedActivity: record['关联活动'] || ''
         }));
       } else if (type === 'space') {

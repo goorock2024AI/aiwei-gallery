@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>艾维美术馆 · 运营数据管理</title>
-<link rel="stylesheet" href="css/style.css?v=responsive-20260721c">
+<title>运营数据管理</title>
+<link rel="stylesheet" href="css/style.css?v=expense-p1-attachments-20260731">
 </head>
 <body>
 <div id="login-overlay" class="login-overlay">
   <div class="login-card">
-    <div class="login-logo">艾维美术馆</div>
-    <p class="login-subtitle">运营数据管理系统</p>
+    <div class="login-logo">运营数据管理</div>
+    <p class="login-subtitle">数据管理系统</p>
     <form id="login-form">
       <div class="form-group"><label>用户名</label><input type="text" id="login-username" autocomplete="username" placeholder="请输入用户名"></div>
       <div class="form-group"><label>密码</label><input type="password" id="login-password" autocomplete="current-password" placeholder="请输入密码"></div>
@@ -36,13 +36,14 @@
 <div id="app" style="display:none">
   <aside id="sidebar">
     <div class="sidebar-header">
-      <h1>艾维美术馆</h1>
-      <span class="sidebar-subtitle">运营数据管理</span>
+      <h1>运营数据管理</h1>
+      <span class="sidebar-subtitle">数据看板与经营记录</span>
     </div>
     <nav id="sidebar-nav">
       <button class="tab-btn active" data-tab="revenue">💰 收银台</button>
       <button class="tab-btn" data-tab="gallery">🖼️ 画廊销售</button>
       <button class="tab-btn" data-tab="space">🏛 空间使用</button>
+      <button class="tab-btn" data-tab="daily-closing">📋 日结报表</button>
       <button class="tab-btn" data-tab="reports">📊 数据看板</button>
       <button class="tab-btn" data-tab="expense">🧾 支出记录</button>
       <button class="tab-btn" data-tab="project-list">📋 项目清单</button>
@@ -71,6 +72,7 @@
       <div id="page-expense" class="page"></div>
       <div id="page-gallery" class="page"></div>
       <div id="page-space" class="page"></div>
+      <div id="page-daily-closing" class="page"></div>
       <div id="page-project-list" class="page"></div>
       <div id="page-reports" class="page"></div>
       <div id="page-manage" class="page"></div>
@@ -85,14 +87,14 @@
 <div id="toast-container"></div>
 <script src="lib/xlsx.full.min.js"></script>
 <script src="lib/chart.umd.min.js"></script>
-	<script src="js/supabase-config.js?v=0716-batch-deploy"></script>
-<script src="js/models.js?v=0716-batch-deploy"></script>
-<script src="js/store.js?v=0716-batch-deploy"></script>
-<script src="js/ui.js?v=0716-batch-deploy"></script>
-<script src="js/charts.js?v=rev-overview-date-20260719"></script>
-<script src="js/import-export.js?v=0716-batch-deploy"></script>
-<script src="js/auth.js?v=hashfix-20260721"></script>
+	<script src="js/supabase-config.js?v=expense-p2-pdf-20260731"></script>
+<script src="js/models.js?v=expense-p2-pdf-20260731"></script>
+<script src="js/store.js?v=expense-p2-pdf-20260731"></script>
+<script src="js/ui.js?v=expense-p2-pdf-20260731"></script>
+<script src="js/charts.js?v=expense-p0-ops-ledger-20260731"></script>
+<script src="js/import-export.js?v=expense-p0-ops-ledger-20260731"></script>
+<script src="js/auth.js?v=p0-02b-daily-closing-20260725"></script>
 <script src="js/operation-logger.js?v=0716-batch-deploy"></script>
-<script src="js/app.js?v=responsive-20260721b"></script>
+<script src="js/app.js?v=p0-02b-daily-closing-20260725"></script>
 </body>
 </html>

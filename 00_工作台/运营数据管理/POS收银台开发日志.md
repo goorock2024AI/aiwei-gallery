@@ -1226,3 +1226,584 @@ v1.3.1 → **v1.3.2**。理由（与 v1.3.1 同款）：
 | `VERSION` | 1 字节（1.3.2）|
 | `00_工作台/工作日志/202607-工作日志.md` | +24 行（v1.3.2 部署段 + git 节）|
 | **未改**：`server.js` / `nginx.conf` / `docker-compose.yml` / DB schema / `ui.js` / 其他 6 个图表 |
+---
+
+## 2026-07-25 P0-01：统一收入事实口径本地最小实现
+
+**背景**
+
+按照 P0 启动任务卡，先执行 RV-P0-01“统一收入事实口径方案与最小实现”。目标是让后续日结、首页、数据报表使用同一套收入聚合口径，避免 POS、画廊、空间收入在不同页面各算各的。
+
+**本轮改动**
+
+- `app/sql/init.sql`：新增只读视图 `revenue_facts`，统一聚合 POS 收入、画廊净收入、空间实际到款。
+- `sql/20260725_revenue_facts_view.sql`：新增独立 SQL 脚本，用于现有 PostgreSQL 数据库创建视图；回滚语句为 `DROP VIEW IF EXISTS revenue_facts;`。
+- `server.js`：将 `revenue_facts` 加入 REST `tableMap`，并加入 `READ_ONLY_TABLES`，禁止 POST/PATCH/DELETE；补 `net_amount` 数值转换。
+- `app/js/supabase-config.js`：新增 `revenueFacts: 'revenue_facts'`。
+- `app/js/charts.js`：数据报表页“收入总览”优先读取 `revenueFacts`；目标库未创建视图时，临时用旧 `revenue`、`gallery`、`space` 数据构造同形事实口径作为兼容兜底。
+- `app/index.html`：更新 `supabase-config.js` 与 `charts.js` cache-bust token 为 `revenue-facts-20260725`。
+- `P0启动任务卡-20260725.md`：补执行记录、验证记录和未完成验证项。
+
+**验证**
+
+- `node --check 00_工作台/运营数据管理/server.js`：通过。
+- `node --check 00_工作台/运营数据管理/app/js/charts.js`：通过。
+- 本地预览：
+  - `GET http://localhost:3000/` 返回 200。
+  - `GET /js/charts.js?v=revenue-facts-20260725` 返回 200。
+  - `GET /js/supabase-config.js?v=revenue-facts-20260725` 返回 200。
+  - `GET /rest/v1/revenue?limit=1` 返回 200。
+  - `GET /rest/v1/revenue_facts?limit=1` 返回 404，符合尚未创建生产视图的预期。
+
+**未完成**
+
+- 本机未安装 `psql`，尚未做 PostgreSQL 视图语法执行校验。
+- 未连接生产库创建 `revenue_facts` 视图。
+- 未部署到腾讯云。
+- 未做登录后的浏览器业务页面实测。
+
+**上线边界**
+
+生产启用前必须先备份数据库或至少导出受影响表，再执行 `sql/20260725_revenue_facts_view.sql`。执行后再验证 `/rest/v1/revenue_facts?limit=1` 返回 200，并复核一天收入合计与现有收入总览一致或说明差异。
+### 2026-07-25 生产库视图创建前操作
+
+- 已连接生产库，只读确认 PostgreSQL 17.10，数据库容器 healthy。
+- 已确认创建前相关表记录数：`revenue=419`、`gallery_sales=5`、`space_usage=4`、`space_payments=5`。
+- 已复核每日全库备份 `/opt/aiwei/backups/postgres/aiwei-postgres-20260725-133613.dump`：SHA256 通过，容器内 `pg_restore --list` 通过。
+- 已创建专项备份 `/opt/aiwei/backups/prechange/revenue-facts-prechange-20260725-152505.dump`，覆盖 `revenue`、`gallery_sales`、`space_usage`、`space_payments` 四表。
+- 已下载专项备份到本机 `local-backups/prechange/revenue-facts-prechange-20260725-152505.dump`，本地 SHA256 校验通过。
+- 已用生产库事务回滚预演 `revenue_facts` SQL：`CREATE VIEW` 成功，临时查询得到 561 条收入事实，最近样例可读；随后 `ROLLBACK`。
+- 已确认预演后生产库未留下 `revenue_facts` 视图。
+
+**结论**：正式创建视图的前置备份和 SQL 预演已完成；下一步若获确认，可执行正式 `CREATE OR REPLACE VIEW revenue_facts AS ...`。
+
+### 2026-07-25 正式创建生产库 `revenue_facts`
+
+- 已执行 `sql/20260725_revenue_facts_view.sql` 到生产 PostgreSQL。
+- `psql` 返回 `CREATE VIEW`。
+- 数据库内确认 `revenue_facts` 已存在，类型为 `VIEW`。
+- `SELECT COUNT(*) FROM revenue_facts` 返回 `561`。
+- 最近样例可读，包含 2026-07-25 的咖啡、文创收入事实。
+- 分类汇总可读，当前 9 类：门票、咖啡套票、咖啡、工坊、文创、场地、场地旧口径、画廊、其他。
+- HTTP 验证 `GET /rest/v1/revenue_facts?limit=1` 仍返回 404，原因是生产 `server.js` 尚未部署 `revenue_facts` 的 `tableMap` 映射。
+
+**结论**：数据库视图已正式创建完成；下一步需要部署后端映射与前端静态文件，才能让浏览器报表直接读取新口径。
+
+### 2026-07-25 远端部署完成
+
+- 已上传 `server.js` 到 `/opt/aiwei/server.js`。
+- 已执行 `docker compose build api && docker compose up -d api`，API 容器重建并启动。
+- 已上传 `app/index.html`、`app/js/charts.js`、`app/js/supabase-config.js`、`app/sql/init.sql`。
+- 因 SSH 短时限流，`charts.js`、`supabase-config.js`、`init.sql` 采用拉开间隔逐个重传并验证 mtime。
+- HTTP 验证：
+  - `GET /rest/v1/revenue_facts?limit=1` 返回 200。
+  - `GET /rest/v1/revenue_facts?limit=5000` 返回 200，共 561 条。
+  - `GET /rest/v1/revenue?limit=1` 返回 200。
+  - `GET /rest/v1/space_usage_with_payments?limit=1` 返回 200。
+  - `GET /js/charts.js?v=revenue-facts-20260725` 返回 200，内容含 `revenueFacts`。
+  - `GET /js/supabase-config.js?v=revenue-facts-20260725` 返回 200，内容含 `revenue_facts`。
+  - `GET /` 返回 200，入口 HTML 含 `revenue-facts-20260725` cache-bust token。
+- API 日志显示 `AIWEI API server running on port 3000`。
+
+**结论**：`RV-P0-01` 已完成远端部署；浏览器侧数据报表“收入总览”已具备读取统一收入事实口径的线上条件。
+
+---
+
+## 2026-07-25 P0-02A：退款/作废与调整流水本地实现
+
+**背景**
+
+进入 P0-02 后，先处理财务交易的核心风险：退款、作废不能继续依赖物理删除或直接改原始金额。最小原则是保留原交易，新增状态与调整流水，让报表通过统一事实口径扣减退款。
+
+**本轮改动**
+
+- `app/sql/init.sql`：新增收入/画廊销售调整字段；新增 `transaction_adjustments` 表；更新 `revenue_facts`，排除作废交易，并把退款/部分退款作为负数事实。
+- `sql/20260725_p0_02_transaction_adjustments.sql`：新增幂等迁移脚本，供生产执行前审阅和预演。
+- `server.js`：补全收入、画廊销售、交易调整流水的 REST 白名单；新增 `transaction_adjustments` 表映射；补 `refund_amount` 数值转换。
+- `app/js/supabase-config.js`：新增 `transactionAdjustments` 表名映射。
+- `app/js/models.js`：收入、画廊销售模型新增状态/退款/调整审计字段；新增 `createTransactionAdjustment`。
+- `app/js/ui.js`：POS 收入列表和画廊销售列表新增状态、净额、管理员专用退款/作废入口；全额画廊退款/作废会回滚作品已售数量。
+- 已发生退款/作废的交易不再允许直接编辑原交易，后续只能继续通过调整动作处理。
+- `app/index.html`：更新 `supabase-config.js`、`models.js`、`ui.js` cache-bust token 为 `p0-02-adjustments-20260725`。
+
+**验证**
+
+- `node --check 00_工作台/运营数据管理/server.js`：通过。
+- `node --check 00_工作台/运营数据管理/app/js/models.js`：通过。
+- `node --check 00_工作台/运营数据管理/app/js/ui.js`：通过。
+- `rg transaction_adjustments/refund_amount/adjustment_reason`：初始化 SQL、迁移 SQL、后端白名单、前端表映射、模型、UI 均命中。
+
+**未完成**
+
+- 尚未执行生产库迁移。
+- 尚未远端部署。
+- 尚未做浏览器登录后的真实退款/作废演练。
+- 日结页面留到 P0-02B，在调整流水可用后接入。
+
+**上线边界**
+
+生产启用前必须先做专项备份，并获得业主确认。建议顺序：备份 -> 事务预演 SQL -> 正式执行 `sql/20260725_p0_02_transaction_adjustments.sql` -> 部署后端与静态资源 -> 验证 `/rest/v1/transaction_adjustments`、`/rest/v1/revenue_facts` 和页面操作。
+
+### 2026-07-25 P0-02A 生产化完成
+
+- 已连接生产环境，只读确认三容器运行正常：`aiwei-nginx-1`、`aiwei-api-1`、`aiwei-db-1`。
+- 迁移前记录数：`revenue=423`、`gallery_sales=5`、`artworks=17`、`revenue_facts=567`。
+- 已创建专项备份：`/opt/aiwei/backups/prechange/p0-02-adjustments-prechange-20260725-163850.dump`。
+- 远端备份 SHA256：`d15d1bedccaacaa6ce3b6f6f02f5feb0ea074d64d671e8bd9d75bb6f2cdd703c`；`pg_restore --list` 通过。
+- 已下载到本机：`local-backups/prechange/p0-02-adjustments-prechange-20260725-163850.dump`，本机 SHA256 与远端一致。
+- 已执行 ROLLBACK 版事务预演：建列、建表、建索引、重建 `revenue_facts` 均成功；事务内 `transaction_adjustments=0`、`revenue_facts=567`；回滚后确认 `transaction_adjustments` 未留库。
+- 已正式执行 `/tmp/p0_02_transaction_adjustments.sql` 到生产库，返回 `COMMIT`；`transaction_adjustments` 表创建完成。
+- 已上传 6 个生产文件：
+  - `/opt/aiwei/server.js`
+  - `/opt/aiwei/app/index.html`
+  - `/opt/aiwei/app/js/ui.js`
+  - `/opt/aiwei/app/js/models.js`
+  - `/opt/aiwei/app/js/supabase-config.js`
+  - `/opt/aiwei/app/sql/init.sql`
+- 已重建 API：`docker compose build api && docker compose up -d api`；日志显示 `AIWEI API server running on port 3000`。
+- HTTP 验证：
+  - `GET /` -> 200，4958 bytes。
+  - `GET /js/ui.js?v=p0-02-adjustments-20260725` -> 200，206010 bytes。
+  - `GET /js/models.js?v=p0-02-adjustments-20260725` -> 200，10869 bytes。
+  - `GET /js/supabase-config.js?v=p0-02-adjustments-20260725` -> 200，804 bytes。
+  - `GET /rest/v1/transaction_adjustments?limit=1` -> 200。
+  - `GET /rest/v1/revenue_facts?limit=1` -> 200。
+  - `GET /rest/v1/revenue?limit=1` -> 200。
+- 写入清理验证：用 `codex_p0_02_smoke_*` 写入一条 action=`void`、amount=`0` 的调整流水，POST 成功；DELETE 后 GET=0，无测试残留。
+- 生产库复核：`transaction_adjustments=0`；`revenue_facts=568`。较预演多 1 行来自生产 `revenue` 在 16:42 左右新增的一笔文创收入，不是 smoke test 造成。
+
+**结论**：`RV-P0-02A` 已完成生产库迁移与远端部署。退款/作废调整流水、管理员入口、净额口径和 API 映射已在线上具备条件。下一步进入 P0-02B：日结页面/日结报表。
+
+---
+
+## 2026-07-25 P0-02B：日结报表最小可用实现
+
+**背景**
+
+在 P0-02A 已完成退款/作废调整流水后，进入 P0-02B，把每日经营数据汇总为可关账、可复核、可留痕的日结报表。第一版不做复杂审批流，优先保证每天能核对系统净收入、实收金额和差异说明。
+
+**本轮改动**
+
+- `app/sql/init.sql`：新增 `daily_closings` 表，按 `date` 唯一，保存日结确认摘要。
+- `sql/20260725_p0_02b_daily_closings.sql`：新增生产迁移脚本。
+- `server.js`：新增 `daily_closings` 白名单、表映射、JSONB 摘要字段和数值字段转换。
+- `app/js/supabase-config.js`：新增 `dailyClosings` 表名映射。
+- `app/js/models.js`：新增 `createDailyClosing`。
+- `app/index.html`：新增侧边栏“日结报表”入口、页面容器，并更新相关 JS cache-bust token。
+- `app/js/auth.js`：日结页面权限为 `admin/editor`。
+- `app/js/app.js`：新增 `daily-closing` 页面路由。
+- `app/js/ui.js`：新增日结页面，汇总收入事实、收款方式、支出摘要、调整流水，并支持保存日结确认单。
+
+**验证**
+
+- `node --check 00_工作台/运营数据管理/server.js`：通过。
+- `node --check 00_工作台/运营数据管理/app/js/models.js`：通过。
+- `node --check 00_工作台/运营数据管理/app/js/ui.js`：通过。
+- `node --check 00_工作台/运营数据管理/app/js/app.js`：通过。
+- `node --check 00_工作台/运营数据管理/app/js/auth.js`：通过。
+- `rg daily_closings/dailyClosings/renderDailyClosingPage`：初始化 SQL、迁移 SQL、后端白名单、前端表映射、模型、导航、权限和 UI 均命中。
+
+**上线边界**
+
+生产启用前必须先做专项备份，至少覆盖 `daily_closings` 目标表状态、`revenue`、`expense`、`transaction_adjustments`、`revenue_facts`。执行顺序：备份 -> ROLLBACK 事务预演 -> 正式执行 `sql/20260725_p0_02b_daily_closings.sql` -> 部署后端和静态资源 -> 验证 `/rest/v1/daily_closings` 读写清理、页面静态资源和核心事实口径。
+
+### 2026-07-26 P0-02B 生产化完成
+
+- 已连接生产环境，只读确认三容器运行正常。
+- 迁移前记录数：`revenue=426`、`expense=9`、`transaction_adjustments=0`、`revenue_facts=570`；`daily_closings` 不存在。
+- 已创建专项备份：`/opt/aiwei/backups/prechange/p0-02b-daily-closing-prechange-20260725-172434.dump`。
+- 远端备份 SHA256：`960d6ffe905c08bd16458deb247af6e30345d9ff55379dd9410fcda150e01329`；`pg_restore --list` 通过。
+- 已下载到本机：`local-backups/prechange/p0-02b-daily-closing-prechange-20260725-172434.dump`，本机 SHA256 与远端一致。
+- 已执行 ROLLBACK 版事务预演：`CREATE TABLE`、`CREATE INDEX`、`ALTER TABLE` 均成功；事务内 `daily_closings=0`；回滚后确认表未留库。
+- 已正式执行 `/tmp/p0_02b_daily_closings.sql` 到生产库，返回 `COMMIT`；`daily_closings` 表创建完成。
+- 部署过程中 SSH 曾在批量 scp 中断；2026-07-26 继续时复核发现 `server.js`、`index.html`、`ui.js`、`models.js` 已更新，`supabase-config.js`、`app.js`、`auth.js`、`init.sql` 仍为旧 mtime，因此从断点补传后重建 API。
+- 已上传/确认 8 个生产文件：
+  - `/opt/aiwei/server.js`
+  - `/opt/aiwei/app/index.html`
+  - `/opt/aiwei/app/js/ui.js`
+  - `/opt/aiwei/app/js/models.js`
+  - `/opt/aiwei/app/js/supabase-config.js`
+  - `/opt/aiwei/app/js/app.js`
+  - `/opt/aiwei/app/js/auth.js`
+  - `/opt/aiwei/app/sql/init.sql`
+- 已重建 API：`docker compose build api && docker compose up -d api`；日志显示 `AIWEI API server running on port 3000`。
+- 云端文件验证：
+  - `index.html` 含 `data-tab="daily-closing"`、`page-daily-closing` 和 `p0-02b-daily-closing-20260725` token。
+  - `supabase-config.js` 含 `dailyClosings: 'daily_closings'`。
+  - `app.js` 含 `case 'daily-closing': await UI.renderDailyClosingPage()`。
+  - `auth.js` 含 `'daily-closing': ['admin', 'editor']`。
+- HTTP 验证：
+  - `GET /` -> 200。
+  - `GET /js/ui.js?v=p0-02b-daily-closing-20260725` -> 200。
+  - `GET /js/models.js?v=p0-02b-daily-closing-20260725` -> 200。
+  - `GET /js/supabase-config.js?v=p0-02b-daily-closing-20260725` -> 200。
+  - `GET /js/app.js?v=p0-02b-daily-closing-20260725` -> 200。
+  - `GET /js/auth.js?v=p0-02b-daily-closing-20260725` -> 200。
+  - `GET /rest/v1/daily_closings?limit=1` -> 200。
+  - `GET /rest/v1/revenue_facts?limit=1` -> 200。
+- 写入清理验证：用 `codex_p0_02b_smoke_*` 写入一条 2099-12-31 的测试日结单，POST 成功；GET=1；DELETE 后 GET=0。
+- 生产库复核：`daily_closings=0`，无测试残留；`revenue_facts=571`，较迁移前增加来自线上真实业务继续录入。
+
+**结论**：`RV-P0-02B` 已完成生产库迁移与远端部署。线上已具备日结报表入口、日结确认表、日结保存 API 和收入事实口径读取能力。
+
+---
+
+## 2026-07-26 生产热修复：收银台写入 `adjusted_at=""` 报错
+
+**现象**
+
+收银台确认收款时报错：`invalid input syntax for type timestamp with time zone: ""`。页面同时出现“操作失败”和“保存失败”toast。
+
+**根因**
+
+P0-02A 新增收入/画廊调整字段后，`createRevenue()` 和 `createGallerySale()` 默认把 `adjustedAt` 设为 `''`。新增正常交易虽然没有调整动作，但前端仍会把 `adjustedAt: ""` 发给后端；后端转为 `adjusted_at=''` 后写入 PostgreSQL `TIMESTAMPTZ` 字段，触发类型错误。
+
+**修复**
+
+- `app/js/models.js`：`createRevenue()`、`createGallerySale()` 的 `adjustedAt` 默认值从 `''` 改为 `null`。
+- `server.js`：新增 `normalizeTimestamps(data)`，在 POST/PATCH 时把 `created_at`、`updated_at`、`adjusted_at`、`last_login_at` 的空字符串统一转为 `null`。
+- `app/index.html`：`models.js` cache-bust token 更新为 `timestamp-hotfix-20260726`。
+
+**部署**
+
+- 已上传 `/opt/aiwei/server.js` 并执行 `docker compose build api && docker compose up -d api`。
+- 已上传 `/opt/aiwei/app/js/models.js` 和 `/opt/aiwei/app/index.html`。
+- API 日志显示 `AIWEI API server running on port 3000`。
+
+**验证**
+
+- 本地语法：`node --check server.js`、`node --check app/js/models.js` 均通过。
+- 线上复现路径：直接 POST 一条收入记录到 `/rest/v1/revenue`，显式包含 `adjustedAt: ""`，写入成功。
+- 测试记录 ID：`codex_hotfix_revenue_*`，写入后已 DELETE 清理。
+- 生产库复核：`revenue where id like 'codex_hotfix_revenue_%'` 返回 0 行。
+- HTTP 验证：`GET /` 已包含 `models.js?v=timestamp-hotfix-20260726`；`GET /js/models.js?v=timestamp-hotfix-20260726` 内容中 `adjustedAt` 为 `null`。
+
+**结论**
+
+收银台写入错误已修复。后端兜底可兼容旧浏览器缓存发出的 `adjustedAt: ""`，前端刷新后也不再发送空时间字符串。
+
+---
+
+## 2026-07-26 生产热修复：新增支出缺少 `reimbursement_status` 字段
+
+**现象**
+
+新增支出记录时报错：`column "reimbursement_status" of relation "expense" does not exist`。
+
+**根因**
+
+前端和后端白名单已支持 `reimbursementStatus` / `reimbursement_status`，但生产库 `expense` 表尚未执行对应字段迁移，导致写入时 PostgreSQL 拒绝不存在的列。
+
+**生产前检查**
+
+- 只读确认生产 `expense` 表字段：缺少 `reimbursement_status`。
+- 迁移前 `expense` 记录数：9。
+- 已创建专项备份：`/opt/aiwei/backups/prechange/expense-reimbursement-status-prechange-20260726-125938.dump`。
+- 远端备份 SHA256：`618b4bf988e6262a8568ce1b635ca764c0f4fac11a67c7763cc75bb853b04e70`；`pg_restore --list` 通过。
+
+**修复**
+
+- 新增脚本：`sql/20260726_expense_reimbursement_status_hotfix.sql`。
+- 执行内容：
+  - `ALTER TABLE expense ADD COLUMN IF NOT EXISTS reimbursement_status TEXT DEFAULT '未报销';`
+  - 历史空值补为 `未报销`。
+- 生产执行结果：
+  - `ALTER TABLE` 成功。
+  - 当前 `expense` 9 条记录均为 `未报销`。
+
+**验证**
+
+- 通过线上 API `/rest/v1/expense` 写入一条测试支出，包含 `reimbursementStatus='未报销'`，POST 成功。
+- 测试记录 ID：`codex_hotfix_expense_*`，写入后已 DELETE 清理。
+- 新增只读验证脚本：`sql/20260726_expense_reimbursement_status_verify.sql`。
+- 生产库复核：`codex_hotfix_expense_%` 返回 0 行，无测试残留。
+
+**结论**
+
+新增支出记录错误已修复。生产 `expense` 表结构已与前端模型、后端白名单保持一致。
+---
+
+## 2026-07-28 柜台现金流水与存现金功能生产部署
+
+**背景**
+
+收银台需要把现金收款和“存现金”区分为两个口径：经营收入只在收款时确认一次，存现金仅表示资金从柜台转入账户，不能重复计入收入。
+
+**本次改动**
+
+- 新增 `cash_movements` 表，记录柜台现金流水。
+- `daily_closings` 新增 `cash_summary` 字段，用于保存日结现金摘要。
+- 收银台新增“柜台现金”统计和“存现金”动作。
+- POS 现金收款、现金退款、作废、删除会同步写入或冲销现金流水。
+- 画廊销售使用现金收款时，也纳入柜台现金流水。
+- 日结报表新增柜台现金期初、现金收款、存现金、现金退款/冲销、期末现金。
+- 存现金不写入 `revenue_facts`，不新增经营收入。
+
+**生产备份**
+
+- 备份文件：`/opt/aiwei/backups/prechange/cash-movements-prechange-20260728-171829.dump`
+- 本地副本：`local-backups/prechange/cash-movements-prechange-20260728-171829.dump`
+- SHA256：`7ab70ef9b6878652c4ef9d6388f34098c49446a43b777e3cee67e0b190cb5582`
+- 容器内 `pg_restore --list` 校验通过，清单 80 行。
+
+**迁移**
+
+- 执行脚本：`sql/20260728_cash_movements.sql`
+- 回滚预演：通过，最终 `ROLLBACK`，未留生产变更。
+- 正式执行：`COMMIT`。
+- 初始化结果：`cash_movements` 生成 23 条历史现金收入流水，余额 `553.50`。
+- `daily_closings.cash_summary` 字段已存在。
+
+**部署**
+
+- 上传 `/opt/aiwei/server.js`。
+- 上传 `/opt/aiwei/app/index.html`。
+- 上传 `/opt/aiwei/app/js/supabase-config.js`。
+- 上传 `/opt/aiwei/app/js/models.js`。
+- 上传 `/opt/aiwei/app/js/ui.js`。
+- 上传 `/opt/aiwei/app/sql/init.sql`。
+- 执行 `docker compose build api && docker compose up -d api`，API 容器重建并启动。
+
+**验证**
+
+- API 日志显示 `AIWEI API server running on port 3000`。
+- `GET http://122.51.56.50/` 返回 200，包含 `cash-movements-20260728` 缓存参数。
+- `GET /rest/v1/cash_movements?limit=1` 返回 200。
+- `GET /js/ui.js?v=cash-movements-20260728` 返回 200，包含 `_depositCounterCash` 和 `cashSummary`。
+- `GET /js/models.js?v=cash-movements-20260728` 返回 200，包含 `createCashMovement` 和 `cashSummary`。
+- `GET /js/supabase-config.js?v=cash-movements-20260728` 返回 200，包含 `cashMovements`。
+- 写入清理 smoke test：`POST /rest/v1/cash_movements` 成功，随后 `DELETE` 成功，复核 `codex_cash_smoke_%` 剩余 0 条。
+- 生产复核：`cash_movements` 当前 23 条，余额 `553.50`。
+
+**风险与边界**
+
+- 本次未把“存现金”纳入收入事实表，避免重复计收入。
+- 历史柜台现金余额由现有 `revenue.cash_amount` 初始化，真实柜台现金仍需要业务侧盘点确认；如有盘点差异，后续应通过管理员现金调整流水记录。
+- 本次未新增专门的现金盘点/调整 UI，仅完成现金收款、存现金、退款/作废冲销和日结展示闭环。
+
+---
+
+## 2026-07-28 柜台现金期初盘点调整
+
+**背景**
+
+业务确认：加上 2026-07-28 当天 `70.00` 元现金收入后，柜台现金实际存底为 `474.00` 元。
+
+**调整前复核**
+
+- `cash_movements`：23 条。
+- 系统柜台现金余额：`553.50`。
+- 2026-07-28 现金收入：2 条，合计 `70.00`。
+- 目标柜台现金余额：`474.00`。
+- 需调整差额：`-79.50`。
+
+**调整前备份**
+
+- 备份文件：`/opt/aiwei/backups/prechange/cash-adjustment-prechange-20260728-173228.dump`
+- SHA256：`7016fc1bd2361d6df500679cbdbb54d43ec3b3aff78087cf2ecd12d110d2d9c8`
+- 容器内 `pg_restore --list` 校验通过，清单 86 行。
+
+**执行**
+
+新增现金流水：
+
+- `id`: `cash_adjustment_opening_20260728_counter_474`
+- `date`: `2026-07-28`
+- `type`: `cash_adjustment`
+- `amount`: `-79.50`
+- `reason`: `counter cash physical count adjustment`
+- `notes`: `Owner confirmed counter cash is CNY 474.00 including today CNY 70.00 cash income; previous system balance was CNY 553.50, adjustment -79.50.`
+
+**验证**
+
+- SQL 复核：`cash_movements` 24 条，余额 `474.00`。
+- 当日流水：`cash_sale = 70.00`，`cash_adjustment = -79.50`。
+- HTTP 复核：`GET /rest/v1/cash_movements?order=created_at.desc&limit=5000` 返回 200，前端口径汇总余额 `474.00`。
+
+---
+
+## 2026-07-30 数据看板图表 UI/UX P0-P2 云端推送
+
+**范围**
+
+- P0：修复移动端图表卡片横向溢出。
+- P1：统一图表语义配色；收入结构/支出分类在移动端切换为横向条形图。
+- P2：收入结构/支出分类增加文本摘要，展示合计、金额和占比，降低对颜色和图例的依赖。
+
+**云端推送**
+
+- 回滚备份：`/opt/aiwei/backups/frontend-20260730-135107`
+- 上传 `/opt/aiwei/app/index.html`，云端 5110 bytes，mtime `2026-07-30 13:51:21 +0800`。
+- 上传 `/opt/aiwei/app/css/style.css`，云端 42790 bytes，mtime `2026-07-30 13:51:49 +0800`。
+- 上传 `/opt/aiwei/app/js/charts.js`，云端 39035 bytes，mtime `2026-07-30 13:52:15 +0800`。
+- `index.html` cache-bust token：`chart-p2-summary-20260730`。
+
+**验证**
+
+- 本地：`node --check app/js/charts.js` 通过；`git diff --check` 仅 Windows LF/CRLF 提示。
+- HTTP：`GET /` 返回 200/5110 bytes，页面包含 `chart-p2-summary-20260730`。
+- HTTP：`GET /css/style.css?v=chart-p2-summary-20260730` 返回 200/42790 bytes，内容含 `.chart-summary`。
+- HTTP：`GET /js/charts.js?v=chart-p2-summary-20260730` 返回 200/39035 bytes，内容含 `_renderBreakdownSummary`、`_isNarrowChart`。
+- API：`GET /rest/v1/revenue?limit=1` 返回 200；API 日志显示 `AIWEI API server running on port 3000`。
+- 线上浏览器：桌面端 `scrollWidth = clientWidth = 1440`，收入结构为 `doughnut`，支出分类为 `pie`，摘要正常显示。
+- 线上浏览器：移动端 `scrollWidth = clientWidth = bodyScrollWidth = 390`，结构类图表为横向 `bar`，摘要正常显示。
+
+**证据截图**
+
+- `tmp/product-design-audit/11-cloud-reports-desktop-p2-longwait.png`
+- `tmp/product-design-audit/09-cloud-reports-mobile-p2.png`
+
+**边界**
+
+- 本次只发布前端静态文件，未修改数据库、API、容器镜像或生产业务数据。
+- 曾误生成 `/opt/aiwei/backups/frontend-` 目录；正式回滚点以 `/opt/aiwei/backups/frontend-20260730-135107` 为准。
+
+---
+
+## 2026-07-31 支出记录模块 P0：运营记账定位收敛
+
+**背景**
+
+支出记录模块重新定位为“日常运营记账模块”，仅用于运营人员记录支出，并为后续生成财务报销凭证包打基础；不作为财务管理、审批或备用金借入管理模块。
+
+**本次改动**
+
+- 去除支出录入表单中的“类型”字段，新录入记录统一写为 `运营支出`。
+- 保留数据库 `expense.type` 字段用于历史兼容，但界面、统计、图表、日结均排除历史 `备用金借入` 记录。
+- 支出列表移除“类型”列，月度统计移除“借入合计”，保留支出合计、已报销、待报销。
+- 数据看板的支出分类和月度支出趋势改为只统计运营支出。
+- 日结报表中的支出卡片文案从“备用金支出”调整为“运营支出”。
+- 支出 CSV 导出移除“类型”列，补充“报销状态”；CSV 导入时跳过历史 `备用金借入` 行。
+- `app/index.html` 更新 `models.js`、`ui.js`、`charts.js`、`import-export.js` cache-bust token 为 `expense-p0-ops-ledger-20260731`。
+
+**涉及文件**
+
+- `app/js/models.js`
+- `app/js/ui.js`
+- `app/js/charts.js`
+- `app/js/import-export.js`
+- `app/index.html`
+- `app/sql/init.sql`
+
+**验证**
+
+- `node --check app/js/models.js` 通过。
+- `node --check app/js/ui.js` 通过。
+- `node --check app/js/charts.js` 通过。
+- `node --check app/js/import-export.js` 通过。
+- `git diff --check -- app/index.html app/js/models.js app/js/ui.js app/js/charts.js app/js/import-export.js app/sql/init.sql` 仅提示 Windows LF/CRLF。
+- 本地预览 `GET http://localhost:3000/` 返回 200，页面包含 `expense-p0-ops-ledger-20260731`。
+- 本地预览 `GET /js/ui.js?v=expense-p0-ops-ledger-20260731` 返回 200，内容不再包含 `id="exp-type"`。
+- 本地预览 `GET /js/models.js?v=expense-p0-ops-ledger-20260731` 返回 200，内容包含 `isOperationalExpenseRecord` 和 `运营支出`。
+
+**边界**
+
+- 本次未删除生产数据库字段，未迁移历史 `备用金借入` 数据，未发布到云端。
+- P1 将进入支出附件上传能力：每笔支出支持多张发票图片与多张支付凭证图片。
+
+---
+
+## 2026-07-31 支出记录模块 P1：发票与支付凭证图片附件
+
+**背景**
+
+在 P0 将支出记录收敛为运营记账模块后，P1 实现每笔支出挂载多张发票图片和多张支付凭证图片，为后续 P2 报销 PDF 生成打基础。
+
+**本次改动**
+
+- 新增 `expense_attachments` 表：按 `expense_id` 关联支出记录，附件类型为 `invoice` 或 `payment`。
+- 新增迁移脚本：`sql/20260731_expense_attachments.sql`。
+- 后端新增 `/rest/v1/expense_attachments/upload?type=invoice|payment` 图片上传端点。
+- 上传文件保存到 `/uploads/expense/invoice/` 或 `/uploads/expense/payment/`，返回文件 URL 和元数据。
+- 前端支出列表新增“票据”列，按实际附件数展示“发票 N / 凭证 N”。
+- 每笔支出新增“票据”操作按钮，可打开附件弹窗。
+- 附件弹窗支持发票图片、支付凭证图片分别多选上传、缩略图查看、打开原图和删除。
+- 上传发票后自动更新支出记录 `invoiceStatus=有发票`；上传支付凭证后自动更新 `receiptStatus=有凭证`。
+- 删除某类型最后一张附件后，自动把对应状态回退为 `待补`。
+- `app/index.html` 更新 `style.css`、`supabase-config.js`、`models.js`、`store.js`、`ui.js` cache-bust token 为 `expense-p1-attachments-20260731`。
+
+**涉及文件**
+
+- `server.js`
+- `app/sql/init.sql`
+- `sql/20260731_expense_attachments.sql`
+- `app/js/supabase-config.js`
+- `app/js/models.js`
+- `app/js/store.js`
+- `app/js/ui.js`
+- `app/css/style.css`
+- `app/index.html`
+
+**验证**
+
+- `node --check server.js` 通过。
+- `node --check app/js/models.js` 通过。
+- `node --check app/js/store.js` 通过。
+- `node --check app/js/ui.js` 通过。
+- `node --check app/js/supabase-config.js` 通过。
+- `git diff --check -- server.js app/index.html app/css/style.css app/js/models.js app/js/store.js app/js/ui.js app/js/supabase-config.js app/sql/init.sql sql/20260731_expense_attachments.sql` 仅提示 Windows LF/CRLF。
+- 本地预览 `GET http://localhost:3000/` 返回 200，页面包含 `expense-p1-attachments-20260731`。
+- 本地预览 `GET /js/ui.js?v=expense-p1-attachments-20260731` 返回 200，内容包含 `_showExpenseAttachmentModal` 和 `uploadExpenseAttachmentFile`。
+- 本地预览 `GET /css/style.css?v=expense-p1-attachments-20260731` 返回 200，内容包含 `.expense-attachment-grid`。
+
+**边界**
+
+- 本次未发布到云端，未执行生产数据库迁移。
+- 因本地 preview 的 `/rest/*` 代理到云端，而云端尚无 `expense_attachments` 表和上传端点，本次未做真实图片上传 smoke test。
+- P2 将进入报销 PDF 生成与下载：单笔 PDF、多笔合并 PDF、PDF 文件保存与下载。
+
+---
+
+## 2026-07-31 支出记录模块 P2：报销 PDF 生成与下载
+
+**背景**
+
+在 P1 完成发票/支付凭证多图附件后，P2 实现运营人员可将单笔或多笔支出生成财务可用的报销 PDF 凭证包。PDF 保存到服务器，可重复下载。
+
+**本次改动**
+
+- 新增依赖 `pdfkit`，用于后端生成 PDF。
+- Dockerfile 新增 `font-noto-cjk`，确保生产容器可渲染中文 PDF。
+- 新增 `expense_reimbursements` 表，保存每次生成的报销包记录：支出 ID 列表、标题、合计金额、PDF URL、文件大小、生成者、生成时间。
+- 新增迁移脚本：`sql/20260731_expense_reimbursements_pdf.sql`。
+- 后端新增 `/rest/v1/expense_reimbursements/generate` 接口。
+- PDF 文件保存到 `/uploads/expense-pdfs/`，URL 为 `/uploads/expense-pdfs/{id}.pdf`。
+- PDF 排版：
+  - 第 1 页为汇总表：生成时间、支出笔数、合计金额、逐笔支出明细。
+  - 后续逐笔支出生成说明页。
+  - 每张发票/支付凭证单独成页，页头包含项目和金额。
+  - jpg/png 图片直接嵌入；gif/webp 暂以原始附件链接提示，避免生成失败。
+- 支出列表增加复选框、单笔 PDF 按钮、批量“生成所选 PDF”按钮。
+- 支出页面下方新增“已生成报销 PDF”列表，支持重复下载。
+- `app/index.html` 更新相关 JS cache-bust token 为 `expense-p2-pdf-20260731`。
+
+**涉及文件**
+
+- `package.json`
+- `package-lock.json`
+- `Dockerfile`
+- `server.js`
+- `app/sql/init.sql`
+- `sql/20260731_expense_reimbursements_pdf.sql`
+- `app/js/supabase-config.js`
+- `app/js/store.js`
+- `app/js/ui.js`
+- `app/index.html`
+
+**验证**
+
+- `node --check server.js` 通过。
+- `node --check app/js/store.js` 通过。
+- `node --check app/js/ui.js` 通过。
+- `node --check app/js/supabase-config.js` 通过。
+- `node -e "require('pdfkit')"` 通过。
+- 本地使用 PDFKit + `C:/Windows/Fonts/simhei.ttf` 生成中文 PDF 冒烟成功：`tmp/p2-pdf-smoke.pdf`，3164 bytes。
+- `git diff --check -- Dockerfile package.json package-lock.json server.js app/index.html app/js/store.js app/js/ui.js app/js/supabase-config.js app/sql/init.sql sql/20260731_expense_reimbursements_pdf.sql` 仅提示 Windows LF/CRLF。
+- 本地预览 `GET http://localhost:3000/` 返回 200，页面包含 `expense-p2-pdf-20260731`。
+
+**风险与边界**
+
+- 本次未发布到云端，未执行生产数据库迁移，未做真实接口写入 smoke test。
+- `npm install pdfkit` 后 `npm audit` 提示 1 个 high severity vulnerability；生产发布前需要决定是否接受 `pdfkit` 当前依赖链风险，或改用其他 PDF 生成方案。
+- PDF 图片嵌入当前原生支持 jpg/png；gif/webp 已保留附件链接提示，后续如需完整嵌入 webp，可再引入图片转码能力。
+- 图片 60 天、PDF 365 天的自动清理尚未实现，应作为 P3 定时清理任务处理。

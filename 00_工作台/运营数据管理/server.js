@@ -4,13 +4,19 @@ const fs = require('fs');
 const path = require('path');
 const url = require('url');
 const crypto = require('crypto');
+const PDFDocument = require('pdfkit');
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/tmp/aiwei-uploads';
 try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (e) {}
 const ARTWORK_UPLOAD_DIR = path.join(UPLOAD_DIR, 'artworks');
 try { fs.mkdirSync(ARTWORK_UPLOAD_DIR, { recursive: true }); } catch (e) {}
+const EXPENSE_UPLOAD_DIR = path.join(UPLOAD_DIR, 'expense');
+try { fs.mkdirSync(EXPENSE_UPLOAD_DIR, { recursive: true }); } catch (e) {}
+const EXPENSE_PDF_DIR = path.join(UPLOAD_DIR, 'expense-pdfs');
+try { fs.mkdirSync(EXPENSE_PDF_DIR, { recursive: true }); } catch (e) {}
 const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;  // 5MB
+const PDF_FONT_PATH = process.env.PDF_FONT_PATH || '';
 
 const DB_HOST = process.env.DB_HOST || '127.0.0.1';
 const DB_PASS = process.env.DB_PASS || process.env.DB_PASSWORD;
@@ -31,7 +37,8 @@ const pool = new Pool({
 
 // JSONB 列名（用于序列化数组为 JSON 字符串，避免 pg 错误序列化为 PG 数组字面量）
 const JSONB_COLS = new Set([
-  'ticket_items','coffee_items','workshop_items','retail_items',
+  'ticket_items','coffee_items','workshop_items','retail_items','expense_ids',
+  'revenue_summary','payment_summary','expense_summary','adjustment_summary','cash_summary',
   'tags',         // project_registry
   'value'         // app_config（虽然 app_config 走专用路由，兜底也支持）
 ]);
@@ -43,7 +50,8 @@ const TABLE_COLS = {
     'coffee_qty','coffee_amount','ticket_items','coffee_items','workshop_items',
     'workshop_amount','retail_items','retail_amount','creative_amount',
     'venue_amount','other_amount','other_desc','cash_amount','account_amount',
-    'payment_method','project_name','handler','notes','created_at'
+    'payment_method','project_name','handler','notes','status','refund_amount',
+    'adjusted_at','adjusted_by','adjustment_reason','created_at'
   ]),
   // 空间使用重构 2026-07-10：去掉 received_amount（由子表聚合）
   space_usage: new Set([
@@ -62,11 +70,32 @@ const TABLE_COLS = {
   // ===== 2026-07-11 补全：以下表之前无白名单导致字段被静默丢弃 =====
   expense: new Set([
     'id','date','type','project','category','amount','description','handler',
-    'invoice_status','receipt_status','related_activity','created_at'
+    'invoice_status','receipt_status','reimbursement_status','related_activity','created_at'
+  ]),
+  expense_attachments: new Set([
+    'id','expense_id','attachment_type','file_url','original_name','file_size',
+    'mime_type','uploaded_by','created_at'
+  ]),
+  expense_reimbursements: new Set([
+    'id','expense_ids','title','total_amount','pdf_url','pdf_size','generated_by','created_at'
   ]),
   gallery_sales: new Set([
     'id','date','artwork_no','artwork_name','artist','price','commission','buyer_name',
-    'payment_method','related_exhibition','status','handler','notes','sale_quantity','created_at'
+    'payment_method','related_exhibition','status','handler','notes','sale_quantity',
+    'refund_amount','adjusted_at','adjusted_by','adjustment_reason','created_at'
+  ]),
+  transaction_adjustments: new Set([
+    'id','target_type','target_id','action','amount','reason',
+    'operator_id','operator_name','created_at'
+  ]),
+  cash_movements: new Set([
+    'id','date','type','amount','source_type','source_id','account_channel',
+    'operator_id','operator_name','reason','notes','created_at'
+  ]),
+  daily_closings: new Set([
+    'id','date','system_net_amount','confirmed_amount','difference_amount',
+    'revenue_summary','payment_summary','expense_summary','adjustment_summary','cash_summary',
+    'closer_id','closer_name','reviewer_name','status','notes','created_at','updated_at'
   ]),
   operation_logs: new Set([
     'id','user_id','action','table_name','record_id','details','created_at'
@@ -93,7 +122,7 @@ const TABLE_COLS = {
 };
 
 // 只读视图/表（POST/PATCH/DELETE 拒绝）
-const READ_ONLY_TABLES = new Set(['space_usage_with_payments']);
+const READ_ONLY_TABLES = new Set(['space_usage_with_payments', 'revenue_facts']);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
 function toCamel(row) {
@@ -102,7 +131,8 @@ function toCamel(row) {
     'ticket_amount','combo_amount','coffee_amount','workshop_amount',
     'creative_amount','venue_amount','other_amount','cash_amount','account_amount',
     'retail_amount','price','commission','receivable_amount','received_amount',
-    'amount'
+    'amount','net_amount','refund_amount','system_net_amount','confirmed_amount','difference_amount',
+    'file_size','pdf_size','total_amount'
   ]);
   const o = {};
   for (let k of Object.keys(row)) {
@@ -112,6 +142,48 @@ function toCamel(row) {
     o[ck] = v;
   }
   return o;
+}
+
+function sanitizeUploadName(name) {
+  return String(name || 'file').replace(/[^\w.-]+/g, '_').slice(0, 80);
+}
+
+function collectJSON(req, cb) {
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', () => {
+    try { cb(null, body ? JSON.parse(body) : {}); }
+    catch (e) { cb(e); }
+  });
+}
+
+function getPdfFontPath() {
+  const candidates = [
+    PDF_FONT_PATH,
+    path.join(__dirname, 'fonts', 'NotoSansSC-Regular.otf'),
+    path.join(__dirname, 'fonts', 'NotoSansSC-Regular.ttf'),
+    '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/noto-cjk/NotoSansCJKsc-Regular.otf',
+    '/usr/share/fonts/noto/NotoSansCJK-Regular.ttc',
+    'C:\\Windows\\Fonts\\simhei.ttf',
+    'C:\\Windows\\Fonts\\msyh.ttc'
+  ].filter(Boolean);
+  return candidates.find(p => {
+    try { return fs.existsSync(p); } catch { return false; }
+  }) || '';
+}
+
+function uploadUrlToPath(fileUrl) {
+  if (!fileUrl || !fileUrl.startsWith('/uploads/')) return '';
+  const rel = fileUrl.replace(/^\/uploads\/+/, '').replace(/\\/g, '/');
+  const full = path.resolve(UPLOAD_DIR, rel);
+  const root = path.resolve(UPLOAD_DIR);
+  if (!full.startsWith(root)) return '';
+  return full;
+}
+
+function formatMoney(n) {
+  return Number(n || 0).toFixed(2);
 }
 
 // camelCase to snake_case (递归支持数组)
@@ -124,6 +196,14 @@ function toSnake(obj) {
     o[sk] = toSnake(obj[k]);
   }
   return o;
+}
+
+function normalizeTimestamps(data) {
+  const TIMESTAMPTZ_COLS = new Set(['created_at','updated_at','adjusted_at','last_login_at']);
+  for (const col of TIMESTAMPTZ_COLS) {
+    if (data[col] === '') data[col] = null;
+  }
+  return data;
 }
 
 // SHA-256 hash
@@ -305,6 +385,69 @@ function handleArtworkUpload(req, res) {
   });
 }
 
+// --- POST /rest/v1/expense_attachments/upload --- 支出票据图片上传
+// 返回 { url: '/uploads/expense/invoice/xxx.jpg', filename, size, mimeType, originalName }
+function handleExpenseAttachmentUpload(req, res, query) {
+  const type = query.type === 'payment' ? 'payment' : 'invoice';
+  const contentType = req.headers['content-type'] || '';
+  const m = contentType.match(/^multipart\/form-data;\s*boundary=(.+)$/);
+  if (!m) return sendError(res, 400, 'Content-Type 必须是 multipart/form-data');
+  const boundary = '--' + m[1];
+
+  const chunks = [];
+  let totalLen = 0;
+  let aborted = false;
+
+  req.on('data', chunk => {
+    if (aborted) return;
+    totalLen += chunk.length;
+    if (totalLen > MAX_IMAGE_SIZE) {
+      aborted = true;
+      try { req.destroy(); } catch (e) {}
+      return sendError(res, 413, '文件超过 5MB 限制');
+    }
+    chunks.push(chunk);
+  });
+
+  req.on('end', () => {
+    if (aborted) return;
+    try {
+      const buf = Buffer.concat(chunks);
+      const result = parseMultipartFile(buf, boundary, 'file', MAX_IMAGE_SIZE);
+      if (!result) return sendError(res, 400, '未找到名为 file 的文件字段');
+      const ext = path.extname(result.filename).toLowerCase();
+      if (!ALLOWED_IMAGE_EXTS.has(ext)) {
+        return sendError(res, 400, '仅支持图片格式：' + [...ALLOWED_IMAGE_EXTS].join(','));
+      }
+      const targetDir = path.join(EXPENSE_UPLOAD_DIR, type);
+      fs.mkdirSync(targetDir, { recursive: true });
+      const random = crypto.randomBytes(2).toString('hex');
+      const safeOriginal = sanitizeUploadName(path.basename(result.filename, ext));
+      const newName = Date.now().toString(36) + '_' + random + '_' + safeOriginal + ext;
+      const destPath = path.join(targetDir, newName);
+      fs.writeFileSync(destPath, result.data);
+      const mimeType = ext === '.png' ? 'image/png'
+        : ext === '.gif' ? 'image/gif'
+        : ext === '.webp' ? 'image/webp'
+        : 'image/jpeg';
+      const fileUrl = `/uploads/expense/${type}/${newName}`;
+      sendJSON(res, 201, {
+        url: fileUrl,
+        filename: newName,
+        originalName: result.filename,
+        size: result.data.length,
+        mimeType
+      });
+    } catch (e) {
+      sendError(res, 500, '上传失败：' + e.message);
+    }
+  });
+
+  req.on('error', e => {
+    if (!aborted) sendError(res, 500, '上传错误：' + e.message);
+  });
+}
+
 /** 简易 multipart 解析（单文件场景，无嵌套） */
 function parseMultipartFile(buf, boundary, fieldName, maxSize) {
   const boundaryBuf = Buffer.from(boundary, 'utf8');
@@ -393,6 +536,182 @@ async function handleSpaceConflict(req, res) {
   });
 }
 
+async function handleExpensePdfGenerate(req, res) {
+  collectJSON(req, async (err, body) => {
+    if (err) return sendError(res, 400, 'JSON 格式不正确');
+    try {
+      const expenseIds = Array.isArray(body.expenseIds)
+        ? [...new Set(body.expenseIds.map(String).filter(Boolean))]
+        : [];
+      if (!expenseIds.length) return sendError(res, 400, '请选择至少一笔支出');
+      if (expenseIds.length > 50) return sendError(res, 400, '单个报销包最多支持 50 笔支出');
+
+      const expenseResult = await pool.query(
+        `SELECT * FROM expense WHERE id = ANY($1::text[]) ORDER BY date ASC, created_at ASC`,
+        [expenseIds]
+      );
+      const expenses = expenseResult.rows;
+      if (!expenses.length) return sendError(res, 404, '未找到支出记录');
+
+      const attachmentResult = await pool.query(
+        `SELECT * FROM expense_attachments WHERE expense_id = ANY($1::text[]) ORDER BY expense_id ASC, attachment_type ASC, created_at ASC`,
+        [expenseIds]
+      );
+      const attachmentsByExpense = attachmentResult.rows.reduce((acc, row) => {
+        if (!acc[row.expense_id]) acc[row.expense_id] = [];
+        acc[row.expense_id].push(row);
+        return acc;
+      }, {});
+
+      const id = 'pdf_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
+      const filename = id + '.pdf';
+      const outputPath = path.join(EXPENSE_PDF_DIR, filename);
+      await generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, body);
+      const stat = fs.statSync(outputPath);
+      const pdfUrl = '/uploads/expense-pdfs/' + filename;
+      const totalAmount = expenses.reduce((s, r) => s + (+r.amount || 0), 0);
+      const title = body.title || `运营支出报销凭证包 ${new Date().toISOString().slice(0, 10)}`;
+      const generatedBy = body.generatedBy || '';
+
+      const saved = await pool.query(
+        `INSERT INTO expense_reimbursements
+          (id, expense_ids, title, total_amount, pdf_url, pdf_size, generated_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+         RETURNING *`,
+        [id, JSON.stringify(expenses.map(r => r.id)), title, totalAmount, pdfUrl, stat.size, generatedBy]
+      );
+      sendJSON(res, 201, toCamel(saved.rows[0]));
+    } catch (e) {
+      sendError(res, 500, '生成 PDF 失败：' + e.message);
+    }
+  });
+}
+
+function generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, options = {}) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 42, autoFirstPage: true });
+    const out = fs.createWriteStream(outputPath);
+    out.on('finish', resolve);
+    out.on('error', reject);
+    doc.on('error', reject);
+    doc.pipe(out);
+
+    const fontPath = getPdfFontPath();
+    if (fontPath) {
+      try {
+        doc.registerFont('CJK', fontPath);
+        doc.font('CJK');
+      } catch (e) {
+        doc.font('Helvetica');
+      }
+    } else {
+      doc.font('Helvetica');
+    }
+
+    drawPdfSummary(doc, expenses, options);
+    expenses.forEach((expense, idx) => {
+      drawExpenseDetailPage(doc, expense, idx + 1, expenses.length);
+      const rows = attachmentsByExpense[expense.id] || [];
+      rows.filter(a => a.attachment_type === 'invoice').forEach((a, i) => {
+        drawAttachmentPage(doc, expense, a, `发票 ${i + 1}`);
+      });
+      rows.filter(a => a.attachment_type === 'payment').forEach((a, i) => {
+        drawAttachmentPage(doc, expense, a, `支付凭证 ${i + 1}`);
+      });
+      if (!rows.length) drawMissingAttachmentPage(doc, expense);
+    });
+
+    doc.end();
+  });
+}
+
+function drawPdfSummary(doc, expenses, options = {}) {
+  const title = options.title || '运营支出报销凭证包';
+  const generatedAt = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+  const totalAmount = expenses.reduce((s, r) => s + (+r.amount || 0), 0);
+  doc.fontSize(20).text(title, { align: 'center' });
+  doc.moveDown(0.8);
+  doc.fontSize(10).fillColor('#555').text(`生成时间：${generatedAt}`);
+  doc.text(`支出笔数：${expenses.length}    合计金额：¥${formatMoney(totalAmount)}`);
+  doc.moveDown(1);
+  doc.fillColor('#111').fontSize(12).text('汇总表');
+  doc.moveDown(0.4);
+
+  const col = { date: 42, project: 102, category: 190, amount: 252, handler: 320, desc: 380 };
+  let y = doc.y;
+  doc.fontSize(9).fillColor('#333');
+  doc.text('日期', col.date, y);
+  doc.text('项目', col.project, y);
+  doc.text('类别', col.category, y);
+  doc.text('金额', col.amount, y);
+  doc.text('经手人', col.handler, y);
+  doc.text('说明', col.desc, y);
+  y += 18;
+  doc.moveTo(42, y - 6).lineTo(553, y - 6).strokeColor('#ddd').stroke();
+
+  expenses.forEach((r, i) => {
+    if (y > 760) { doc.addPage(); y = 42; }
+    doc.fillColor('#111').fontSize(9);
+    doc.text(r.date || '', col.date, y, { width: 56 });
+    doc.text(r.project || '', col.project, y, { width: 82 });
+    doc.text(r.category || '', col.category, y, { width: 58 });
+    doc.text('¥' + formatMoney(r.amount), col.amount, y, { width: 64 });
+    doc.text(r.handler || '', col.handler, y, { width: 55 });
+    doc.text(r.description || '', col.desc, y, { width: 170, height: 30 });
+    y += 32;
+  });
+}
+
+function drawExpenseDetailPage(doc, r, index, total) {
+  doc.addPage();
+  doc.fontSize(16).fillColor('#111').text(`支出说明 ${index}/${total}`);
+  doc.moveDown(0.8);
+  const fields = [
+    ['日期', r.date],
+    ['项目', r.project],
+    ['类别', r.category],
+    ['金额', '¥' + formatMoney(r.amount)],
+    ['经手人', r.handler || '-'],
+    ['发票状态', r.invoice_status || '-'],
+    ['支付凭证状态', r.receipt_status || '-'],
+    ['报销状态', r.reimbursement_status || '-'],
+    ['关联活动', r.related_activity || '-'],
+    ['支出说明', r.description || '-']
+  ];
+  doc.fontSize(11);
+  fields.forEach(([label, value]) => {
+    doc.fillColor('#555').text(label + '：', { continued: true });
+    doc.fillColor('#111').text(String(value || '-'));
+    doc.moveDown(0.35);
+  });
+}
+
+function drawAttachmentPage(doc, expense, attachment, title) {
+  doc.addPage();
+  doc.fontSize(13).fillColor('#111').text(`${title}｜${expense.project || '-'}｜¥${formatMoney(expense.amount)}`);
+  doc.fontSize(9).fillColor('#555').text(`说明：${expense.description || '-'}    文件：${attachment.original_name || ''}`);
+  doc.moveDown(0.8);
+  const filePath = uploadUrlToPath(attachment.file_url);
+  const ext = path.extname(filePath).toLowerCase();
+  if (filePath && fs.existsSync(filePath) && ['.jpg', '.jpeg', '.png'].includes(ext)) {
+    try {
+      doc.image(filePath, 42, doc.y, { fit: [511, 650], align: 'center', valign: 'top' });
+      return;
+    } catch (e) {
+      // fall through to text notice
+    }
+  }
+  doc.fontSize(11).fillColor('#b45309').text('该附件格式暂不能嵌入 PDF，请通过原始附件链接查看：');
+  doc.fillColor('#2563eb').text(attachment.file_url || '-', { underline: true });
+}
+
+function drawMissingAttachmentPage(doc, expense) {
+  doc.addPage();
+  doc.fontSize(13).fillColor('#111').text(`票据缺失｜${expense.project || '-'}｜¥${formatMoney(expense.amount)}`);
+  doc.moveDown(1);
+  doc.fontSize(11).fillColor('#b45309').text('该笔支出尚未上传发票或支付凭证图片。');
+}
+
 // --- REST API ---
 
 async function handleREST(req, res, urlInfo) {
@@ -402,8 +721,13 @@ async function handleREST(req, res, urlInfo) {
   const table = parts[2];
   const tableMap = {
     'revenue': 'revenue', 'expense': 'expense', 'space_usage': 'space_usage',
+    'expense_attachments': 'expense_attachments',
+    'expense_reimbursements': 'expense_reimbursements',
     'space_payments': 'space_payments', 'space_usage_with_payments': 'space_usage_with_payments',
-    'gallery_sales': 'gallery_sales', 'app_config': 'app_config',
+    'revenue_facts': 'revenue_facts',
+    'gallery_sales': 'gallery_sales', 'transaction_adjustments': 'transaction_adjustments',
+    'daily_closings': 'daily_closings', 'cash_movements': 'cash_movements',
+    'app_config': 'app_config',
     'users': 'users', 'operation_logs': 'operation_logs',
     'project_registry': 'project_registry', 'inventory': 'inventory',
     'artworks': 'artworks', 'partners': 'partners', 'content_posts': 'content_posts',
@@ -496,6 +820,7 @@ async function handleREST(req, res, urlInfo) {
           let data = JSON.parse(body);
           data = toSnake(data);
           if (!data.created_at) data.created_at = new Date().toISOString();
+          data = normalizeTimestamps(data);
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -533,6 +858,7 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
+          data = normalizeTimestamps(data);
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -641,6 +967,10 @@ const server = http.createServer((req, res) => {
       handleSpaceConflict(req, res);
     } else if (parts[2] === 'artworks' && parts[3] === 'upload' && req.method === 'POST') {
       handleArtworkUpload(req, res);
+    } else if (parts[2] === 'expense_attachments' && parts[3] === 'upload' && req.method === 'POST') {
+      handleExpenseAttachmentUpload(req, res, urlInfo.query);
+    } else if (parts[2] === 'expense_reimbursements' && parts[3] === 'generate' && req.method === 'POST') {
+      handleExpensePdfGenerate(req, res);
     } else {
       handleREST(req, res, urlInfo);
     }

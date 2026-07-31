@@ -6,6 +6,7 @@ const UI = {
   _editingGalleryId: null,
   _revenueFilterDate: '',
   _expenseFilterMonth: '',
+  _selectedExpenseIds: new Set(),
   _spaceFilterMonth: '',
   _galleryFilterMonth: '',
   _artworkFilterChip: 'all',  // 画廊库存子过滤：all | instock | exhibiting | soldout | lowstock
@@ -107,9 +108,8 @@ const UI = {
     const totalRevenue = revenues.reduce((s, r) => s + (r.ticketAmount||0) + (r.comboAmount||0) + (r.coffeeAmount||0) + (r.workshopAmount||0) + (r.retailAmount||0) + (r.creativeAmount||0) + (r.venueAmount||0) + (r.otherAmount||0), 0)
       + galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0)
       + spaceRentIncome;
-    const totalExpense = expenses.reduce((s, r) => s + (r.type === '备用金支出' ? (r.amount||0) : 0), 0);
-    const totalBorrow = expenses.reduce((s, r) => s + (r.type === '备用金借入' ? (r.amount||0) : 0), 0);
-    const balance = totalBorrow - totalExpense;
+    const operationalExpenses = expenses.filter(isOperationalExpenseRecord);
+    const totalExpense = operationalExpenses.reduce((s, r) => s + (r.amount || 0), 0);
     const spaceCount = spaces.length;
     const galleryTotal = galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
     const galleryCount = galleries.length;
@@ -119,7 +119,6 @@ const UI = {
       statsEl.outerHTML = `<div class="stats-grid">
         <div class="stat-card"><div class="stat-label">当月收入</div><div class="stat-value">¥${this._fmt(totalRevenue)}</div><div class="stat-sub">${ym}</div></div>
         <div class="stat-card"><div class="stat-label">当月支出</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(totalExpense)}</div><div class="stat-sub">${ym}</div></div>
-        <div class="stat-card"><div class="stat-label">备用金余额</div><div class="stat-value" style="color:${balance >= 0 ? 'var(--green-700)' : 'var(--red)'}">¥${this._fmt(balance)}</div><div class="stat-sub">借入 ${this._fmt(totalBorrow)}</div></div>
         <div class="stat-card"><div class="stat-label">空间使用</div><div class="stat-value">${spaceCount}</div><div class="stat-sub">本月登记项目</div></div>
         <div class="stat-card"><div class="stat-label">画廊销售</div><div class="stat-value">¥${this._fmt(galleryTotal)}</div><div class="stat-sub">${galleryCount} 笔交易</div></div>
       </div>`;
@@ -167,6 +166,7 @@ const UI = {
               <div id="space-rent-reminder" class="space-rent-reminder"></div>
             </div>
             <div id="pos-today-stats" class="pos-today-stats"></div>
+            <div id="pos-cash-panel" class="pos-today-stats" style="margin-top:8px"></div>
 
             <div class="pos-layout">
               <!-- 左列：门票 + 咖啡 + 工坊 -->
@@ -286,6 +286,7 @@ const UI = {
     this._updatePOS();
     this._loadSpaceRentReminder();
     this._loadTodayStats();
+    this._loadCounterCashPanel();
     await this._renderRevenueList();
   },
 
@@ -582,12 +583,13 @@ const UI = {
     };
     // 主记录金额（不含工坊/文创）
     const mainTotal = (mainRecord.ticketAmount||0) + (mainRecord.comboAmount||0) + (mainRecord.coffeeAmount||0) + (mainRecord.otherAmount||0);
-    const isCash = paymentMethod !== '扫码支付' && paymentMethod !== '对公转账';
+    const isCash = this._isCashPayment(paymentMethod);
     mainRecord.cashAmount = isCash ? mainTotal : 0;
     mainRecord.accountAmount = isCash ? 0 : mainTotal;
 
     try {
       if (this._editingId) {
+        const oldRecord = await Store.getById('revenue', this._editingId);
         // 编辑模式：保存完整数据（含工坊/文创，不拆分）
         const editData = {
           ...baseRecord,
@@ -608,34 +610,38 @@ const UI = {
           cashAmount: isCash ? total : 0,
           accountAmount: isCash ? 0 : total,
         };
-        await Store.update('revenue', this._editingId, editData);
+        const updated = await Store.update('revenue', this._editingId, editData);
+        await this._recordRevenueCashDelta(oldRecord, updated || { ...oldRecord, ...editData, id: this._editingId }, '现金收款编辑差额');
         this.toast('收入记录已更新');
         this._editingId = null;
       } else {
         // 先保存主记录
         if (mainTotal > 0) {
-          await Store.add('revenue', createRevenue(mainRecord));
+          const saved = await Store.add('revenue', createRevenue(mainRecord));
+          await this._recordRevenueCashSale(saved);
         }
         // 每个工坊商品拆为独立记录
         for (const item of this._workshopItems) {
-          await Store.add('revenue', createRevenue({
+          const saved = await Store.add('revenue', createRevenue({
             ...baseRecord,
             workshopItems: [{ ...item }],
             workshopAmount: item.amount,
             cashAmount: isCash ? item.amount : 0,
             accountAmount: isCash ? 0 : item.amount,
           }));
+          await this._recordRevenueCashSale(saved);
         }
         // 每个文创商品拆为独立记录
         for (const item of this._retailItems) {
           const amt = item.qty * item.unitPrice;
-          await Store.add('revenue', createRevenue({
+          const saved = await Store.add('revenue', createRevenue({
             ...baseRecord,
             retailItems: [{ productName: item.productName, qty: item.qty, unitPrice: item.unitPrice, amount: amt }],
             retailAmount: amt,
             cashAmount: isCash ? amt : 0,
             accountAmount: isCash ? 0 : amt,
           }));
+          await this._recordRevenueCashSale(saved);
         }
         this.toast('收款成功 ¥' + total.toFixed(2));
       }
@@ -649,6 +655,7 @@ const UI = {
     this._resetPOS();
     await this._renderRevenueList();
     this._loadTodayStats();
+    this._loadCounterCashPanel();
   },
 
   _getPOSTotal() {
@@ -747,6 +754,141 @@ const UI = {
     this.renderRevenuePage();
   },
 
+  _getRevenueRecordTotal(r) {
+    return (r.ticketAmount || 0)
+      + (r.comboAmount || 0)
+      + (r.coffeeAmount || 0)
+      + (r.workshopAmount || 0)
+      + (r.retailAmount || r.creativeAmount || 0)
+      + (r.venueAmount || 0)
+      + (r.otherAmount || 0);
+  },
+
+  _canAdjustRecord(record) {
+    const status = record?.status || '正常';
+    return status !== '已作废' && status !== '已退款';
+  },
+
+  _canEditOriginalRecord(record) {
+    return (record?.status || '正常') === '正常' && !(record?.refundAmount > 0);
+  },
+
+  _requireAdminAdjustment() {
+    if (Auth.isAdmin) return true;
+    this.toast('仅管理员可执行退款/作废', 'error');
+    return false;
+  },
+
+  async _recordTransactionAdjustment(targetType, targetId, action, amount, reason) {
+    await Store.add('transactionAdjustments', createTransactionAdjustment({
+      targetType,
+      targetId,
+      action,
+      amount,
+      reason,
+      operatorId: Auth.currentUser?.id || '',
+      operatorName: Auth.currentUser?.displayName || ''
+    }));
+  },
+
+  _isCashPayment(method) {
+    return method && method !== '扫码支付' && method !== '对公转账';
+  },
+
+  async _recordCashMovement(data) {
+    const movement = createCashMovement({
+      ...data,
+      operatorId: data.operatorId || Auth.currentUser?.id || '',
+      operatorName: data.operatorName || Auth.currentUser?.displayName || ''
+    });
+    if (!movement.type || !movement.amount) return null;
+    return Store.add('cashMovements', movement);
+  },
+
+  async _recordRevenueCashSale(record) {
+    const amount = +record.cashAmount || 0;
+    if (amount <= 0) return;
+    await this._recordCashMovement({
+      id: 'cash_sale_revenue_' + record.id,
+      date: record.date,
+      type: 'cash_sale',
+      amount,
+      sourceType: 'revenue',
+      sourceId: record.id,
+      reason: '现金收款',
+      notes: record.notes || ''
+    });
+  },
+
+  async _recordRevenueCashDelta(oldRecord, newRecord, reason) {
+    const oldCash = +oldRecord?.cashAmount || 0;
+    const newCash = +newRecord?.cashAmount || 0;
+    const delta = newCash - oldCash;
+    if (!delta) return;
+    await this._recordCashMovement({
+      id: 'cash_edit_revenue_' + newRecord.id + '_' + Date.now().toString(36),
+      date: newRecord.date || oldRecord?.date || todayStr(),
+      type: 'cash_adjustment',
+      amount: delta,
+      sourceType: 'revenue',
+      sourceId: newRecord.id,
+      reason: reason || '现金收款编辑差额',
+      notes: `原现金 ${this._fmt(oldCash)}，新现金 ${this._fmt(newCash)}`
+    });
+  },
+
+  _getGalleryCashAmount(record) {
+    if (!this._isCashPayment(record?.paymentMethod || record?.payment_method)) return 0;
+    return Math.max(0, this._getGallerySaleNet(record) - (+record.refundAmount || 0));
+  },
+
+  async _recordGalleryCashSale(record) {
+    const amount = this._getGalleryCashAmount(record);
+    if (amount <= 0) return;
+    await this._recordCashMovement({
+      id: 'cash_sale_gallery_' + record.id,
+      date: record.date,
+      type: 'cash_sale',
+      amount,
+      sourceType: 'gallery',
+      sourceId: record.id,
+      reason: '画廊现金收款',
+      notes: record.notes || ''
+    });
+  },
+
+  async _recordGalleryCashDelta(oldRecord, newRecord, reason) {
+    const oldCash = this._getGalleryCashAmount(oldRecord);
+    const newCash = this._getGalleryCashAmount(newRecord);
+    const delta = newCash - oldCash;
+    if (!delta) return;
+    await this._recordCashMovement({
+      id: 'cash_edit_gallery_' + newRecord.id + '_' + Date.now().toString(36),
+      date: newRecord.date || oldRecord?.date || todayStr(),
+      type: 'cash_adjustment',
+      amount: delta,
+      sourceType: 'gallery',
+      sourceId: newRecord.id,
+      reason: reason || '画廊现金收款编辑差额',
+      notes: `原现金 ${this._fmt(oldCash)}，新现金 ${this._fmt(newCash)}`
+    });
+  },
+
+  async _getCashMovements() {
+    try {
+      return await Store.getAll('cashMovements') || [];
+    } catch (e) {
+      console.warn('[cash] load movements failed:', e);
+      return [];
+    }
+  },
+
+  _sumCashMovements(movements, filterFn = null) {
+    return (movements || [])
+      .filter(m => !filterFn || filterFn(m))
+      .reduce((s, m) => s + (+m.amount || 0), 0);
+  },
+
   // —— 收入记录列表（按日筛选） ——
   async _renderRevenueList() {
     const el = $('#revenue-list');
@@ -760,7 +902,7 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">💰</div>暂无收入记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>收入明细</th><th>合计</th><th>收款方式</th><th>收款人</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>收入明细</th><th>合计</th><th>状态</th><th>收款方式</th><th>收款人</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       // 明细数组字段名兼容：录入路径用驼峰（unitPrice/productName），历史/手动 SQL 可能用蛇形（unit_price/product_name）
       const itemName = i => i.productName ?? i.product_name ?? i.name ?? '';
@@ -804,18 +946,27 @@ const UI = {
         ? `<div class="rev-detail-group">${detailHtml}</div>`
         : `<div class="rev-tag-group">${detailHtml}</div>`;
 
-      const total = (r.ticketAmount||0)+(r.comboAmount||0)+(r.coffeeAmount||0)+(r.workshopAmount||0)+(r.retailAmount||r.creativeAmount||0)+(r.venueAmount||0)+(r.otherAmount||0);
+      const total = this._getRevenueRecordTotal(r);
+      const refundAmount = r.refundAmount || 0;
+      const netTotal = Math.max(0, total - refundAmount);
+      const status = r.status || '正常';
+      const statusClass = status === '正常' ? 'tag-success' : status === '部分退款' ? 'tag-info' : 'tag-danger';
+      const statusText = refundAmount > 0 ? `${status} ¥${this._fmt(refundAmount)}` : status;
+      const canAdjust = Auth.isAdmin && this._canAdjustRecord(r);
       const timeStr = r.createdAt ? UI._fmtBeijingTime(r.createdAt) : r.date;
       h += `<tr>
         <td>${timeStr}</td>
         <td>${detailGroupHtml}</td>
-        <td><strong>¥${this._fmt(total)}</strong></td>
+        <td><strong>¥${this._fmt(netTotal)}</strong>${refundAmount > 0 ? `<div style="font-size:12px;color:var(--gray-500)">原 ¥${this._fmt(total)}</div>` : ''}</td>
+        <td><span class="tag ${statusClass}">${statusText}</span></td>
         <td><span class="tag tag-info">${r.paymentMethod || '—'}</span></td>
         <td>${r.handler || '—'}</td>
         <td class="action-cell">
           <div class="row-actions">
-            <button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>
-            <button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>
+            ${this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>` : ''}
+            ${canAdjust ? `<button class="btn btn-sm btn-secondary" onclick="UI._refundRevenue('${r.id}')">退款</button>` : ''}
+            ${canAdjust ? `<button class="btn btn-sm btn-danger" onclick="UI._voidRevenue('${r.id}')">作废</button>` : ''}
+            ${Auth.isAdmin ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>` : ''}
           </div>
         </td>
       </tr>`;
@@ -838,9 +989,113 @@ const UI = {
 
   async _deleteRevenue(id) {
     if (!confirm('确认删除此收入记录？')) return;
+    const record = await Store.getById('revenue', id);
+    const remainingCash = Math.max(0, (+record?.cashAmount || 0) - (+record?.refundAmount || 0));
+    if (remainingCash > 0) {
+      await this._recordCashMovement({
+        id: 'cash_delete_revenue_' + id + '_' + Date.now().toString(36),
+        date: record.date || todayStr(),
+        type: 'cash_delete',
+        amount: -remainingCash,
+        sourceType: 'revenue',
+        sourceId: id,
+        reason: '删除现金收入记录',
+        notes: '删除收入记录时同步冲销柜台现金'
+      });
+    }
     await Store.delete('revenue', id);
     this.toast('已删除');
     await this._renderRevenueList();
+    this._loadTodayStats();
+    this._loadCounterCashPanel();
+  },
+
+  async _voidRevenue(id) {
+    if (!this._requireAdminAdjustment()) return;
+    const record = await Store.getById('revenue', id);
+    if (!record || !this._canAdjustRecord(record)) {
+      this.toast('该记录已不能作废', 'error');
+      return;
+    }
+    const reason = (prompt('请输入作废原因') || '').trim();
+    if (!reason) { this.toast('已取消作废'); return; }
+    const total = this._getRevenueRecordTotal(record);
+    const now = new Date().toISOString();
+    await Store.update('revenue', id, {
+      status: '已作废',
+      adjustedAt: now,
+      adjustedBy: Auth.currentUser?.displayName || '',
+      adjustmentReason: reason
+    });
+    await this._recordTransactionAdjustment('revenue', id, 'void', total, reason);
+    const cashToVoid = Math.max(0, (+record.cashAmount || 0) - (+record.refundAmount || 0));
+    if (cashToVoid > 0) {
+      await this._recordCashMovement({
+        id: 'cash_void_revenue_' + id,
+        date: record.date || todayStr(),
+        type: 'cash_void',
+        amount: -cashToVoid,
+        sourceType: 'revenue',
+        sourceId: id,
+        reason,
+        notes: '现金收入作废'
+      });
+    }
+    this.toast('收入记录已作废');
+    await this._renderRevenueList();
+    this._loadTodayStats();
+    this._loadCounterCashPanel();
+  },
+
+  async _refundRevenue(id) {
+    if (!this._requireAdminAdjustment()) return;
+    const record = await Store.getById('revenue', id);
+    if (!record || !this._canAdjustRecord(record)) {
+      this.toast('该记录已不能退款', 'error');
+      return;
+    }
+    const total = this._getRevenueRecordTotal(record);
+    const refunded = record.refundAmount || 0;
+    const remaining = Math.max(0, total - refunded);
+    if (remaining <= 0) {
+      this.toast('该记录已无可退金额', 'error');
+      return;
+    }
+    const amount = Number(prompt(`请输入退款金额，最多 ¥${this._fmt(remaining)}`, remaining.toFixed(2)));
+    if (!Number.isFinite(amount) || amount <= 0) { this.toast('已取消退款'); return; }
+    if (amount > remaining) {
+      this.toast('退款金额不能超过可退金额', 'error');
+      return;
+    }
+    const reason = (prompt('请输入退款原因') || '').trim();
+    if (!reason) { this.toast('已取消退款'); return; }
+    const newRefund = refunded + amount;
+    const status = newRefund >= total ? '已退款' : '部分退款';
+    const now = new Date().toISOString();
+    await Store.update('revenue', id, {
+      status,
+      refundAmount: newRefund,
+      adjustedAt: now,
+      adjustedBy: Auth.currentUser?.displayName || '',
+      adjustmentReason: reason
+    });
+    await this._recordTransactionAdjustment('revenue', id, status === '已退款' ? 'refund' : 'partial_refund', amount, reason);
+    if ((+record.cashAmount || 0) > 0) {
+      await this._recordCashMovement({
+        id: 'cash_refund_revenue_' + id + '_' + Date.now().toString(36),
+        date: record.date || todayStr(),
+        type: 'cash_refund',
+        amount: -amount,
+        sourceType: 'revenue',
+        sourceId: id,
+        reason,
+        notes: '现金收入退款'
+      });
+    }
+    this.toast('退款已记录');
+    await this._renderRevenueList();
+    this._loadTodayStats();
+    this._loadCounterCashPanel();
   },
 
   // === 场地租金待收款提醒（收银台顶部） ===
@@ -861,7 +1116,7 @@ const UI = {
     if (!el) return;
     const today = todayStr();
     const all = await Store.getAll('revenue');
-    const todayRecords = all.filter(r => r.date === today);
+    const todayRecords = all.filter(r => r.date === today && (r.status || '正常') !== '已作废');
 
     const ticketQty = todayRecords.reduce((s, r) => s + (r.ticketQty || 0), 0);
     const ticketAmt = todayRecords.reduce((s, r) => s + (r.ticketAmount || 0), 0);
@@ -871,7 +1126,8 @@ const UI = {
     const retailAmt = todayRecords.reduce((s, r) => s + (r.retailAmount || r.creativeAmount || 0), 0);
     const venueAmt = todayRecords.reduce((s, r) => s + (r.venueAmount || 0), 0);
     const otherAmt = todayRecords.reduce((s, r) => s + (r.otherAmount || 0), 0);
-    const totalAmount = ticketAmt + comboAmt + coffeeAmt + workshopAmt + retailAmt + venueAmt + otherAmt;
+    const refundAmt = todayRecords.reduce((s, r) => s + (r.refundAmount || 0), 0);
+    const totalAmount = Math.max(0, ticketAmt + comboAmt + coffeeAmt + workshopAmt + retailAmt + venueAmt + otherAmt - refundAmt);
 
     const item = (label, value, isTotal) => `
       <div class="today-stat-item${isTotal ? ' today-stat-total' : ''}">
@@ -895,8 +1151,76 @@ const UI = {
       `<div class="today-stat-divider"></div>`,
       item('其他', otherAmt + venueAmt),
       `<div class="today-stat-divider"></div>`,
+      item('退款', -refundAmt),
+      `<div class="today-stat-divider"></div>`,
       item('合计', totalAmount, true),
     ].join('');
+  },
+
+  async _loadCounterCashPanel() {
+    const el = document.getElementById('pos-cash-panel');
+    if (!el) return;
+    const movements = await this._getCashMovements();
+    const today = todayStr();
+    const balance = this._sumCashMovements(movements);
+    const todayCashIn = this._sumCashMovements(movements, m => m.date === today && (+m.amount || 0) > 0);
+    const todayDeposit = -this._sumCashMovements(movements, m => m.date === today && m.type === 'cash_deposit');
+    const todayOut = -this._sumCashMovements(movements, m => m.date === today && (+m.amount || 0) < 0 && m.type !== 'cash_deposit');
+
+    const item = (label, value, isTotal) => `
+      <div class="today-stat-item${isTotal ? ' today-stat-total' : ''}">
+        <span class="today-stat-label">${label}</span>
+        <span class="today-stat-value">¥${this._fmt(value)}</span>
+      </div>
+    `;
+
+    el.innerHTML = [
+      item('柜台现金', balance, true),
+      `<div class="today-stat-divider"></div>`,
+      item('今日现金收款', todayCashIn),
+      `<div class="today-stat-divider"></div>`,
+      item('今日存现金', todayDeposit),
+      `<div class="today-stat-divider"></div>`,
+      item('现金退款/冲销', todayOut),
+      `<div class="today-stat-divider"></div>`,
+      `<button type="button" class="btn btn-sm btn-primary" onclick="UI._depositCounterCash()">存现金</button>`
+    ].join('');
+  },
+
+  async _depositCounterCash() {
+    if (!Auth.hasModuleAccess('revenue')) {
+      this.toast('无权操作收银台现金', 'error');
+      return;
+    }
+    const movements = await this._getCashMovements();
+    const balance = this._sumCashMovements(movements);
+    if (balance <= 0) {
+      this.toast('当前无可存柜台现金', 'error');
+      return;
+    }
+    const amount = Number(prompt(`请输入存现金金额，最多 ¥${this._fmt(balance)}`, balance.toFixed(2)));
+    if (!Number.isFinite(amount) || amount <= 0) { this.toast('已取消存现金'); return; }
+    if (amount > balance) {
+      this.toast('存现金金额不能超过柜台现金余额', 'error');
+      return;
+    }
+    const accountChannel = (prompt('存入账户/渠道（如 银行账户、微信账户、其他）', '银行账户') || '').trim();
+    if (!accountChannel) { this.toast('已取消存现金'); return; }
+    const notes = (prompt('备注/凭证说明（可选）', '') || '').trim();
+    await this._recordCashMovement({
+      id: 'cash_deposit_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      date: todayStr(),
+      type: 'cash_deposit',
+      amount: -amount,
+      sourceType: 'deposit',
+      sourceId: '',
+      accountChannel,
+      reason: '存现金',
+      notes
+    });
+    this.toast('存现金已记录，柜台现金已减少');
+    await this._loadCounterCashPanel();
+    if (document.getElementById('daily-closing-body')) await this._loadDailyClosing();
   },
 
   _goToSpaceTab() {
@@ -1160,7 +1484,6 @@ const UI = {
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="exp-date" value="${todayStr()}" style="flex:1">${this._todayBtn('exp-date')}</div>
           </div>
-          <div class="form-group"><label>类型</label><select id="exp-type"><option value="备用金支出">备用金支出</option><option value="备用金借入">备用金借入</option></select></div>
           <div class="form-group"><label>项目</label><select id="exp-project">${MODELS.PROJECT_TYPES.map(p => `<option value="${p}">${p}</option>`).join('')}</select></div>
           <div class="form-group"><label>支出类别</label><select id="exp-category">${MODELS.EXPENSE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
           <div class="form-group"><label>金额</label><input type="number" id="exp-amount" min="0" step="0.01" placeholder="0.00" required></div>
@@ -1180,9 +1503,11 @@ const UI = {
         <div class="filter-bar">
           <div class="form-group"><label>筛选月份</label><select id="exp-filter-month" onchange="UI._filterExpense()">${this._monthOptions()}</select></div>
           <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('exp-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterExpense()">本月</button>
+          <button type="button" class="btn btn-sm btn-primary" onclick="UI._generateSelectedExpensePdf()">生成所选 PDF</button>
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="exp-count"></span>
         </div>
         <div id="expense-list"><div class="loading-state"><div class="spinner"></div></div></div>
+        <div id="expense-pdf-list" style="margin-top:16px"></div>
       </div>
     `);
 
@@ -1192,11 +1517,11 @@ const UI = {
       if (r) this._fillExpenseForm(r);
     }
     await this._renderExpenseList();
+    await this._renderExpensePdfList();
   },
 
   _fillExpenseForm(r) {
     $('#exp-date').value = r.date;
-    $('#exp-type').value = r.type;
     $('#exp-project').value = r.project;
     $('#exp-category').value = r.category;
     $('#exp-amount').value = r.amount;
@@ -1212,25 +1537,46 @@ const UI = {
     const el = $('#expense-list');
     if (!el) return;
 
-    const records = await Store.getByMonth('expense', filter);
+    const records = (await Store.getByMonth('expense', filter)).filter(isOperationalExpenseRecord);
+    const attachmentsByExpense = this._groupExpenseAttachments(await Store.getAll('expenseAttachments'));
     const countEl = $('#exp-count');
     if (countEl) countEl.textContent = `${records.length} 条记录`;
 
-    if (!records.length) { html(el, '<div class="empty-state"><div class="icon">🧾</div>暂无支出记录</div>'); return; }
+    const expenseTotal = records.reduce((s, r) => s + (+r.amount || 0), 0);
+    const reimbursedTotal = records.reduce((s, r) => s + (r.reimbursementStatus === '已报销' ? (+r.amount || 0) : 0), 0);
+    const pendingReimbursementTotal = Math.max(0, expenseTotal - reimbursedTotal);
+    const summaryHtml = `
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">支出合计</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(expenseTotal)}</div><div class="stat-sub">${filter}</div></div>
+        <div class="stat-card"><div class="stat-label">已报销</div><div class="stat-value">¥${this._fmt(reimbursedTotal)}</div><div class="stat-sub">运营支出</div></div>
+        <div class="stat-card"><div class="stat-label">待报销</div><div class="stat-value">¥${this._fmt(pendingReimbursementTotal)}</div><div class="stat-sub">运营支出</div></div>
+      </div>`;
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>类型</th><th>项目</th><th>类别</th><th>金额</th><th>内容</th><th>经手人</th><th>发票</th><th>凭证</th><th>操作</th></tr></thead><tbody>';
+    if (!records.length) { html(el, summaryHtml + '<div class="empty-state"><div class="icon">🧾</div>暂无支出记录</div>'); return; }
+
+    let h = summaryHtml + '<div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onchange="UI._toggleAllExpenseSelection(this.checked)"></th><th>日期</th><th>项目</th><th>类别</th><th>金额</th><th>内容</th><th>经手人</th><th>票据</th><th>报销</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
+      const isReimbursed = r.reimbursementStatus === '已报销';
+      const reimbursementTag = isReimbursed ? 'tag-success' : 'tag-info';
+      const reimbursementStatus = r.reimbursementStatus || '未报销';
+      const attachmentStatus = this._renderExpenseAttachmentStatus(attachmentsByExpense[r.id] || []);
+      const checked = this._selectedExpenseIds.has(r.id) ? ' checked' : '';
       h += `<tr>
+        <td><input type="checkbox" class="exp-select" value="${r.id}"${checked} onchange="UI._toggleExpenseSelection('${r.id}', this.checked)"></td>
         <td>${r.date}</td>
-        <td><span class="tag ${r.type === '备用金借入' ? 'tag-success' : 'tag-warning'}">${r.type}</span></td>
         <td>${r.project}</td>
         <td>${r.category}</td>
         <td><strong>${this._fmt(r.amount)}</strong></td>
         <td>${r.description || '-'}</td>
         <td>${r.handler || '-'}</td>
-        <td><span class="tag ${r.invoiceStatus === '有发票' ? 'tag-success' : r.invoiceStatus === '待补' ? 'tag-danger' : 'tag-info'}">${r.invoiceStatus}</span></td>
-        <td><span class="tag ${r.receiptStatus === '有凭证' ? 'tag-success' : r.receiptStatus === '待补' ? 'tag-danger' : 'tag-info'}">${r.receiptStatus}</span></td>
+        <td>${attachmentStatus}</td>
+        <td>
+          <span class="tag ${reimbursementTag}">${reimbursementStatus}</span>
+        </td>
         <td class="row-actions">
+          <button class="btn btn-sm btn-secondary" onclick="UI._showExpenseAttachmentModal('${r.id}')">票据</button>
+          <button class="btn btn-sm btn-gold" onclick="UI._generateExpensePdf(['${r.id}'])">PDF</button>
+          <button class="btn btn-sm ${isReimbursed ? 'btn-secondary' : 'btn-primary'}" onclick="UI._toggleExpenseReimbursed('${r.id}', '${isReimbursed ? '未报销' : '已报销'}')">${isReimbursed ? '取消报销' : '已报销'}</button>
           <button class="btn btn-sm btn-secondary" onclick="UI._editExpense('${r.id}')">编辑</button>
           <button class="btn btn-sm btn-danger" onclick="UI._deleteExpense('${r.id}')">删除</button>
         </td>
@@ -1247,7 +1593,6 @@ const UI = {
 
     const data = {
       date: $('#exp-date').value,
-      type: $('#exp-type').value,
       project: $('#exp-project').value,
       category: $('#exp-category').value,
       amount: +($('#exp-amount').value || 0),
@@ -1289,9 +1634,233 @@ const UI = {
     await this._renderExpenseList();
   },
 
+  async _toggleExpenseReimbursed(id, reimbursementStatus) {
+    await Store.update('expense', id, { reimbursementStatus });
+    this.toast(reimbursementStatus === '已报销' ? '已标记为已报销' : '已取消报销标记');
+    await this._renderExpenseList();
+  },
+
   _filterExpense() {
     this._expenseFilterMonth = document.getElementById('exp-filter-month').value;
+    this._selectedExpenseIds.clear();
     this._renderExpenseList();
+  },
+
+  _toggleExpenseSelection(id, checked) {
+    if (checked) this._selectedExpenseIds.add(id);
+    else this._selectedExpenseIds.delete(id);
+  },
+
+  _toggleAllExpenseSelection(checked) {
+    document.querySelectorAll('.exp-select').forEach(input => {
+      input.checked = checked;
+      if (checked) this._selectedExpenseIds.add(input.value);
+      else this._selectedExpenseIds.delete(input.value);
+    });
+  },
+
+  async _generateSelectedExpensePdf() {
+    const ids = Array.from(this._selectedExpenseIds);
+    if (!ids.length) { this.toast('请先勾选支出记录', 'error'); return; }
+    await this._generateExpensePdf(ids);
+  },
+
+  async _generateExpensePdf(expenseIds) {
+    if (!Array.isArray(expenseIds) || !expenseIds.length) return;
+    try {
+      const title = expenseIds.length > 1
+        ? `运营支出报销凭证包（${expenseIds.length}笔）`
+        : '运营支出报销凭证';
+      this.toast('正在生成 PDF...');
+      const result = await Store.generateExpensePdf(expenseIds, title);
+      this.toast('报销 PDF 已生成');
+      this._selectedExpenseIds.clear();
+      await this._renderExpenseList();
+      await this._renderExpensePdfList();
+      const url = this._resolveImageUrl(result.pdfUrl || result.pdf_url || '');
+      if (url) window.open(url, '_blank');
+    } catch (e) {
+      this.toast('生成 PDF 失败：' + (e.message || e), 'error');
+    }
+  },
+
+  async _renderExpensePdfList() {
+    const target = $('#expense-pdf-list');
+    if (!target) return;
+    const rows = await Store.getAll('expenseReimbursements');
+    if (!rows.length) {
+      html(target, '<div class="empty-state" style="padding:18px"><div class="icon">📄</div>暂无已生成报销 PDF</div>');
+      return;
+    }
+    const recent = rows.slice(0, 8);
+    const body = recent.map(r => {
+      const url = this._resolveImageUrl(r.pdfUrl || r.pdf_url || '');
+      const expenseIds = Array.isArray(r.expenseIds || r.expense_ids) ? (r.expenseIds || r.expense_ids) : [];
+      return `<tr>
+        <td>${this._escHtml(r.title || '运营支出报销凭证包')}</td>
+        <td>${expenseIds.length || '-'}</td>
+        <td>¥${this._fmt(r.totalAmount || r.total_amount)}</td>
+        <td>${r.createdAt ? this._fmtBeijingTime(r.createdAt) : '-'}</td>
+        <td>${this._escHtml(r.generatedBy || r.generated_by || '-')}</td>
+        <td><a class="btn btn-sm btn-primary" href="${this._escHtml(url)}" target="_blank" rel="noopener">下载</a></td>
+      </tr>`;
+    }).join('');
+    html(target, `
+      <div class="card" style="margin:0">
+        <div class="card-title">已生成报销 PDF</div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>名称</th><th>笔数</th><th>金额</th><th>生成时间</th><th>生成者</th><th>操作</th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      </div>`);
+  },
+
+  _groupExpenseAttachments(rows = []) {
+    return rows.reduce((acc, row) => {
+      const id = row.expenseId || row.expense_id || '';
+      if (!id) return acc;
+      if (!acc[id]) acc[id] = [];
+      acc[id].push(row);
+      return acc;
+    }, {});
+  },
+
+  _renderExpenseAttachmentStatus(rows = []) {
+    const invoiceCount = rows.filter(a => (a.attachmentType || a.attachment_type) === 'invoice').length;
+    const paymentCount = rows.filter(a => (a.attachmentType || a.attachment_type) === 'payment').length;
+    return `
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <span class="tag ${invoiceCount ? 'tag-success' : 'tag-danger'}">发票 ${invoiceCount}</span>
+        <span class="tag ${paymentCount ? 'tag-success' : 'tag-danger'}">凭证 ${paymentCount}</span>
+      </div>`;
+  },
+
+  async _showExpenseAttachmentModal(expenseId) {
+    const expense = await Store.getById('expense', expenseId);
+    if (!expense) { this.toast('未找到支出记录', 'error'); return; }
+    document.getElementById('expense-attachment-modal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'expense-attachment-modal';
+    overlay.innerHTML = `
+      <div class="modal-card modal-card-wide">
+        <div class="modal-title">票据附件</div>
+        <div style="font-size:13px;color:var(--gray-700);margin-bottom:14px">
+          <strong>${this._escHtml(expense.project || '-')}</strong> · ¥${this._fmt(expense.amount)} · ${this._escHtml(expense.description || '无说明')}
+        </div>
+        <div class="stats-grid" style="margin-bottom:14px">
+          ${this._renderExpenseAttachmentUploadBox(expenseId, 'invoice', '发票图片')}
+          ${this._renderExpenseAttachmentUploadBox(expenseId, 'payment', '支付凭证图片')}
+        </div>
+        <div id="expense-attachment-list"><div class="loading-state"><div class="spinner"></div><span>加载附件...</span></div></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    await this._refreshExpenseAttachmentList(expenseId, false);
+  },
+
+  _renderExpenseAttachmentUploadBox(expenseId, type, title) {
+    const inputId = `expense-attach-${type}`;
+    return `
+      <div class="card" style="margin:0">
+        <div class="card-title">${title}</div>
+        <input type="file" id="${inputId}" accept="image/*" multiple>
+        <div style="font-size:12px;color:var(--gray-500);margin-top:6px">支持 jpg/png/webp/gif，单张不超过 5MB，可多选。</div>
+        <div id="${inputId}-status" style="font-size:12px;color:var(--gray-500);margin-top:6px"></div>
+        <div class="form-actions" style="margin-top:10px">
+          <button type="button" class="btn btn-sm btn-primary" onclick="UI._uploadExpenseAttachments('${expenseId}', '${type}', '${inputId}')">上传</button>
+        </div>
+      </div>`;
+  },
+
+  async _refreshExpenseAttachmentList(expenseId, refreshExpenseList = true) {
+    const target = $('#expense-attachment-list');
+    if (!target) return;
+    const rows = await Store.getExpenseAttachments(expenseId);
+    const renderGroup = (type, title) => {
+      const group = rows.filter(a => (a.attachmentType || a.attachment_type) === type);
+      if (!group.length) return `<div class="empty-state" style="padding:20px">暂无${title}</div>`;
+      return `<div class="expense-attachment-grid">${group.map(a => this._renderExpenseAttachmentItem(a)).join('')}</div>`;
+    };
+    html(target, `
+      <div class="card" style="margin-bottom:12px">
+        <div class="card-title">发票图片</div>
+        ${renderGroup('invoice', '发票')}
+      </div>
+      <div class="card">
+        <div class="card-title">支付凭证图片</div>
+        ${renderGroup('payment', '支付凭证')}
+      </div>
+    `);
+    if (refreshExpenseList) await this._renderExpenseList();
+  },
+
+  _renderExpenseAttachmentItem(a) {
+    const url = this._resolveImageUrl(a.fileUrl || a.file_url || '');
+    const name = this._escHtml(a.originalName || a.original_name || '附件');
+    const size = ((+a.fileSize || +a.file_size || 0) / 1024).toFixed(0);
+    return `
+      <div class="expense-attachment-item">
+        <a href="${this._escHtml(url)}" target="_blank" rel="noopener">
+          <img src="${this._escHtml(url)}" alt="${name}" onerror="this.outerHTML='<div class=&quot;expense-attachment-thumb expense-attachment-thumb--error&quot;>加载失败</div>'">
+        </a>
+        <div class="expense-attachment-meta">
+          <div title="${name}">${name}</div>
+          <span>${size} KB</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-danger" onclick="UI._deleteExpenseAttachment('${a.id}', '${a.expenseId || a.expense_id}')">删除</button>
+      </div>`;
+  },
+
+  async _uploadExpenseAttachments(expenseId, type, inputId) {
+    const input = document.getElementById(inputId);
+    const status = document.getElementById(inputId + '-status');
+    const files = Array.from(input?.files || []);
+    if (!files.length) { this.toast('请先选择图片', 'error'); return; }
+    try {
+      if (status) status.textContent = `上传中 0/${files.length}...`;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (!file.type.startsWith('image/')) throw new Error(`${file.name} 不是图片文件`);
+        const uploaded = await Store.uploadExpenseAttachmentFile(file, type);
+        await Store.add('expenseAttachments', createExpenseAttachment({
+          expenseId,
+          attachmentType: type,
+          fileUrl: uploaded.url,
+          originalName: uploaded.originalName || file.name,
+          fileSize: uploaded.size || file.size,
+          mimeType: uploaded.mimeType || file.type
+        }));
+        if (status) status.textContent = `上传中 ${i + 1}/${files.length}...`;
+      }
+      await Store.update('expense', expenseId, type === 'invoice' ? { invoiceStatus: '有发票' } : { receiptStatus: '有凭证' });
+      input.value = '';
+      this.toast('票据图片已上传');
+      await this._refreshExpenseAttachmentList(expenseId);
+    } catch (e) {
+      this.toast('上传失败：' + (e.message || e), 'error');
+      if (status) status.textContent = '上传失败';
+    }
+  },
+
+  async _deleteExpenseAttachment(id, expenseId) {
+    if (!confirm('确认删除此票据附件？')) return;
+    const current = await Store.getById('expenseAttachments', id);
+    await Store.delete('expenseAttachments', id);
+    const type = current?.attachmentType || current?.attachment_type || '';
+    if (type) {
+      const remaining = await Store.getExpenseAttachments(expenseId);
+      const sameTypeLeft = remaining.some(a => (a.attachmentType || a.attachment_type) === type);
+      if (!sameTypeLeft) {
+        await Store.update('expense', expenseId, type === 'invoice' ? { invoiceStatus: '待补' } : { receiptStatus: '待补' });
+      }
+    }
+    this.toast('票据附件已删除');
+    await this._refreshExpenseAttachmentList(expenseId);
   },
 
   // === 空间使用（重构 2026-07-10：财务卡 + 甘特图 + 子表付款）===
@@ -2051,11 +2620,13 @@ const UI = {
     try {
       if (this._editingGalleryId) {
         prevRecord = await Store.getById('gallery', this._editingGalleryId);
-        await Store.update('gallery', this._editingGalleryId, data);
+        const updated = await Store.update('gallery', this._editingGalleryId, data);
+        await this._recordGalleryCashDelta(prevRecord, updated || { ...prevRecord, ...data, id: this._editingGalleryId }, '画廊现金收款编辑差额');
         this.toast('画廊记录已更新');
         this._editingGalleryId = null;
       } else {
-        await Store.add('gallery', createGallerySale(data));
+        const saved = await Store.add('gallery', createGallerySale(data));
+        await this._recordGalleryCashSale(saved);
         this.toast('画廊销售记录已保存');
       }
       // 联动艺术品库状态（按 artwork_no 优先，title+artist 兜底）
@@ -2118,6 +2689,11 @@ const UI = {
     }
   },
 
+  _getGallerySaleNet(r) {
+    const qty = +(r.saleQuantity || r.sale_quantity || 1);
+    return Math.max(0, ((r.price || 0) * qty) - (r.commission || 0));
+  },
+
   async _renderGalleryList() {
     const filter = document.getElementById('gal-filter-month')?.value || todayStr().slice(0, 7);
     const el = $('#gallery-list');
@@ -2131,8 +2707,10 @@ const UI = {
 
     let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>作品名称</th><th>艺术家</th><th>成交价</th><th>佣金</th><th>净收入</th><th>买家</th><th>状态</th><th>收款方式</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
-      const net = Math.max(0, (r.price||0) - (r.commission||0));
-      const statusClass = r.status === '已售出' ? 'tag-success' : r.status === '已预定' ? 'tag-info' : 'tag-danger';
+      const net = Math.max(0, this._getGallerySaleNet(r) - (r.refundAmount || 0));
+      const statusClass = r.status === '已售出' ? 'tag-success' : (r.status === '已预定' || r.status === '部分退款') ? 'tag-info' : 'tag-danger';
+      const statusText = (r.refundAmount || 0) > 0 ? `${r.status || '已售出'} ¥${this._fmt(r.refundAmount)}` : (r.status || '已售出');
+      const canAdjust = Auth.isAdmin && this._canAdjustRecord(r);
       h += `<tr>
         <td>${r.date}</td>
         <td>${r.artworkName || '-'}</td>
@@ -2141,11 +2719,13 @@ const UI = {
         <td>¥${this._fmt(r.commission)}</td>
         <td>¥${this._fmt(net)}</td>
         <td>${r.buyerName || '-'}</td>
-        <td><span class="tag ${statusClass}">${r.status || '已售出'}</span></td>
+        <td><span class="tag ${statusClass}">${statusText}</span></td>
         <td>${r.paymentMethod || '-'}</td>
         <td class="row-actions">
-          <button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>
-          <button class="btn btn-sm btn-danger" onclick="UI._deleteGallery('${r.id}')">删除</button>
+          ${this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>` : ''}
+          ${canAdjust ? `<button class="btn btn-sm btn-secondary" onclick="UI._refundGallery('${r.id}')">退款</button>` : ''}
+          ${canAdjust ? `<button class="btn btn-sm btn-danger" onclick="UI._voidGallery('${r.id}')">作废</button>` : ''}
+          ${Auth.isAdmin ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteGallery('${r.id}')">删除</button>` : ''}
         </td>
       </tr>`;
     });
@@ -2171,8 +2751,9 @@ const UI = {
     }
     const buckets = { year: { sum: 0, count: 0 }, month: { sum: 0, count: 0 }, day: { sum: 0, count: 0 } };
     all.forEach(r => {
+      if ((r.status || '已售出') === '已作废') return;
       const d = String(r.date || '').slice(0, 10);
-      const net = calcGalleryNet(r.price, r.commission);
+      const net = Math.max(0, this._getGallerySaleNet(r) - (r.refundAmount || 0));
       if (d.startsWith(year))    { buckets.year.sum  += net; buckets.year.count++; }
       if (d.startsWith(ym))      { buckets.month.sum += net; buckets.month.count++; }
       if (d === today)           { buckets.day.sum   += net; buckets.day.count++; }
@@ -2199,6 +2780,19 @@ const UI = {
     if (!confirm('确认删除此画廊销售记录？')) return;
     let deletedRecord = null;
     try { deletedRecord = await Store.getById('gallery', id); } catch {}
+    const remainingCash = this._getGalleryCashAmount(deletedRecord);
+    if (remainingCash > 0) {
+      await this._recordCashMovement({
+        id: 'cash_delete_gallery_' + id + '_' + Date.now().toString(36),
+        date: deletedRecord.date || todayStr(),
+        type: 'cash_delete',
+        amount: -remainingCash,
+        sourceType: 'gallery',
+        sourceId: id,
+        reason: '删除画廊现金销售记录',
+        notes: '删除画廊销售记录时同步冲销柜台现金'
+      });
+    }
     await Store.delete('gallery', id);
     // 联动回滚库存
     if (deletedRecord?.status === '已售出') {
@@ -2215,6 +2809,111 @@ const UI = {
     }
     this.toast('已删除');
     await this._renderGalleryList();
+    this._loadCounterCashPanel();
+  },
+
+  async _voidGallery(id) {
+    if (!this._requireAdminAdjustment()) return;
+    const record = await Store.getById('gallery', id);
+    if (!record || !this._canAdjustRecord(record)) {
+      this.toast('该记录已不能作废', 'error');
+      return;
+    }
+    const reason = (prompt('请输入作废原因') || '').trim();
+    if (!reason) { this.toast('已取消作废'); return; }
+    const total = this._getGallerySaleNet(record);
+    const now = new Date().toISOString();
+    await Store.update('gallery', id, {
+      status: '已作废',
+      adjustedAt: now,
+      adjustedBy: Auth.currentUser?.displayName || '',
+      adjustmentReason: reason
+    });
+    await this._recordTransactionAdjustment('gallery', id, 'void', total, reason);
+    const cashToVoid = this._getGalleryCashAmount(record);
+    if (cashToVoid > 0) {
+      await this._recordCashMovement({
+        id: 'cash_void_gallery_' + id,
+        date: record.date || todayStr(),
+        type: 'cash_void',
+        amount: -cashToVoid,
+        sourceType: 'gallery',
+        sourceId: id,
+        reason,
+        notes: '画廊现金销售作废'
+      });
+    }
+    if ((record.status || '已售出') === '已售出') {
+      const qty = +(record.saleQuantity || record.sale_quantity || 1);
+      await this._syncArtworkStatusBySale(
+        { artworkNo: record.artworkNo, artworkName: record.artworkName, artist: record.artist },
+        null,
+        -qty
+      );
+    }
+    this.toast('画廊销售记录已作废');
+    await this._renderGalleryList();
+    await this._renderGallerySalesStats();
+    this._loadCounterCashPanel();
+  },
+
+  async _refundGallery(id) {
+    if (!this._requireAdminAdjustment()) return;
+    const record = await Store.getById('gallery', id);
+    if (!record || !this._canAdjustRecord(record)) {
+      this.toast('该记录已不能退款', 'error');
+      return;
+    }
+    const total = this._getGallerySaleNet(record);
+    const refunded = record.refundAmount || 0;
+    const remaining = Math.max(0, total - refunded);
+    if (remaining <= 0) {
+      this.toast('该记录已无可退金额', 'error');
+      return;
+    }
+    const amount = Number(prompt(`请输入退款金额，最多 ¥${this._fmt(remaining)}`, remaining.toFixed(2)));
+    if (!Number.isFinite(amount) || amount <= 0) { this.toast('已取消退款'); return; }
+    if (amount > remaining) {
+      this.toast('退款金额不能超过可退金额', 'error');
+      return;
+    }
+    const reason = (prompt('请输入退款原因') || '').trim();
+    if (!reason) { this.toast('已取消退款'); return; }
+    const newRefund = refunded + amount;
+    const status = newRefund >= total ? '已退款' : '部分退款';
+    const now = new Date().toISOString();
+    await Store.update('gallery', id, {
+      status,
+      refundAmount: newRefund,
+      adjustedAt: now,
+      adjustedBy: Auth.currentUser?.displayName || '',
+      adjustmentReason: reason
+    });
+    await this._recordTransactionAdjustment('gallery', id, status === '已退款' ? 'refund' : 'partial_refund', amount, reason);
+    if (this._isCashPayment(record.paymentMethod)) {
+      await this._recordCashMovement({
+        id: 'cash_refund_gallery_' + id + '_' + Date.now().toString(36),
+        date: record.date || todayStr(),
+        type: 'cash_refund',
+        amount: -amount,
+        sourceType: 'gallery',
+        sourceId: id,
+        reason,
+        notes: '画廊现金销售退款'
+      });
+    }
+    if (status === '已退款' && (record.status || '已售出') === '已售出') {
+      const qty = +(record.saleQuantity || record.sale_quantity || 1);
+      await this._syncArtworkStatusBySale(
+        { artworkNo: record.artworkNo, artworkName: record.artworkName, artist: record.artist },
+        null,
+        -qty
+      );
+    }
+    this.toast('画廊退款已记录');
+    await this._renderGalleryList();
+    await this._renderGallerySalesStats();
+    this._loadCounterCashPanel();
   },
 
   _cancelEditGallery() {
@@ -3761,6 +4460,225 @@ const UI = {
     } catch (e) {
       UI.toast(e.message, 'error');
     }
+  },
+
+  // === 日结报表 ===
+  async renderDailyClosingPage() {
+    const page = $('#page-daily-closing');
+    if (!Auth.hasModuleAccess('daily-closing')) { this._noAccess(page); return; }
+    const date = this._dailyClosingDate || todayStr();
+    html(page, `
+      <div>
+        <div class="card-title">📋 日结报表</div>
+        <div class="filter-bar">
+          <div class="form-group"><label>日结日期</label><input type="date" id="daily-close-date" value="${date}" onchange="UI._reloadDailyClosing()"></div>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('daily-close-date').value='${todayStr()}'; UI._reloadDailyClosing()">今天</button>
+          <button type="button" class="btn btn-sm btn-primary" onclick="UI._loadDailyClosing()">刷新</button>
+          <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="daily-close-status"></span>
+        </div>
+        <div id="daily-closing-body"><div class="loading-state" style="padding:40px"><div class="spinner"></div><span>加载日结数据...</span></div></div>
+      </div>
+    `);
+    await this._loadDailyClosing();
+  },
+
+  _sumBy(rows, key, valueKey = 'netAmount') {
+    return rows.reduce((acc, row) => {
+      const name = row[key] || '未分类';
+      acc[name] = (acc[name] || 0) + (+row[valueKey] || 0);
+      return acc;
+    }, {});
+  },
+
+  _esc(v) {
+    return String(v ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  },
+
+  _rowsFromSummary(obj, labelName = '项目', labelMap = {}) {
+    const entries = Object.entries(obj || {}).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (!entries.length) return `<tr><td colspan="2" style="color:var(--gray-500)">暂无数据</td></tr>`;
+    return entries.map(([label, value]) => `<tr><td>${this._esc(labelMap[label] || label)}</td><td><strong>¥${this._fmt(value)}</strong></td></tr>`).join('');
+  },
+
+  async _reloadDailyClosing() {
+    this._dailyClosingDate = document.getElementById('daily-close-date')?.value || todayStr();
+    await this._loadDailyClosing();
+  },
+
+  async _loadDailyClosing() {
+    const body = $('#daily-closing-body');
+    if (!body) return;
+    const date = document.getElementById('daily-close-date')?.value || this._dailyClosingDate || todayStr();
+    this._dailyClosingDate = date;
+    const statusEl = $('#daily-close-status');
+    if (statusEl) statusEl.textContent = '加载中...';
+
+    const [facts, expenses, adjustments, cashMovements, closings] = await Promise.all([
+      Store.getByDateRange('revenueFacts', date, date),
+      Store.getByDateRange('expense', date, date),
+      Store.getAll('transactionAdjustments'),
+      Store.getAll('cashMovements'),
+      Store.getByDateRange('dailyClosings', date, date)
+    ]);
+
+    const dayFacts = (facts || []).filter(r => r.date === date);
+    const dayExpenses = (expenses || []).filter(r => r.date === date);
+    const dayAdjustments = (adjustments || []).filter(a => UI._fmtBeijingTime(a.createdAt || a.created_at).slice(0, 10) === date);
+    const dayCashMovements = (cashMovements || []).filter(m => m.date === date);
+    const closing = (closings || []).find(c => c.date === date) || null;
+
+    const systemNet = dayFacts.reduce((s, r) => s + (+r.netAmount || 0), 0);
+    const grossPositive = dayFacts.filter(r => (+r.netAmount || 0) > 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
+    const refundTotal = dayFacts.filter(r => (+r.netAmount || 0) < 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
+    const operationalDayExpenses = dayExpenses.filter(isOperationalExpenseRecord);
+    const expenseOut = operationalDayExpenses.reduce((s, r) => s + (+r.amount || 0), 0);
+    const pendingReceipt = operationalDayExpenses.filter(r => r.receiptStatus === '待补' || r.invoiceStatus === '待补').length;
+    const bySource = this._sumBy(dayFacts, 'source');
+    const byCategory = this._sumBy(dayFacts, 'category');
+    const byPayment = this._sumBy(dayFacts.filter(r => (+r.netAmount || 0) > 0), 'paymentMethod');
+    const cashOpening = this._sumCashMovements(cashMovements, m => m.date < date);
+    const cashIn = this._sumCashMovements(dayCashMovements, m => (+m.amount || 0) > 0);
+    const cashDeposit = -this._sumCashMovements(dayCashMovements, m => m.type === 'cash_deposit');
+    const cashOut = -this._sumCashMovements(dayCashMovements, m => (+m.amount || 0) < 0 && m.type !== 'cash_deposit');
+    const cashClosing = cashOpening + this._sumCashMovements(dayCashMovements);
+    const cashSummary = { cashOpening, cashIn, cashDeposit, cashOut, cashClosing, count: dayCashMovements.length };
+    const adjustmentSummary = dayAdjustments.reduce((acc, a) => {
+      const key = a.action || 'adjustment';
+      acc[key] = (acc[key] || 0) + (+a.amount || 0);
+      return acc;
+    }, {});
+
+    const confirmed = closing ? (+closing.confirmedAmount || 0) : systemNet;
+    const diff = confirmed - systemNet;
+    const status = closing?.status || '未保存';
+    const statusClass = status === '已复核' ? 'tag-success' : status === '已确认' ? 'tag-info' : 'tag-warning';
+    if (statusEl) statusEl.innerHTML = `<span class="tag ${statusClass}">${status}</span>`;
+
+    const adjustmentRows = dayAdjustments.length ? dayAdjustments.map(a => `
+      <tr>
+        <td>${UI._fmtBeijingTime(a.createdAt || a.created_at)}</td>
+        <td>${this._esc(a.targetType || '')}</td>
+        <td>${this._esc(a.action || '')}</td>
+        <td><strong>¥${this._fmt(a.amount || 0)}</strong></td>
+        <td>${this._esc(a.operatorName || '')}</td>
+        <td>${this._esc(a.reason || '')}</td>
+      </tr>
+    `).join('') : '<tr><td colspan="6" style="color:var(--gray-500)">暂无退款/作废调整</td></tr>';
+
+    html(body, `
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">系统净收入</div><div class="stat-value">¥${this._fmt(systemNet)}</div><div class="stat-sub">${dayFacts.length} 条收入事实</div></div>
+        <div class="stat-card"><div class="stat-label">正向收入</div><div class="stat-value">¥${this._fmt(grossPositive)}</div><div class="stat-sub">退款前口径</div></div>
+        <div class="stat-card"><div class="stat-label">退款扣减</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(refundTotal)}</div><div class="stat-sub">${dayAdjustments.length} 条调整流水</div></div>
+        <div class="stat-card"><div class="stat-label">运营支出</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(expenseOut)}</div><div class="stat-sub">${pendingReceipt} 条票据待补</div></div>
+      </div>
+
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">柜台现金期初</div><div class="stat-value">¥${this._fmt(cashOpening)}</div><div class="stat-sub">截至前一日</div></div>
+        <div class="stat-card"><div class="stat-label">现金收款</div><div class="stat-value">¥${this._fmt(cashIn)}</div><div class="stat-sub">${dayCashMovements.filter(m => (+m.amount || 0) > 0).length} 条入柜台流水</div></div>
+        <div class="stat-card"><div class="stat-label">存现金</div><div class="stat-value" style="color:var(--green-700)">¥${this._fmt(cashDeposit)}</div><div class="stat-sub">转为账户资金，不新增收入</div></div>
+        <div class="stat-card"><div class="stat-label">柜台现金期末</div><div class="stat-value">¥${this._fmt(cashClosing)}</div><div class="stat-sub">现金退款/冲销 ¥${this._fmt(cashOut)}</div></div>
+      </div>
+
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-title">按来源</div>
+          <div class="table-wrap"><table class="data-table"><tbody>${this._rowsFromSummary(bySource, '项目', { pos: '收银台' })}</tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-title">按品类</div>
+          <div class="table-wrap"><table class="data-table"><tbody>${this._rowsFromSummary(byCategory)}</tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-title">收款方式</div>
+          <div class="table-wrap"><table class="data-table"><tbody>${this._rowsFromSummary(byPayment)}</tbody></table></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">退款/作废/调整流水</div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>时间</th><th>对象</th><th>动作</th><th>金额</th><th>操作人</th><th>原因</th></tr></thead>
+            <tbody>${adjustmentRows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">日结确认</div>
+        <div class="form-grid">
+          <div class="form-group"><label>系统净收入</label><input type="number" id="daily-system-net" value="${systemNet.toFixed(2)}" readonly></div>
+          <div class="form-group"><label>实收确认金额</label><input type="number" id="daily-confirmed" value="${confirmed.toFixed(2)}" step="0.01" oninput="UI._updateDailyClosingDiff()"></div>
+          <div class="form-group"><label>差异金额</label><input type="number" id="daily-diff" value="${diff.toFixed(2)}" readonly></div>
+          <div class="form-group"><label>结账人</label><input type="text" id="daily-closer" value="${this._esc(closing?.closerName || Auth.currentUser?.displayName || '')}"></div>
+          <div class="form-group"><label>复核人</label><input type="text" id="daily-reviewer" value="${this._esc(closing?.reviewerName || '')}"></div>
+          <div class="form-group"><label>状态</label><select id="daily-status">
+            ${['草稿','已确认','已复核'].map(s => `<option value="${s}"${s === (closing?.status || '草稿') ? ' selected' : ''}>${s}</option>`).join('')}
+          </select></div>
+          <div class="form-group full"><label>差异说明/备注</label><textarea id="daily-notes" rows="3">${this._esc(closing?.notes || '')}</textarea></div>
+        </div>
+        <div class="form-actions full">
+          <button type="button" class="btn btn-primary" onclick="UI._saveDailyClosing()">保存日结</button>
+        </div>
+      </div>
+    `);
+
+    this._dailyClosingSnapshot = {
+      existingId: closing?.id || '',
+      date,
+      systemNet,
+      revenueSummary: { bySource, byCategory, facts: dayFacts.length, grossPositive, refundTotal },
+      paymentSummary: byPayment,
+      expenseSummary: { expenseOut, pendingReceipt, count: operationalDayExpenses.length },
+      adjustmentSummary,
+      cashSummary
+    };
+  },
+
+  _updateDailyClosingDiff() {
+    const systemNet = +($('#daily-system-net')?.value || 0);
+    const confirmed = +($('#daily-confirmed')?.value || 0);
+    const diff = $('#daily-diff');
+    if (diff) diff.value = (confirmed - systemNet).toFixed(2);
+  },
+
+  async _saveDailyClosing() {
+    const snap = this._dailyClosingSnapshot;
+    if (!snap) { this.toast('请先加载日结数据', 'error'); return; }
+    const confirmedAmount = +($('#daily-confirmed')?.value || 0);
+    const status = $('#daily-status')?.value || '草稿';
+    if (status === '已复核' && !Auth.isAdmin) {
+      this.toast('仅管理员可标记为已复核', 'error');
+      return;
+    }
+    const record = createDailyClosing({
+      id: snap.existingId || undefined,
+      date: snap.date,
+      systemNetAmount: snap.systemNet,
+      confirmedAmount,
+      differenceAmount: confirmedAmount - snap.systemNet,
+      revenueSummary: snap.revenueSummary,
+      paymentSummary: snap.paymentSummary,
+      expenseSummary: snap.expenseSummary,
+      adjustmentSummary: snap.adjustmentSummary,
+      cashSummary: snap.cashSummary,
+      closerId: Auth.currentUser?.id || '',
+      closerName: $('#daily-closer')?.value.trim() || Auth.currentUser?.displayName || '',
+      reviewerName: $('#daily-reviewer')?.value.trim() || '',
+      status,
+      notes: $('#daily-notes')?.value.trim() || ''
+    });
+    record.updatedAt = new Date().toISOString();
+    if (snap.existingId) {
+      await Store.update('dailyClosings', snap.existingId, record);
+      this.toast('日结已更新');
+    } else {
+      const saved = await Store.add('dailyClosings', record);
+      this._dailyClosingSnapshot.existingId = saved.id;
+      this.toast('日结已保存');
+    }
+    await this._loadDailyClosing();
   },
 
   // === 数据报表 ===

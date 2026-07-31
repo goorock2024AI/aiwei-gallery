@@ -153,6 +153,45 @@ const Store = {
     }
   },
 
+  async getExpenseAttachments(expenseId) {
+    try {
+      const table = this._table('expenseAttachments');
+      return await this._request('GET', `/rest/v1/${table}?expense_id=eq.${encodeURIComponent(expenseId)}&order=created_at.desc`) || [];
+    } catch (e) {
+      this._handleError(e, '查询附件');
+      return [];
+    }
+  },
+
+  async uploadExpenseAttachmentFile(file, attachmentType) {
+    const base = await this._ensureClient();
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${base}/rest/v1/expense_attachments/upload?type=${encodeURIComponent(attachmentType || 'invoice')}`, {
+      method: 'POST',
+      body: fd
+    });
+    if (!res.ok) {
+      let msg = '上传失败';
+      try { const e = await res.json(); msg = e.message || e.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    return await res.json();
+  },
+
+  async generateExpensePdf(expenseIds, title = '') {
+    try {
+      return await this._request('POST', '/rest/v1/expense_reimbursements/generate', {
+        expenseIds,
+        title,
+        generatedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || ''
+      });
+    } catch (e) {
+      this._handleError(e, '生成报销 PDF');
+      throw e;
+    }
+  },
+
   async getMonthlySummary(type, year) {
     const all = await this.getByYear(type, year);
     const months = {};

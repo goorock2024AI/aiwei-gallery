@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS revenue (
   project_name TEXT DEFAULT '',
   handler TEXT DEFAULT '',
   notes TEXT DEFAULT '',
+  status TEXT DEFAULT '正常',
+  refund_amount NUMERIC(12,2) DEFAULT 0,
+  adjusted_at TIMESTAMPTZ,
+  adjusted_by TEXT DEFAULT '',
+  adjustment_reason TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_date ON revenue(date);
@@ -35,7 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_revenue_date ON revenue(date);
 CREATE TABLE IF NOT EXISTS expense (
   id TEXT PRIMARY KEY,
   date TEXT NOT NULL,
-  type TEXT DEFAULT '备用金支出',
+  type TEXT DEFAULT '运营支出',
   project TEXT DEFAULT '运营',
   category TEXT DEFAULT '材料',
   amount NUMERIC(12,2) DEFAULT 0,
@@ -43,10 +48,38 @@ CREATE TABLE IF NOT EXISTS expense (
   handler TEXT DEFAULT '',
   invoice_status TEXT DEFAULT '待补',
   receipt_status TEXT DEFAULT '待补',
+  reimbursement_status TEXT DEFAULT '未报销',
   related_activity TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_expense_date ON expense(date);
+
+CREATE TABLE IF NOT EXISTS expense_attachments (
+  id TEXT PRIMARY KEY,
+  expense_id TEXT NOT NULL REFERENCES expense(id) ON DELETE CASCADE,
+  attachment_type TEXT NOT NULL CHECK (attachment_type IN ('invoice', 'payment')),
+  file_url TEXT NOT NULL,
+  original_name TEXT DEFAULT '',
+  file_size NUMERIC(12,0) DEFAULT 0,
+  mime_type TEXT DEFAULT '',
+  uploaded_by TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_expense_attachments_expense_id ON expense_attachments(expense_id);
+CREATE INDEX IF NOT EXISTS idx_expense_attachments_type ON expense_attachments(attachment_type);
+CREATE INDEX IF NOT EXISTS idx_expense_attachments_created ON expense_attachments(created_at);
+
+CREATE TABLE IF NOT EXISTS expense_reimbursements (
+  id TEXT PRIMARY KEY,
+  expense_ids JSONB NOT NULL DEFAULT '[]',
+  title TEXT DEFAULT '',
+  total_amount NUMERIC(12,2) DEFAULT 0,
+  pdf_url TEXT NOT NULL,
+  pdf_size NUMERIC(12,0) DEFAULT 0,
+  generated_by TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_expense_reimbursements_created ON expense_reimbursements(created_at);
 
 -- 3. 空间使用表（重构 2026-07-10：加 expected_payment_date；received_amount 由 space_payments 子表聚合）
 CREATE TABLE IF NOT EXISTS space_usage (
@@ -122,10 +155,235 @@ CREATE TABLE IF NOT EXISTS gallery_sales (
   handler TEXT DEFAULT '',
   notes TEXT DEFAULT '',
   sale_quantity INTEGER DEFAULT 1,
+  refund_amount NUMERIC(12,2) DEFAULT 0,
+  adjusted_at TIMESTAMPTZ,
+  adjusted_by TEXT DEFAULT '',
+  adjustment_reason TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_gallery_sales_date ON gallery_sales(date);
 CREATE INDEX IF NOT EXISTS idx_gallery_sales_artwork_no ON gallery_sales(artwork_no) WHERE artwork_no <> '';
+
+CREATE TABLE IF NOT EXISTS transaction_adjustments (
+  id TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  amount NUMERIC(12,2) DEFAULT 0,
+  reason TEXT DEFAULT '',
+  operator_id TEXT DEFAULT '',
+  operator_name TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_transaction_adjustments_target ON transaction_adjustments(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_adjustments_created ON transaction_adjustments(created_at);
+
+CREATE TABLE IF NOT EXISTS cash_movements (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  type TEXT NOT NULL,
+  amount NUMERIC(12,2) DEFAULT 0,
+  source_type TEXT DEFAULT '',
+  source_id TEXT DEFAULT '',
+  account_channel TEXT DEFAULT '',
+  operator_id TEXT DEFAULT '',
+  operator_name TEXT DEFAULT '',
+  reason TEXT DEFAULT '',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_date ON cash_movements(date);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_source ON cash_movements(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_created ON cash_movements(created_at);
+
+CREATE TABLE IF NOT EXISTS daily_closings (
+  id TEXT PRIMARY KEY,
+  date TEXT UNIQUE NOT NULL,
+  system_net_amount NUMERIC(12,2) DEFAULT 0,
+  confirmed_amount NUMERIC(12,2) DEFAULT 0,
+  difference_amount NUMERIC(12,2) DEFAULT 0,
+  revenue_summary JSONB DEFAULT '{}',
+  payment_summary JSONB DEFAULT '{}',
+  expense_summary JSONB DEFAULT '{}',
+  adjustment_summary JSONB DEFAULT '{}',
+  cash_summary JSONB DEFAULT '{}',
+  closer_id TEXT DEFAULT '',
+  closer_name TEXT DEFAULT '',
+  reviewer_name TEXT DEFAULT '',
+  status TEXT DEFAULT '草稿',
+  notes TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_daily_closings_date ON daily_closings(date);
+
+-- 4.1 统一收入事实视图（P0-01）
+-- 只读口径：把 POS 收入、画廊销售净收入、空间实际到款统一为一张事实表。
+-- 空间收入按 payment_date 入账，避免按项目开始日期重复计入。
+CREATE OR REPLACE VIEW revenue_facts AS
+SELECT
+  r.id || ':ticket' AS id,
+  r.id AS record_id,
+  r.date,
+  'pos' AS source,
+  '门票' AS category,
+  r.ticket_amount AS amount,
+  r.ticket_amount AS net_amount,
+  r.payment_method,
+  r.project_name,
+  r.handler,
+  r.created_at
+FROM revenue r
+WHERE COALESCE(r.status, '正常') <> '已作废'
+  AND COALESCE(r.ticket_amount, 0) <> 0
+UNION ALL
+SELECT
+  r.id || ':combo' AS id,
+  r.id AS record_id,
+  r.date,
+  'pos' AS source,
+  '咖啡套票' AS category,
+  r.combo_amount AS amount,
+  r.combo_amount AS net_amount,
+  r.payment_method,
+  r.project_name,
+  r.handler,
+  r.created_at
+FROM revenue r
+WHERE COALESCE(r.status, '正常') <> '已作废'
+  AND COALESCE(r.combo_amount, 0) <> 0
+UNION ALL
+SELECT
+  r.id || ':coffee' AS id,
+  r.id AS record_id,
+  r.date,
+  'pos' AS source,
+  '咖啡' AS category,
+  r.coffee_amount AS amount,
+  r.coffee_amount AS net_amount,
+  r.payment_method,
+  r.project_name,
+  r.handler,
+  r.created_at
+FROM revenue r
+WHERE COALESCE(r.status, '正常') <> '已作废'
+  AND COALESCE(r.coffee_amount, 0) <> 0
+UNION ALL
+SELECT
+  r.id || ':workshop' AS id,
+  r.id AS record_id,
+  r.date,
+  'pos' AS source,
+  '工坊' AS category,
+  r.workshop_amount AS amount,
+  r.workshop_amount AS net_amount,
+  r.payment_method,
+  r.project_name,
+  r.handler,
+  r.created_at
+FROM revenue r
+WHERE COALESCE(r.status, '正常') <> '已作废'
+  AND COALESCE(r.workshop_amount, 0) <> 0
+UNION ALL
+SELECT
+  r.id || ':retail' AS id,
+  r.id AS record_id,
+  r.date,
+  'pos' AS source,
+  '文创' AS category,
+  COALESCE(r.retail_amount, 0) + COALESCE(r.creative_amount, 0) AS amount,
+  COALESCE(r.retail_amount, 0) + COALESCE(r.creative_amount, 0) AS net_amount,
+  r.payment_method,
+  r.project_name,
+  r.handler,
+  r.created_at
+FROM revenue r
+WHERE COALESCE(r.status, '正常') <> '已作废'
+  AND COALESCE(r.retail_amount, 0) + COALESCE(r.creative_amount, 0) <> 0
+UNION ALL
+SELECT
+  r.id || ':venue_legacy' AS id,
+  r.id AS record_id,
+  r.date,
+  'pos' AS source,
+  '场地旧口径' AS category,
+  r.venue_amount AS amount,
+  r.venue_amount AS net_amount,
+  r.payment_method,
+  r.project_name,
+  r.handler,
+  r.created_at
+FROM revenue r
+WHERE COALESCE(r.status, '正常') <> '已作废'
+  AND COALESCE(r.venue_amount, 0) <> 0
+UNION ALL
+SELECT
+  r.id || ':other' AS id,
+  r.id AS record_id,
+  r.date,
+  'pos' AS source,
+  '其他' AS category,
+  r.other_amount AS amount,
+  r.other_amount AS net_amount,
+  r.payment_method,
+  r.project_name,
+  r.handler,
+  r.created_at
+FROM revenue r
+WHERE COALESCE(r.status, '正常') <> '已作废'
+  AND COALESCE(r.other_amount, 0) <> 0
+UNION ALL
+SELECT
+  g.id || ':gallery' AS id,
+  g.id AS record_id,
+  g.date,
+  'gallery' AS source,
+  '画廊' AS category,
+  g.price AS amount,
+  COALESCE(g.price, 0) - COALESCE(g.commission, 0) AS net_amount,
+  g.payment_method,
+  g.related_exhibition AS project_name,
+  g.handler,
+  g.created_at
+FROM gallery_sales g
+WHERE COALESCE(g.status, '已售出') <> '已作废'
+  AND COALESCE(g.price, 0) <> 0
+UNION ALL
+SELECT
+  p.id || ':space' AS id,
+  p.id AS record_id,
+  p.payment_date AS date,
+  'space' AS source,
+  '场地' AS category,
+  p.amount AS amount,
+  p.amount AS net_amount,
+  p.payment_method,
+  s.project_name,
+  '' AS handler,
+  p.created_at
+FROM space_payments p
+JOIN space_usage s ON s.id = p.space_usage_id
+WHERE s.rental_type = '付费' AND COALESCE(p.amount, 0) <> 0
+UNION ALL
+SELECT
+  a.id || ':adjustment' AS id,
+  a.target_id AS record_id,
+  TO_CHAR(a.created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') AS date,
+  a.target_type AS source,
+  CASE
+    WHEN a.action = 'refund' THEN '退款'
+    WHEN a.action = 'partial_refund' THEN '部分退款'
+    ELSE '调整'
+  END AS category,
+  -ABS(a.amount) AS amount,
+  -ABS(a.amount) AS net_amount,
+  '' AS payment_method,
+  '' AS project_name,
+  a.operator_name AS handler,
+  a.created_at
+FROM transaction_adjustments a
+WHERE a.action IN ('refund', 'partial_refund')
+  AND COALESCE(a.amount, 0) <> 0;
 
 -- 5. 应用配置表
 CREATE TABLE IF NOT EXISTS app_config (
@@ -246,7 +504,12 @@ CREATE TABLE IF NOT EXISTS creative_products (
 
 -- 关闭 RLS（兼容当前认证方案）
 ALTER TABLE revenue DISABLE ROW LEVEL SECURITY;
+ALTER TABLE transaction_adjustments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE cash_movements DISABLE ROW LEVEL SECURITY;
+ALTER TABLE daily_closings DISABLE ROW LEVEL SECURITY;
 ALTER TABLE expense DISABLE ROW LEVEL SECURITY;
+ALTER TABLE expense_attachments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE expense_reimbursements DISABLE ROW LEVEL SECURITY;
 ALTER TABLE space_usage DISABLE ROW LEVEL SECURITY;
 ALTER TABLE gallery_sales DISABLE ROW LEVEL SECURITY;
 ALTER TABLE app_config DISABLE ROW LEVEL SECURITY;

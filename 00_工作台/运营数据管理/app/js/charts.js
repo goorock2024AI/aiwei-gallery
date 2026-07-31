@@ -1,6 +1,25 @@
 // charts.js — Chart.js 图表渲染（Supabase 异步版）
 var Charts = {
   _charts: {},
+  _chartColors: {
+    revenue: {
+      total: '#222222',
+      floor: '#d73a31',
+      ticket: '#2563eb',
+      combo: '#7c3aed',
+      coffee: '#d97706',
+      workshop: '#b8863a',
+      creative: '#64748b',
+      venue: '#0f766e',
+      gallery: '#8e44ad',
+      other: '#52525b'
+    },
+    expense: {
+      expense: '#c0392b',
+      borrow: '#15803d',
+      palette: ['#c0392b', '#b45309', '#2563eb', '#0f766e', '#7c3aed', '#64748b', '#b8863a', '#52525b']
+    }
+  },
   _revStructPeriod: 'month', // 收入结构卡片期间维度：'month' 月度 / 'year' 年度
   _expCatPeriod: 'month',    // 支出分类卡片期间维度：'month' 月度 / 'year' 年度
   _revOverviewPeriod: 'day', // 收入总览卡片期间维度：'day' 本日 / 'month' 本月 / 'year' 本年 / 'custom' 选定日（默认当日）
@@ -8,6 +27,50 @@ var Charts = {
 
   _destroy(id) {
     if (this._charts[id]) { this._charts[id].destroy(); delete this._charts[id]; }
+  },
+
+  _isNarrowChart() {
+    return (window.innerWidth || document.documentElement.clientWidth || 0) <= 768;
+  },
+
+  _formatMoney(value) {
+    const n = +value || 0;
+    return '¥' + n.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+  },
+
+  _renderBreakdownSummary(targetId, labels, data, colors, emptyText) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+
+    const rows = labels
+      .map((label, i) => ({
+        label,
+        value: +data[i] || 0,
+        color: colors[i] || '#64748b'
+      }))
+      .filter(item => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+
+    const total = rows.reduce((sum, item) => sum + item.value, 0);
+    if (!rows.length || total <= 0) {
+      target.innerHTML = `<div class="chart-summary-empty">${emptyText || '暂无可展示数据'}</div>`;
+      return;
+    }
+
+    const topRows = rows.slice(0, 6).map(item => {
+      const pct = (item.value / total * 100).toFixed(1);
+      return `
+        <div class="chart-summary-row">
+          <span class="chart-summary-name"><i style="background:${item.color}"></i>${item.label}</span>
+          <span class="chart-summary-value">${this._formatMoney(item.value)} <em>${pct}%</em></span>
+        </div>
+      `;
+    }).join('');
+
+    target.innerHTML = `
+      <div class="chart-summary-total">合计 ${this._formatMoney(total)}</div>
+      <div class="chart-summary-list">${topRows}</div>
+    `;
   },
 
   _getYM() {
@@ -41,6 +104,7 @@ var Charts = {
             </div>
           </div>
           <canvas id="chart-revenue-structure"></canvas>
+          <div id="chart-revenue-structure-summary" class="chart-summary"></div>
         </div>
         <div class="chart-box"><div class="chart-title">工坊项目销量排名</div><canvas id="chart-workshop-rank"></canvas></div>
         <div class="chart-box">
@@ -52,6 +116,7 @@ var Charts = {
             </div>
           </div>
           <canvas id="chart-expense-category"></canvas>
+          <div id="chart-expense-category-summary" class="chart-summary"></div>
         </div>
         <div class="chart-box"><div class="chart-title">月度支出趋势</div><canvas id="chart-expense-trend"></canvas></div>
       </div>
@@ -91,9 +156,59 @@ var Charts = {
     const customDate = this._revOverviewCustomDate || today;
 
     // 一次拉全年，内存按日期前缀过滤（与 _renderGallerySalesStats 同款模式）
-    const revenues = await Store.getByYear('revenue', year);
-    const galleryAll = await Store.getByYear('gallery', year);
-    const spaceAll = await Store.getAll('space');
+    const factYear = period === 'custom' ? customDate.slice(0, 4) : year;
+    let revenueFacts = await Store.getByYear('revenueFacts', factYear);
+    if (!revenueFacts.length) {
+      const [legacyRevenues, legacyGallery, legacySpace] = await Promise.all([
+        Store.getByYear('revenue', factYear),
+        Store.getByYear('gallery', factYear),
+        Store.getAll('space')
+      ]);
+      const pushFact = (arr, date, category, amount) => {
+        if ((+amount || 0) !== 0) arr.push({ date, category, amount, netAmount: amount });
+      };
+      revenueFacts = [];
+      legacyRevenues.forEach(r => {
+        pushFact(revenueFacts, r.date, '门票', r.ticketAmount);
+        pushFact(revenueFacts, r.date, '咖啡套票', r.comboAmount);
+        pushFact(revenueFacts, r.date, '咖啡', r.coffeeAmount);
+        pushFact(revenueFacts, r.date, '工坊', r.workshopAmount);
+        pushFact(revenueFacts, r.date, '文创', (+r.retailAmount || 0) + (+r.creativeAmount || 0));
+        pushFact(revenueFacts, r.date, '场地旧口径', r.venueAmount);
+        pushFact(revenueFacts, r.date, '其他', r.otherAmount);
+      });
+      legacyGallery.forEach(r => {
+        pushFact(revenueFacts, r.date, '画廊', (+r.price || 0) - (+r.commission || 0));
+      });
+      legacySpace.forEach(s => {
+        if (s.rentalType !== '付费') return;
+        (s.payments || []).forEach(p => {
+          if ((p.paymentDate || '').startsWith(factYear)) pushFact(revenueFacts, p.paymentDate, '场地', +p.amount || 0);
+        });
+      });
+    }
+    const factAmount = (r) => Number(r.netAmount ?? r.net_amount ?? r.amount ?? 0) || 0;
+    const factIs = (r, category) => r.category === category;
+    const revenues = revenueFacts.map(r => {
+      const amount = factAmount(r);
+      return {
+        date: r.date,
+        ticketAmount: factIs(r, '门票') ? amount : 0,
+        comboAmount: factIs(r, '咖啡套票') ? amount : 0,
+        coffeeAmount: factIs(r, '咖啡') ? amount : 0,
+        workshopAmount: factIs(r, '工坊') ? amount : 0,
+        retailAmount: factIs(r, '文创') ? amount : 0,
+        creativeAmount: 0,
+        venueAmount: factIs(r, '场地旧口径') ? amount : 0,
+        otherAmount: factIs(r, '其他') ? amount : 0
+      };
+    });
+    const galleryAll = revenueFacts
+      .filter(r => factIs(r, '画廊'))
+      .map(r => ({ date: r.date, price: factAmount(r), commission: 0 }));
+    const spaceAll = revenueFacts
+      .filter(r => factIs(r, '场地'))
+      .map(r => ({ rentalType: '付费', payments: [{ paymentDate: r.date, amount: factAmount(r) }] }));
 
     const periodLabel = period === 'day' ? `本日（${today}）`
                       : period === 'month' ? `本月（${ym}）`
@@ -232,12 +347,12 @@ var Charts = {
         datasets: [{
           label: '日收入',
           data,
-          borderColor: '#4a8c5c',
-          backgroundColor: 'rgba(74,140,92,0.1)',
+          borderColor: this._chartColors.revenue.venue,
+          backgroundColor: 'rgba(15,118,110,0.1)',
           fill: true,
           tension: 0.3,
           pointRadius: 4,
-          pointBackgroundColor: '#4a8c5c'
+          pointBackgroundColor: this._chartColors.revenue.venue
         }]
       },
       options: {
@@ -318,14 +433,14 @@ var Charts = {
       data: {
         labels,
         datasets: [
-          { label: '门票', data: ticketData, backgroundColor: '#4a8c5c' },
-          { label: '咖啡套票', data: comboData, backgroundColor: '#57a86a' },
-          { label: '咖啡', data: coffeeData, backgroundColor: '#7ab88a' },
-          { label: '工坊', data: workshopData, backgroundColor: '#b8863a' },
-          { label: '文创', data: creativeData, backgroundColor: '#c5c0b5' },
-          { label: '场地', data: venueData, backgroundColor: '#2c6b9e' },
-          { label: '画廊', data: galleryData, backgroundColor: '#8e44ad' },
-          { label: '其他', data: otherData, backgroundColor: '#888888' }
+          { label: '门票', data: ticketData, backgroundColor: this._chartColors.revenue.ticket },
+          { label: '咖啡套票', data: comboData, backgroundColor: this._chartColors.revenue.combo },
+          { label: '咖啡', data: coffeeData, backgroundColor: this._chartColors.revenue.coffee },
+          { label: '工坊', data: workshopData, backgroundColor: this._chartColors.revenue.workshop },
+          { label: '文创', data: creativeData, backgroundColor: this._chartColors.revenue.creative },
+          { label: '场地', data: venueData, backgroundColor: this._chartColors.revenue.venue },
+          { label: '画廊', data: galleryData, backgroundColor: this._chartColors.revenue.gallery },
+          { label: '其他', data: otherData, backgroundColor: this._chartColors.revenue.other }
         ]
       },
       options: {
@@ -414,6 +529,8 @@ var Charts = {
     const totalData = labels.map((_, i) =>
       ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i] + otherData[i]
     );
+    const dailyRevenueFloor = 900;
+    const dailyRevenueFloorData = labels.map(() => dailyRevenueFloor);
 
     const ctx = canvas.getContext('2d');
     this._charts['daily-revenue'] = new Chart(ctx, {
@@ -421,15 +538,16 @@ var Charts = {
       data: {
         labels,
         datasets: [
-          { label: '合计', data: totalData, borderColor: '#222222', backgroundColor: '#222222', borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 5, tension: 0.3, fill: false, order: 0 },
-          { label: '门票', data: ticketData, borderColor: '#4a8c5c', backgroundColor: '#4a8c5c', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
-          { label: '咖啡套票', data: comboData, borderColor: '#57a86a', backgroundColor: '#57a86a', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
-          { label: '咖啡', data: coffeeData, borderColor: '#7ab88a', backgroundColor: '#7ab88a', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
-          { label: '工坊', data: workshopData, borderColor: '#b8863a', backgroundColor: '#b8863a', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
-          { label: '文创', data: creativeData, borderColor: '#c5c0b5', backgroundColor: '#c5c0b5', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
-          { label: '场地', data: venueData, borderColor: '#2c6b9e', backgroundColor: '#2c6b9e', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
-          { label: '画廊', data: galleryData, borderColor: '#8e44ad', backgroundColor: '#8e44ad', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
-          { label: '其他', data: otherData, borderColor: '#888888', backgroundColor: '#888888', borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true }
+          { label: '合计', data: totalData, borderColor: this._chartColors.revenue.total, backgroundColor: this._chartColors.revenue.total, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 5, tension: 0.3, fill: false, order: 0 },
+          { label: '日均收入红线 900', data: dailyRevenueFloorData, borderColor: this._chartColors.revenue.floor, backgroundColor: this._chartColors.revenue.floor, borderWidth: 2, borderDash: [6, 6], pointRadius: 0, pointHoverRadius: 0, tension: 0, fill: false, order: 1 },
+          { label: '门票', data: ticketData, borderColor: this._chartColors.revenue.ticket, backgroundColor: this._chartColors.revenue.ticket, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '咖啡套票', data: comboData, borderColor: this._chartColors.revenue.combo, backgroundColor: this._chartColors.revenue.combo, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '咖啡', data: coffeeData, borderColor: this._chartColors.revenue.coffee, backgroundColor: this._chartColors.revenue.coffee, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '工坊', data: workshopData, borderColor: this._chartColors.revenue.workshop, backgroundColor: this._chartColors.revenue.workshop, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '文创', data: creativeData, borderColor: this._chartColors.revenue.creative, backgroundColor: this._chartColors.revenue.creative, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '场地', data: venueData, borderColor: this._chartColors.revenue.venue, backgroundColor: this._chartColors.revenue.venue, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '画廊', data: galleryData, borderColor: this._chartColors.revenue.gallery, backgroundColor: this._chartColors.revenue.gallery, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
+          { label: '其他', data: otherData, borderColor: this._chartColors.revenue.other, backgroundColor: this._chartColors.revenue.other, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true }
         ]
       },
       options: {
@@ -443,7 +561,7 @@ var Charts = {
               afterBody: function(context) {
                 const idx = context[0].dataIndex;
                 const total = totalData[idx];
-                return '合计: ¥' + (total || 0).toFixed(2);
+                return ['合计: ¥' + (total || 0).toFixed(2), '日均收入红线: ¥' + dailyRevenueFloor.toFixed(2)];
               }
             }
           }
@@ -521,16 +639,58 @@ var Charts = {
     }
 
     const ctx = canvas.getContext('2d');
+    const revenueLabels = ['门票', '咖啡套票', '咖啡', '工坊', '文创', '场地', '画廊', '其他'];
+    const revenueData = [ticket, combo, coffee, workshop, creative, venue, gallery, other];
+    const revenueColors = [
+      this._chartColors.revenue.ticket,
+      this._chartColors.revenue.combo,
+      this._chartColors.revenue.coffee,
+      this._chartColors.revenue.workshop,
+      this._chartColors.revenue.creative,
+      this._chartColors.revenue.venue,
+      this._chartColors.revenue.gallery,
+      this._chartColors.revenue.other
+    ];
+    this._renderBreakdownSummary(
+      'chart-revenue-structure-summary',
+      revenueLabels,
+      revenueData,
+      revenueColors,
+      '当前期间暂无收入结构数据'
+    );
+    const isNarrow = this._isNarrowChart();
     this._charts['revenue-structure'] = new Chart(ctx, {
-      type: 'doughnut',
+      type: isNarrow ? 'bar' : 'doughnut',
       data: {
-        labels: ['门票', '咖啡套票', '咖啡', '工坊', '文创', '场地', '画廊', '其他'],
+        labels: revenueLabels,
         datasets: [{
-          data: [ticket, combo, coffee, workshop, creative, venue, gallery, other],
-          backgroundColor: ['#4a8c5c', '#57a86a', '#7ab88a', '#b8863a', '#c5c0b5', '#2c6b9e', '#8e44ad', '#8a8578']
+          data: revenueData,
+          backgroundColor: revenueColors,
+          borderRadius: isNarrow ? 4 : 0
         }]
       },
-      options: {
+      options: isNarrow ? {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const total = context.dataset.data.reduce((a, b) => a + (+b || 0), 0);
+                const val = context.parsed?.x || 0;
+                const pct = total > 0 ? (val / total * 100).toFixed(1) : 0;
+                return context.label + ': ¥' + val.toFixed(2) + ' (' + pct + '%)';
+              }
+            }
+          }
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { callback: v => '¥' + v } },
+          y: { ticks: { autoSkip: false } }
+        }
+      } : {
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: {
@@ -643,8 +803,8 @@ var Charts = {
       ? await Store.getByYear('expense', year)
       : await Store.getByMonth('expense', ym);
     const cats = {};
-    recs.forEach(r => {
-      if (r.type === '备用金支出') cats[r.category] = (cats[r.category] || 0) + (r.amount||0);
+    recs.filter(isOperationalExpenseRecord).forEach(r => {
+      cats[r.category] = (cats[r.category] || 0) + (r.amount || 0);
     });
 
     const entries = Object.entries(cats).sort((a, b) => b[1] - a[1]);
@@ -659,14 +819,44 @@ var Charts = {
         ? `支出分类汇总（${periodLabel}）`
         : `支出分类汇总（${periodLabel}·暂无数据）`;
     }
+
+    const colors = this._chartColors.expense.palette;
+    this._renderBreakdownSummary(
+      'chart-expense-category-summary',
+      labels,
+      data,
+      colors,
+      '当前期间暂无运营支出数据'
+    );
     if (!labels.length) return;
 
-    const colors = ['#c0392b','#e67e22','#f1c40f','#2c6b9e','#27ae60','#8e44ad','#7ab88a','#b8863a','#8a8578','#5c574a'];
+    const isNarrow = this._isNarrowChart();
     const ctx = canvas.getContext('2d');
     this._charts['expense-category'] = new Chart(ctx, {
-      type: 'pie',
-      data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, labels.length) }] },
-      options: {
+      type: isNarrow ? 'bar' : 'pie',
+      data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, labels.length), borderRadius: isNarrow ? 4 : 0 }] },
+      options: isNarrow ? {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const total = context.dataset.data.reduce((a, b) => a + (+b || 0), 0);
+                const val = context.parsed?.x || 0;
+                const pct = total > 0 ? (val / total * 100).toFixed(1) : 0;
+                return context.label + ': ¥' + val.toFixed(2) + ' (' + pct + '%)';
+              }
+            }
+          }
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { callback: v => '¥' + v } },
+          y: { ticks: { autoSkip: false } }
+        }
+      } : {
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: {
@@ -718,19 +908,15 @@ var Charts = {
     const months = await Store.getMonthlySummary('expense', year);
     const labels = [];
     const expenseData = [];
-    const borrowData = [];
-
     for (let m = 1; m <= 12; m++) {
       const ms = String(m).padStart(2, '0');
       labels.push(m + '月');
       const recs = months[ms];
-      let exp = 0, bor = 0;
+      let exp = 0;
       recs.forEach(r => {
-        if (r.type === '备用金支出') exp += (r.amount||0);
-        else bor += (r.amount||0);
+        if (isOperationalExpenseRecord(r)) exp += (r.amount || 0);
       });
       expenseData.push(exp);
-      borrowData.push(bor);
     }
 
     const ctx = canvas.getContext('2d');
@@ -739,8 +925,7 @@ var Charts = {
       data: {
         labels,
         datasets: [
-          { label: '支出', data: expenseData, backgroundColor: '#c0392b' },
-          { label: '借入', data: borrowData, backgroundColor: '#27ae60' }
+          { label: '运营支出', data: expenseData, backgroundColor: this._chartColors.expense.expense }
         ]
       },
       options: {
