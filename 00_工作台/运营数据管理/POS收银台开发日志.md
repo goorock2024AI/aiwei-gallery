@@ -1763,7 +1763,7 @@ P0-02A 新增收入/画廊调整字段后，`createRevenue()` 和 `createGallery
 **本次改动**
 
 - 新增依赖 `pdfkit`，用于后端生成 PDF。
-- Dockerfile 新增 `font-noto-cjk`，确保生产容器可渲染中文 PDF。
+- PDF 字体支持通过 `PDF_FONT_PATH`、本地 `fonts/` 和系统字体路径探测；生产镜像不依赖 `apk` 安装中文字体包，避免外部包源卡住构建。
 - 新增 `expense_reimbursements` 表，保存每次生成的报销包记录：支出 ID 列表、标题、合计金额、PDF URL、文件大小、生成者、生成时间。
 - 新增迁移脚本：`sql/20260731_expense_reimbursements_pdf.sql`。
 - 后端新增 `/rest/v1/expense_reimbursements/generate` 接口。
@@ -1807,3 +1807,25 @@ P0-02A 新增收入/画廊调整字段后，`createRevenue()` 和 `createGallery
 - `npm install pdfkit` 后 `npm audit` 提示 1 个 high severity vulnerability；生产发布前需要决定是否接受 `pdfkit` 当前依赖链风险，或改用其他 PDF 生成方案。
 - PDF 图片嵌入当前原生支持 jpg/png；gif/webp 已保留附件链接提示，后续如需完整嵌入 webp，可再引入图片转码能力。
 - 图片 60 天、PDF 365 天的自动清理尚未实现，应作为 P3 定时清理任务处理。
+
+---
+
+## 2026-07-31 支出记录模块热修：上传票据入口外显
+
+**背景**
+
+云端 P0-P2 发布后，实际 UI 中上传入口不够明显：行内按钮文案为“票据”，上传按钮藏在弹窗中，用户难以判断哪里上传发票和支付凭证。
+
+**本次改动**
+
+- 支出列表顶部新增“上传票据”按钮：勾选一条支出后可直接打开票据上传弹窗。
+- 行内操作按钮由“票据”改为“上传票据”。
+- 票据状态列在“发票/凭证”数量旁增加“上传”按钮。
+- 新建支出保存成功后，提示是否立即上传发票或支付凭证。
+- `app/index.html` 将 `ui.js` cache-bust token 更新为 `expense-p2-upload-ui-20260731`。
+
+**验证**
+
+- `node --check app/js/ui.js` 通过。
+- 线上 `GET http://122.51.56.50/` 返回 200，包含 `expense-p2-upload-ui-20260731`。
+- 线上 `GET /js/ui.js?v=expense-p2-upload-ui-20260731` 返回 200，包含“上传票据”和 `_uploadSelectedExpenseAttachment`。

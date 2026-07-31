@@ -1503,6 +1503,7 @@ const UI = {
         <div class="filter-bar">
           <div class="form-group"><label>筛选月份</label><select id="exp-filter-month" onchange="UI._filterExpense()">${this._monthOptions()}</select></div>
           <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('exp-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterExpense()">本月</button>
+          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._uploadSelectedExpenseAttachment()">上传票据</button>
           <button type="button" class="btn btn-sm btn-primary" onclick="UI._generateSelectedExpensePdf()">生成所选 PDF</button>
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="exp-count"></span>
         </div>
@@ -1559,7 +1560,7 @@ const UI = {
       const isReimbursed = r.reimbursementStatus === '已报销';
       const reimbursementTag = isReimbursed ? 'tag-success' : 'tag-info';
       const reimbursementStatus = r.reimbursementStatus || '未报销';
-      const attachmentStatus = this._renderExpenseAttachmentStatus(attachmentsByExpense[r.id] || []);
+      const attachmentStatus = this._renderExpenseAttachmentStatus(attachmentsByExpense[r.id] || [], r.id);
       const checked = this._selectedExpenseIds.has(r.id) ? ' checked' : '';
       h += `<tr>
         <td><input type="checkbox" class="exp-select" value="${r.id}"${checked} onchange="UI._toggleExpenseSelection('${r.id}', this.checked)"></td>
@@ -1574,7 +1575,7 @@ const UI = {
           <span class="tag ${reimbursementTag}">${reimbursementStatus}</span>
         </td>
         <td class="row-actions">
-          <button class="btn btn-sm btn-secondary" onclick="UI._showExpenseAttachmentModal('${r.id}')">票据</button>
+          <button class="btn btn-sm btn-primary" onclick="UI._showExpenseAttachmentModal('${r.id}')">上传票据</button>
           <button class="btn btn-sm btn-gold" onclick="UI._generateExpensePdf(['${r.id}'])">PDF</button>
           <button class="btn btn-sm ${isReimbursed ? 'btn-secondary' : 'btn-primary'}" onclick="UI._toggleExpenseReimbursed('${r.id}', '${isReimbursed ? '未报销' : '已报销'}')">${isReimbursed ? '取消报销' : '已报销'}</button>
           <button class="btn btn-sm btn-secondary" onclick="UI._editExpense('${r.id}')">编辑</button>
@@ -1610,8 +1611,12 @@ const UI = {
       this.toast('支出记录已更新');
       this._editingExpenseId = null;
     } else {
-      await Store.add('expense', createExpense(data));
+      const created = await Store.add('expense', createExpense(data));
+      const shouldUpload = confirm('支出记录已保存。是否现在上传发票或支付凭证？');
       this.toast('支出记录已保存');
+      await this.renderExpensePage();
+      if (shouldUpload && created?.id) await this._showExpenseAttachmentModal(created.id);
+      return;
     }
     await this.renderExpensePage();
   },
@@ -1663,6 +1668,13 @@ const UI = {
     const ids = Array.from(this._selectedExpenseIds);
     if (!ids.length) { this.toast('请先勾选支出记录', 'error'); return; }
     await this._generateExpensePdf(ids);
+  },
+
+  async _uploadSelectedExpenseAttachment() {
+    const ids = Array.from(this._selectedExpenseIds);
+    if (!ids.length) { this.toast('请先勾选一条支出记录，或点击行内“上传票据”', 'error'); return; }
+    if (ids.length > 1) { this.toast('一次上传票据请选择一条支出记录', 'error'); return; }
+    await this._showExpenseAttachmentModal(ids[0]);
   },
 
   async _generateExpensePdf(expenseIds) {
@@ -1727,13 +1739,14 @@ const UI = {
     }, {});
   },
 
-  _renderExpenseAttachmentStatus(rows = []) {
+  _renderExpenseAttachmentStatus(rows = [], expenseId = '') {
     const invoiceCount = rows.filter(a => (a.attachmentType || a.attachment_type) === 'invoice').length;
     const paymentCount = rows.filter(a => (a.attachmentType || a.attachment_type) === 'payment').length;
     return `
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <span class="tag ${invoiceCount ? 'tag-success' : 'tag-danger'}">发票 ${invoiceCount}</span>
         <span class="tag ${paymentCount ? 'tag-success' : 'tag-danger'}">凭证 ${paymentCount}</span>
+        ${expenseId ? `<button type="button" class="btn btn-sm btn-secondary" onclick="UI._showExpenseAttachmentModal('${expenseId}')">上传</button>` : ''}
       </div>`;
   },
 
