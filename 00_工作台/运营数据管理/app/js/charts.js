@@ -35,7 +35,7 @@ var Charts = {
 
   _formatMoney(value) {
     const n = +value || 0;
-    return '¥' + n.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+    return '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   },
 
   _renderBreakdownSummary(targetId, labels, data, colors, emptyText) {
@@ -708,7 +708,7 @@ var Charts = {
                   const val = +data[i] || 0;
                   const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
                   return {
-                    text: `${label}  ¥${val.toFixed(0)} (${pct}%)`,
+                    text: `${label}  ¥${val.toFixed(2)} (${pct}%)`,
                     fillStyle: ds.backgroundColor[i],
                     strokeStyle: ds.backgroundColor[i],
                     lineWidth: 0,
@@ -804,7 +804,7 @@ var Charts = {
       : await Store.getByMonth('expense', ym);
     const cats = {};
     recs.filter(isOperationalExpenseRecord).forEach(r => {
-      cats[r.category] = (cats[r.category] || 0) + (r.amount || 0);
+      cats[r.category] = (cats[r.category] || 0) + (+r.amount || 0);
     });
 
     const entries = Object.entries(cats).sort((a, b) => b[1] - a[1]);
@@ -874,7 +874,7 @@ var Charts = {
                   const val = +arr[i] || 0;
                   const pct = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
                   return {
-                    text: `${label}  ¥${val.toFixed(0)} (${pct}%)`,
+                    text: `${label}  ¥${val.toFixed(2)} (${pct}%)`,
                     fillStyle: ds.backgroundColor[i],
                     strokeStyle: ds.backgroundColor[i],
                     lineWidth: 0,
@@ -914,7 +914,7 @@ var Charts = {
       const recs = months[ms];
       let exp = 0;
       recs.forEach(r => {
-        if (isOperationalExpenseRecord(r)) exp += (r.amount || 0);
+        if (isOperationalExpenseRecord(r)) exp += (+r.amount || 0);
       });
       expenseData.push(exp);
     }

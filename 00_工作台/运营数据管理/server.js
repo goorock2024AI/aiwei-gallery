@@ -193,8 +193,13 @@ function uploadUrlToPath(fileUrl) {
   return full;
 }
 
+function moneyValue(n) {
+  const value = Number(n);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function formatMoney(n) {
-  return Number(n || 0).toFixed(2);
+  return moneyValue(n).toFixed(2);
 }
 
 function beijingDateKey(date = new Date()) {
@@ -597,7 +602,7 @@ async function handleExpensePdfGenerate(req, res) {
         `SELECT * FROM expense WHERE id = ANY($1::text[]) ORDER BY date ASC, created_at ASC`,
         [expenseIds]
       );
-      const expenses = expenseResult.rows;
+      const expenses = expenseResult.rows.map(r => ({ ...r, amount: moneyValue(r.amount) }));
       if (!expenses.length) return sendError(res, 404, '未找到支出记录');
 
       const attachmentResult = await pool.query(
@@ -617,7 +622,7 @@ async function handleExpensePdfGenerate(req, res) {
       await generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, { ...body, title });
       const stat = fs.statSync(outputPath);
       const pdfUrl = '/uploads/expense-pdfs/' + encodeURIComponent(filename);
-      const totalAmount = expenses.reduce((s, r) => s + (+r.amount || 0), 0);
+      const totalAmount = expenses.reduce((s, r) => s + moneyValue(r.amount), 0);
       const generatedBy = body.generatedBy || '';
 
       const saved = await pool.query(
@@ -741,7 +746,7 @@ function drawImageOrNotice(doc, attachment, x, y, fitW, fitH) {
 function drawPdfSummary(doc, expenses, options = {}) {
   const title = options.title || '运营支出报销凭证包';
   const generatedAt = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const totalAmount = expenses.reduce((s, r) => s + (+r.amount || 0), 0);
+  const totalAmount = expenses.reduce((s, r) => s + moneyValue(r.amount), 0);
   doc.fontSize(20).text(title, { align: 'center' });
   doc.moveDown(0.8);
   doc.fontSize(10).fillColor('#555').text(`生成时间：${generatedAt}`);

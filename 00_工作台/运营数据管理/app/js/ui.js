@@ -109,7 +109,7 @@ const UI = {
       + galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0)
       + spaceRentIncome;
     const operationalExpenses = expenses.filter(isOperationalExpenseRecord);
-    const totalExpense = operationalExpenses.reduce((s, r) => s + (r.amount || 0), 0);
+    const totalExpense = operationalExpenses.reduce((s, r) => s + (+r.amount || 0), 0);
     const spaceCount = spaces.length;
     const galleryTotal = galleries.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
     const galleryCount = galleries.length;

@@ -2124,3 +2124,69 @@ P0-P2 已完成运营支出记录、票据图片上传和报销 PDF 生成。按
 
 - 本次未新增数据库字段，复用现有 `transaction_adjustments` 和 `cash_movements`。
 - 本次仅发布前端静态文件，未修改数据库、后端容器或生产业务数据。
+## 2026-08-05 支出记录模块热修：金额小数保留
+
+**背景**
+
+支出记录模块在数据统计和报销 PDF 生成过程中，金额小数位存在被整数化展示或未统一数值解析的风险，可能导致带两位小数的支出金额统计、汇总和导出结果不准确。
+
+**本次改动**
+
+- 后端 `server.js` 新增统一 `moneyValue()` 金额解析，PDF 汇总、PDF 内明细金额、`expense_reimbursements.total_amount` 均通过同一函数保留小数。
+- 报销 PDF 生成接口读取 `expense.amount` 后立即转换为数字，避免 PostgreSQL `NUMERIC` 字符串在后续计算中出现隐式类型问题。
+- 支出分类统计和月度支出趋势累加改为显式 `+r.amount`，避免字符串金额参与累加。
+- 图表汇总金额和支出分类图例由整数展示改为固定两位小数展示。
+- `app/index.html` 更新 `ui.js`、`charts.js` cache-bust token 为 `expense-decimal-fix-20260805`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**涉及文件**
+
+- `server.js`
+- `app/js/charts.js`
+- `app/js/ui.js`
+- `app/index.html`
+- `dist/` 镜像文件
+
+**验证**
+
+- `node --check server.js` 通过。
+- `node --check app/js/ui.js` 通过。
+- `node --check app/js/charts.js` 通过。
+- `node --check dist/js/charts.js` 通过。
+- Node 逻辑烟测通过：支出金额 `12.34 + 0.66` 在统计和 PDF 汇总口径均为 `13.00`。
+- 本地预览 `GET http://localhost:3000/` 返回 200，页面包含 `expense-decimal-fix-20260805`。
+- 本地 HTTP 拉取 `charts.js`、`ui.js` 确认包含本次修复内容。
+
+**边界**
+
+- 本次未修改数据库结构，未改生产数据。
+- 本次只做本地修复与预览验证，尚未发布到线上服务器。
+
+---
+
+## 2026-08-05 支出记录模块热修：金额小数保留云端发布
+
+**发布内容**
+
+- 已上传 `server.js`、`app/index.html`、`app/js/ui.js`、`app/js/charts.js` 到腾讯云 `/opt/aiwei`。
+- 已重建并启动 API 容器。
+- 回滚点：`/opt/aiwei/backups/expense-decimal-fix-20260805-144309`。
+
+**线上验证**
+
+- 云端文件 mtime：2026-08-05 14:43，大小分别为 `index.html 5133`、`charts.js 38872`、`ui.js 241383`、`server.js 47183` bytes。
+- `GET http://122.51.56.50/` 返回 `200 / 5133 bytes`，页面包含 `expense-decimal-fix-20260805`。
+- `GET /js/charts.js?v=expense-decimal-fix-20260805` 包含 `minimumFractionDigits: 2`。
+- `GET /js/ui.js?v=expense-decimal-fix-20260805` 包含支出金额显式数字累加逻辑。
+- 容器内 `/app/server.js` 语法检查通过，并包含 `function moneyValue`。
+- `GET /rest/v1/expense?limit=1`、`GET /rest/v1/expense_reimbursements?limit=1`、`GET /rest/v1/revenue?limit=1` 均返回 200。
+- 线上 PDF 链路烟测通过：临时支出金额 `12.34` 生成报销 PDF 后返回 `totalAmount=12.34`。
+- 烟测后已删除临时支出记录 `smoke_exp_decimal_20260805144520` 和 PDF 记录 `pdf_msfq335r_97f1`，复查均为空数组。
+- API 日志显示服务正常启动，无语法错误。
+
+**边界**
+
+- 本次未修改数据库结构。
+- 烟测产生的业务记录已清理。
+
+---
