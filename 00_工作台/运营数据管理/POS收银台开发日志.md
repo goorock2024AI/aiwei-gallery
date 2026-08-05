@@ -1,4 +1,48 @@
 
+## 2026-08-05 文创销售导出补进货价
+
+**背景**
+
+文创产品销售导出已补充供应商，但仍缺少产品进货价，不便于后续按销售明细估算毛利或核对供应商结算基础。
+
+**本次改动**
+
+- 产品管理页“文创销售清单”导出新增“进货价”列。
+- 数据管理页“导出文创明细”同步新增“进货价”列。
+- 进货价来源为当前文创产品库 `creative_products.cost_price` / 前端模型 `costPrice`，按产品名称匹配销售明细中的 `retailItems.productName`。
+- 原供应商匹配映射升级为产品元信息映射，同时提供供应商与进货价。
+- 历史销售记录如产品名匹配不到当前产品库，供应商与进货价留空。
+- `app/index.html` 更新 `ui.js` 与 `import-export.js` cache-bust token 为 `creative-sales-cost-20260805`。
+
+**涉及文件**
+
+- `app/js/ui.js`
+- `app/js/import-export.js`
+- `app/index.html`
+
+**验证**
+
+- `node --check app/js/ui.js` 通过。
+- `node --check app/js/import-export.js` 通过。
+- Node 逻辑烟测通过：文创销售“明信片”可按产品库补出供应商“示例供应商”和进货价 `6.50`，金额列仍为 28。
+
+**边界**
+
+- 本次只改前端静态文件，未修改数据库、后端 API 或生产业务数据。
+- 线上已发布前端文件：
+  - 回滚点：`/opt/aiwei/backups/frontend-20260805-124756-creative-sales-cost`
+  - `/opt/aiwei/app/index.html`：5135 bytes，包含 `creative-sales-cost-20260805`
+  - `/opt/aiwei/app/js/import-export.js`：18763 bytes，包含 `_creativeProductMetaMap`、`costPrice` 与“进货价”
+  - `/opt/aiwei/app/js/ui.js`：241382 bytes，包含“文创销售清单”、`_creativeProductMetaMap` 与“进货价”
+- 线上 HTTP 验证：
+  - `GET http://122.51.56.50/` 返回 200，包含 `creative-sales-cost-20260805`
+  - `GET /js/import-export.js?v=creative-sales-cost-20260805` 返回 200
+  - `GET /js/ui.js?v=creative-sales-cost-20260805` 返回 200
+  - `GET /rest/v1/revenue?limit=1` 返回 200
+- API 容器日志无启动错误；本次未修改数据库、后端容器或生产业务数据。
+
+---
+
 ## 2026-08-05 文创销售导出补供应商
 
 **背景**

@@ -4176,7 +4176,7 @@ const UI = {
   async _exportCreativeSales() {
     const { start, end } = ImportExport._getExportDates();
     await this._loadCreativeProducts();
-    const supplierByName = this._creativeSupplierMap();
+    const productMetaByName = this._creativeProductMetaMap();
     const all = await Store.getAll('revenue');
     let records = ImportExport._filterByDateRange(all, start, end);
     // 只筛选有文创产品的记录
@@ -4187,7 +4187,7 @@ const UI = {
     if (!records.length) { this.toast('所选范围内无文创销售记录', 'error'); return; }
 
     // 展开每条 retailItems
-    const headers = ['日期','产品名称','供应商','数量','单价','金额','收款方式','经手人','备注','创建时间'];
+    const headers = ['日期','产品名称','供应商','进货价','数量','单价','金额','收款方式','经手人','备注','创建时间'];
     const rows = [];
     // 字段名兼容：服务端 toCamel 不递归 JSONB 数组，所以读出来时是 snake（product_name/unit_price）；
     // 少数旧数据可能保留录入时的 camel（productName/unitPrice）。两种都要支持。
@@ -4197,10 +4197,12 @@ const UI = {
       const items = Array.isArray(r.retailItems) ? r.retailItems : [];
       items.forEach(item => {
         const name = itemName(item);
+        const meta = productMetaByName.get(this._normalizeCreativeProductName(name)) || {};
         rows.push([
           r.date,
           name,
-          supplierByName.get(this._normalizeCreativeProductName(name)) || '',
+          meta.supplier || '',
+          meta.costPrice === '' ? '' : (+meta.costPrice || 0).toFixed(2),
           item.qty || 1,
           (+itemPrice(item)).toFixed(2),
           (item.amount || 0).toFixed(2),
@@ -4214,11 +4216,16 @@ const UI = {
     this._downloadCSV(headers, rows, '文创销售清单');
   },
 
-  _creativeSupplierMap() {
+  _creativeProductMetaMap() {
     const map = new Map();
     (this._creativeProducts || []).forEach(p => {
       const key = this._normalizeCreativeProductName(p.name || '');
-      if (key && !map.has(key)) map.set(key, p.supplier || '');
+      if (key && !map.has(key)) {
+        map.set(key, {
+          supplier: p.supplier || '',
+          costPrice: p.costPrice ?? p.cost_price ?? ''
+        });
+      }
     });
     return map;
   },

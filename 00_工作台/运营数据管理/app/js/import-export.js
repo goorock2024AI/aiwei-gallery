@@ -80,7 +80,7 @@ const ImportExport = {
       const label = categoryNames[category] || '收入分类明细';
       const { start, end } = this._getExportDates();
       const all = await Store.getAll('revenue');
-      const supplierByName = category === 'retail' ? await this._creativeSupplierMap() : new Map();
+      const productMetaByName = category === 'retail' ? await this._creativeProductMetaMap() : new Map();
       const records = this._filterByDateRange(all, start, end);
       const rows = [];
 
@@ -99,7 +99,7 @@ const ImportExport = {
           amountKey: 'retailAmount',
           legacyAmountKey: 'creativeAmount',
           fallbackName: '文创',
-          supplierByName
+          productMetaByName
         });
       });
 
@@ -108,7 +108,7 @@ const ImportExport = {
         return;
       }
 
-      const headers = ['日期','分类','品名','供应商','数量','单价','金额','收款方式','现金收款','账户收款','记录状态','记录退款金额','经手人','备注','记录ID','创建时间'];
+      const headers = ['日期','分类','品名','供应商','进货价','数量','单价','金额','收款方式','现金收款','账户收款','记录状态','记录退款金额','经手人','备注','记录ID','创建时间'];
       this._downloadCSV(headers, rows, label);
       UI.toast(`${label}已导出`);
     } catch (e) {
@@ -147,12 +147,14 @@ const ImportExport = {
     if (items.length) {
       items.forEach(item => {
         const name = this._itemName(item) || config.fallbackName;
+        const meta = config.productMetaByName?.get(this._normalizeCreativeProductName(name)) || {};
         rows.push(this._buildRevenueDetailRow(
         record,
         config.categoryLabel,
           name,
           item,
-          config.supplierByName?.get(this._normalizeCreativeProductName(name)) || ''
+          meta.supplier || '',
+          meta.costPrice ?? ''
         ));
       });
       return;
@@ -163,19 +165,21 @@ const ImportExport = {
       rows.push(this._buildRevenueDetailRow(record, config.categoryLabel, config.fallbackName, {
         qty: config.qtyKey ? (+record[config.qtyKey] || '') : '',
         amount
-      }, ''));
+      }, '', ''));
     }
   },
 
-  _buildRevenueDetailRow(record, categoryLabel, itemName, item = {}, supplier = '') {
+  _buildRevenueDetailRow(record, categoryLabel, itemName, item = {}, supplier = '', costPrice = '') {
     const qty = +item.qty || '';
     const unitPrice = +(item.unitPrice ?? item.unit_price ?? item.price ?? 0);
     const amount = +((item.amount ?? ((+item.qty || 0) * unitPrice)) || 0);
+    const cost = costPrice === '' ? '' : (+costPrice || 0).toFixed(2);
     return [
       record.date || '',
       categoryLabel,
       itemName || '',
       supplier || '',
+      cost,
       qty,
       unitPrice || '',
       amount,
@@ -195,12 +199,17 @@ const ImportExport = {
     return item.productName ?? item.product_name ?? item.name ?? '';
   },
 
-  async _creativeSupplierMap() {
+  async _creativeProductMetaMap() {
     const products = await Store.getAll('creativeProducts');
     const map = new Map();
     products.forEach(p => {
       const key = this._normalizeCreativeProductName(p.name || '');
-      if (key && !map.has(key)) map.set(key, p.supplier || '');
+      if (key && !map.has(key)) {
+        map.set(key, {
+          supplier: p.supplier || '',
+          costPrice: p.costPrice ?? p.cost_price ?? ''
+        });
+      }
     });
     return map;
   },
