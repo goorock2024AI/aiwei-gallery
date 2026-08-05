@@ -1,4 +1,47 @@
 
+## 2026-08-05 文创销售导出补供应商
+
+**背景**
+
+文创产品销售清单原导出字段只有日期、产品名称、数量、单价、金额、收款方式、经手人、备注、创建时间，缺少供应商，不利于后续按供应商核对销售与结算。
+
+**本次改动**
+
+- 产品管理页“文创销售清单”导出新增“供应商”列。
+- 数据管理页“导出文创明细”同步新增“供应商”列，保持两个文创销售导出口径一致。
+- 供应商来源为当前文创产品库 `creative_products.supplier`，按产品名称匹配销售明细中的 `retailItems.productName`。
+- 历史销售记录如产品名匹配不到当前产品库，供应商留空，不自动猜测。
+- `app/index.html` 更新 `ui.js` 与 `import-export.js` cache-bust token 为 `creative-sales-supplier-20260805`。
+
+**涉及文件**
+
+- `app/js/ui.js`
+- `app/js/import-export.js`
+- `app/index.html`
+
+**验证**
+
+- `node --check app/js/ui.js` 通过。
+- `node --check app/js/import-export.js` 通过。
+- Node 逻辑烟测通过：文创销售“明信片”可按产品库补出供应商“示例供应商”，金额列仍为 28。
+
+**边界**
+
+- 本次只改前端静态文件，未修改数据库、后端 API 或生产业务数据。
+- 线上已发布前端文件：
+  - 回滚点：`/opt/aiwei/backups/frontend-20260805-123402-creative-sales-supplier`
+  - `/opt/aiwei/app/index.html`：5143 bytes，包含 `creative-sales-supplier-20260805`
+  - `/opt/aiwei/app/js/import-export.js`：18453 bytes，包含 `_creativeSupplierMap` 与“供应商”
+  - `/opt/aiwei/app/js/ui.js`：241136 bytes，包含“文创销售清单”、`_creativeSupplierMap` 与“供应商”
+- 线上 HTTP 验证：
+  - `GET http://122.51.56.50/` 返回 200，包含 `creative-sales-supplier-20260805`
+  - `GET /js/import-export.js?v=creative-sales-supplier-20260805` 返回 200
+  - `GET /js/ui.js?v=creative-sales-supplier-20260805` 返回 200
+  - `GET /rest/v1/revenue?limit=1` 返回 200
+- API 容器日志无启动错误；本次未修改数据库、后端容器或生产业务数据。
+
+---
+
 ## 2026-08-05 数据管理优化：收入分类明细导出
 
 **背景**
