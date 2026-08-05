@@ -74,6 +74,133 @@ const ImportExport = {
     } catch (e) { console.error('导出失败', e); UI.toast('导出失败：' + e.message, 'error'); }
   },
 
+  async exportRevenueCategoryCSV(category) {
+    try {
+      const categoryNames = { ticket: '门票明细', coffee: '咖啡明细', retail: '文创明细' };
+      const label = categoryNames[category] || '收入分类明细';
+      const { start, end } = this._getExportDates();
+      const all = await Store.getAll('revenue');
+      const records = this._filterByDateRange(all, start, end);
+      const rows = [];
+
+      records.forEach(r => {
+        if (category === 'ticket') this._appendTicketDetailRows(rows, r);
+        else if (category === 'coffee') this._appendItemDetailRows(rows, r, {
+          categoryLabel: '咖啡',
+          itemsKey: 'coffeeItems',
+          amountKey: 'coffeeAmount',
+          qtyKey: 'coffeeQty',
+          fallbackName: '咖啡'
+        });
+        else if (category === 'retail') this._appendItemDetailRows(rows, r, {
+          categoryLabel: '文创',
+          itemsKey: 'retailItems',
+          amountKey: 'retailAmount',
+          legacyAmountKey: 'creativeAmount',
+          fallbackName: '文创'
+        });
+      });
+
+      if (!rows.length) {
+        UI.toast(`没有${label}可以导出` + (all.length ? '（所选范围内无数据）' : ''), 'error');
+        return;
+      }
+
+      const headers = ['日期','分类','品名','数量','单价','金额','收款方式','现金收款','账户收款','记录状态','记录退款金额','经手人','备注','记录ID','创建时间'];
+      this._downloadCSV(headers, rows, label);
+      UI.toast(`${label}已导出`);
+    } catch (e) {
+      console.error('分类导出失败', e);
+      UI.toast('分类导出失败：' + e.message, 'error');
+    }
+  },
+
+  _appendTicketDetailRows(rows, record) {
+    const items = Array.isArray(record.ticketItems) ? record.ticketItems : [];
+    const regularItems = items.filter(i => this._itemName(i) !== '套票');
+    const comboItems = items.filter(i => this._itemName(i) === '套票');
+
+    if (regularItems.length || comboItems.length) {
+      regularItems.forEach(item => rows.push(this._buildRevenueDetailRow(record, '门票', this._itemName(item) || '门票', item)));
+      comboItems.forEach(item => rows.push(this._buildRevenueDetailRow(record, '套票', this._itemName(item) || '套票', item)));
+      return;
+    }
+
+    if ((+record.ticketAmount || 0) > 0) {
+      rows.push(this._buildRevenueDetailRow(record, '门票', '门票', {
+        qty: +record.ticketQty || '',
+        amount: +record.ticketAmount || 0
+      }));
+    }
+    if ((+record.comboAmount || 0) > 0) {
+      rows.push(this._buildRevenueDetailRow(record, '套票', '套票', {
+        qty: +record.comboQty || '',
+        amount: +record.comboAmount || 0
+      }));
+    }
+  },
+
+  _appendItemDetailRows(rows, record, config) {
+    const items = Array.isArray(record[config.itemsKey]) ? record[config.itemsKey] : [];
+    if (items.length) {
+      items.forEach(item => rows.push(this._buildRevenueDetailRow(
+        record,
+        config.categoryLabel,
+        this._itemName(item) || config.fallbackName,
+        item
+      )));
+      return;
+    }
+
+    const amount = +(record[config.amountKey] || record[config.legacyAmountKey] || 0);
+    if (amount > 0) {
+      rows.push(this._buildRevenueDetailRow(record, config.categoryLabel, config.fallbackName, {
+        qty: config.qtyKey ? (+record[config.qtyKey] || '') : '',
+        amount
+      }));
+    }
+  },
+
+  _buildRevenueDetailRow(record, categoryLabel, itemName, item = {}) {
+    const qty = +item.qty || '';
+    const unitPrice = +(item.unitPrice ?? item.unit_price ?? item.price ?? 0);
+    const amount = +((item.amount ?? ((+item.qty || 0) * unitPrice)) || 0);
+    return [
+      record.date || '',
+      categoryLabel,
+      itemName || '',
+      qty,
+      unitPrice || '',
+      amount,
+      record.paymentMethod || '',
+      record.cashAmount || 0,
+      record.accountAmount || 0,
+      record.status || '正常',
+      record.refundAmount || 0,
+      record.handler || '',
+      record.notes || '',
+      record.id || '',
+      record.createdAt || ''
+    ];
+  },
+
+  _itemName(item = {}) {
+    return item.productName ?? item.product_name ?? item.name ?? '';
+  },
+
+  _downloadCSV(headers, rows, label) {
+    const csvContent = '﻿' + headers.join(',') + '\n' + rows.map(row => row.map(v => {
+      const s = String(v !== undefined && v !== null ? v : '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `艾维美术馆_${label}${this._suffix()}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  },
+
   async exportAllJSON() {
     const { start, end } = this._getExportDates();
     const [revAll, expAll, spaAll, galAll] = await Promise.all([

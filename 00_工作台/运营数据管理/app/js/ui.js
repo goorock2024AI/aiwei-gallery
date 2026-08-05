@@ -1069,18 +1069,20 @@ const UI = {
     }
     const reason = (prompt('请输入退款原因') || '').trim();
     if (!reason) { this.toast('已取消退款'); return; }
+    const payoutMethod = '现金';
     const newRefund = refunded + amount;
     const status = newRefund >= total ? '已退款' : '部分退款';
     const now = new Date().toISOString();
+    const adjustmentReason = `${reason}；实际退款方式：${payoutMethod}`;
     await Store.update('revenue', id, {
       status,
       refundAmount: newRefund,
       adjustedAt: now,
       adjustedBy: Auth.currentUser?.displayName || '',
-      adjustmentReason: reason
+      adjustmentReason
     });
-    await this._recordTransactionAdjustment('revenue', id, status === '已退款' ? 'refund' : 'partial_refund', amount, reason);
-    if ((+record.cashAmount || 0) > 0) {
+    await this._recordTransactionAdjustment('revenue', id, status === '已退款' ? 'refund' : 'partial_refund', amount, adjustmentReason);
+    if (payoutMethod === '现金') {
       await this._recordCashMovement({
         id: 'cash_refund_revenue_' + id + '_' + Date.now().toString(36),
         date: record.date || todayStr(),
@@ -1089,7 +1091,7 @@ const UI = {
         sourceType: 'revenue',
         sourceId: id,
         reason,
-        notes: '现金收入退款'
+        notes: `收入退款实际支付现金；原收款方式：${record.paymentMethod || '未知'}`
       });
     }
     this.toast('退款已记录');
@@ -2915,18 +2917,20 @@ const UI = {
     }
     const reason = (prompt('请输入退款原因') || '').trim();
     if (!reason) { this.toast('已取消退款'); return; }
+    const payoutMethod = '现金';
     const newRefund = refunded + amount;
     const status = newRefund >= total ? '已退款' : '部分退款';
     const now = new Date().toISOString();
+    const adjustmentReason = `${reason}；实际退款方式：${payoutMethod}`;
     await Store.update('gallery', id, {
       status,
       refundAmount: newRefund,
       adjustedAt: now,
       adjustedBy: Auth.currentUser?.displayName || '',
-      adjustmentReason: reason
+      adjustmentReason
     });
-    await this._recordTransactionAdjustment('gallery', id, status === '已退款' ? 'refund' : 'partial_refund', amount, reason);
-    if (this._isCashPayment(record.paymentMethod)) {
+    await this._recordTransactionAdjustment('gallery', id, status === '已退款' ? 'refund' : 'partial_refund', amount, adjustmentReason);
+    if (payoutMethod === '现金') {
       await this._recordCashMovement({
         id: 'cash_refund_gallery_' + id + '_' + Date.now().toString(36),
         date: record.date || todayStr(),
@@ -2935,7 +2939,7 @@ const UI = {
         sourceType: 'gallery',
         sourceId: id,
         reason,
-        notes: '画廊现金销售退款'
+        notes: `画廊退款实际支付现金；原收款方式：${record.paymentMethod || '未知'}`
       });
     }
     if (status === '已退款' && (record.status || '已售出') === '已售出') {
@@ -4766,6 +4770,12 @@ const UI = {
           <button class="btn btn-gold" onclick="ImportExport.exportCSV('space')">导出空间使用数据</button>
           <button class="btn btn-gold" onclick="ImportExport.exportCSV('gallery')">导出画廊销售数据</button>
           <button class="btn btn-gold" onclick="ImportExport.exportAllJSON()">导出全部(JSON备份)</button>
+        </div>
+        <p class="manage-desc" style="margin-top:14px">按收入分类导出明细：</p>
+        <div class="manage-actions">
+          <button class="btn btn-secondary" onclick="ImportExport.exportRevenueCategoryCSV('ticket')">导出门票明细</button>
+          <button class="btn btn-secondary" onclick="ImportExport.exportRevenueCategoryCSV('coffee')">导出咖啡明细</button>
+          <button class="btn btn-secondary" onclick="ImportExport.exportRevenueCategoryCSV('retail')">导出文创明细</button>
         </div>
       </div>
       <div class="card manage-section">

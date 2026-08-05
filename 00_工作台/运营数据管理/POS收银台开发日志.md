@@ -1,4 +1,52 @@
 
+## 2026-08-05 数据管理优化：收入分类明细导出
+
+**背景**
+
+数据管理页原有“导出收入数据”只能导出汇总式收入记录，门票、咖啡、文创等经营分类混在同一个 CSV 中，不方便单独对账、盘点和交给不同负责人核对。
+
+**本次改动**
+
+- 数据管理页新增“按收入分类导出明细”按钮：
+  - 导出门票明细
+  - 导出咖啡明细
+  - 导出文创明细
+- 新增 `ImportExport.exportRevenueCategoryCSV(category)`。
+- 门票导出支持普通票与套票拆行；咖啡、文创优先按 `coffeeItems` / `retailItems` 展开为商品明细。
+- 兼容旧数据：当历史记录没有明细数组时，按 `ticketAmount`、`comboAmount`、`coffeeAmount`、`retailAmount` / `creativeAmount` 生成兜底行，避免漏导。
+- 分类明细 CSV 字段包含：日期、分类、品名、数量、单价、金额、收款方式、现金收款、账户收款、记录状态、记录退款金额、经手人、备注、记录 ID、创建时间。
+- `app/index.html` 更新 `import-export.js` cache-bust token 为 `category-export-20260805`。
+
+**涉及文件**
+
+- `app/js/import-export.js`
+- `app/js/ui.js`
+- `app/index.html`
+
+**验证**
+
+- `node --check app/js/import-export.js` 通过。
+- `node --check app/js/ui.js` 通过。
+- Node 逻辑烟测通过：一条样例收入可拆出 4 行，分类为“门票 / 套票 / 咖啡 / 文创”，金额分别为 20 / 25 / 15 / 28。
+- `git diff --check -- app/index.html app/js/import-export.js app/js/ui.js` 仅提示 Windows LF/CRLF。
+
+**边界**
+
+- 本次只改前端静态文件，未修改数据库、后端 API 或生产业务数据。
+- 线上已发布前端文件：
+  - 回滚点：`/opt/aiwei/backups/frontend-20260805-121936-category-export`
+  - `/opt/aiwei/app/index.html`：5132 bytes，包含 `category-export-20260805`
+  - `/opt/aiwei/app/js/import-export.js`：17727 bytes，包含 `exportRevenueCategoryCSV`
+  - `/opt/aiwei/app/js/ui.js`：240559 bytes，包含“导出门票明细 / 导出咖啡明细 / 导出文创明细”
+- 线上 HTTP 验证：
+  - `GET http://122.51.56.50/` 返回 200，包含 `category-export-20260805`
+  - `GET /js/import-export.js?v=category-export-20260805` 返回 200
+  - `GET /js/ui.js?v=category-export-20260805` 返回 200
+  - `GET /rest/v1/revenue?limit=1` 返回 200
+- API 容器日志无启动错误；本次未修改数据库、后端容器或生产业务数据。
+
+---
+
 ## 2026-07-16（午后）当月日收入趋势图改造
 
 **改动**：数据统计页「当月日收入趋势」从堆叠柱状图改为折线图，**默认展示每天总收入（黑色"合计"线）**，8 项分项（门票 / 咖啡套票 / 咖啡 / 工坊 / 文创 / 场地 / 画廊 / 其他）通过点击底部图例切换显示/隐藏。
@@ -1949,3 +1997,43 @@ P0-P2 已完成运营支出记录、票据图片上传和报销 PDF 生成。按
 - dry-run 接口只读；实际删除只由服务端定时任务执行。
 - 留存清理会删除附件/PDF 记录，避免前端留下不可打开的死链接。
 - 本次不清理原始支出记录，也不清理画廊作品图片等其他上传文件。
+
+---
+
+## 2026-08-01 退款热修：所有退款统一走柜台现金
+
+**背景**
+
+现场确认：扫码收款渠道无法实现原渠道退款，因此只要发生退款，均由前台使用柜台现金退给客户。旧逻辑只在原单本身有现金收款金额时写入 `cash_refund`，导致扫码原单现金退款只扣减收入，不减少柜台现金余额。
+
+**本次改动**
+
+- POS 收入退款和画廊销售退款时，不再根据原收款方式判断是否写现金流水。
+- 无论原收款方式是扫码、现金还是其他方式，只要执行退款，均写入一条负数 `cash_movements`，类型为 `cash_refund`。
+- `transaction_adjustments.reason` 和原单 `adjustmentReason` 补充“实际退款方式：现金”，便于日结复核。
+- 更新 `app/index.html` 的 `ui.js` cache-bust token 为 `refund-payout-method-20260801`。
+
+**涉及文件**
+
+- `app/js/ui.js`
+- `app/index.html`
+
+**验证**
+
+- `node --check app/js/ui.js` 通过。
+- `git diff --check -- app/index.html app/js/ui.js` 仅提示 Windows CRLF 转换。
+- 代码扫描确认 `ui.js` 包含 `实际退款方式：现金` 和现金退款备注。
+- 线上已发布前端文件：
+  - 回滚点：`/opt/aiwei/backups/frontend-20260801-171539-refund-cash`
+  - `/opt/aiwei/app/index.html`：5138 bytes，mtime `2026-08-01 17:16`
+  - `/opt/aiwei/app/js/ui.js`：240027 bytes，mtime `2026-08-01 17:15`
+- 线上 HTTP 验证：
+  - `GET http://122.51.56.50/` 返回 200，包含 `refund-payout-method-20260801`
+  - `GET /js/ui.js?v=refund-payout-method-20260801` 返回 200，大小 240027 bytes，包含“收入退款实际支付现金”
+  - `GET /rest/v1/revenue?limit=1` 返回 200
+- 容器复核：`aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，API 日志无启动错误。
+
+**风险与边界**
+
+- 本次未新增数据库字段，复用现有 `transaction_adjustments` 和 `cash_movements`。
+- 本次仅发布前端静态文件，未修改数据库、后端容器或生产业务数据。
