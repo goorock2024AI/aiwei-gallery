@@ -42,6 +42,23 @@
 - API 容器日志无启动错误；本次未修改数据库、后端容器或生产业务数据。
 
 ---
+## 2026-08-05 支出记录模块优化：编辑弹窗化云端发布
+
+**发布内容**
+
+- 已上传 `app/index.html`、`app/js/ui.js` 到腾讯云 `/opt/aiwei/app`。
+- 回滚点：`/opt/aiwei/backups/expense-edit-modal-20260805-151531`。
+
+**线上验证**
+
+- 云端文件 mtime：2026-08-05 15:15，大小分别为 `index.html 5132`、`ui.js 244932` bytes。
+- `GET http://122.51.56.50/` 返回 `200 / 5132 bytes`，页面包含 `expense-edit-modal-20260805`。
+- `GET /js/ui.js?v=expense-edit-modal-20260805` 包含 `expense-edit-modal` 和 `_saveExpenseEdit`。
+
+**边界**
+
+- 本次仅发布前端静态文件，未修改数据库结构、后端 API、容器或生产业务数据。
+---
 
 ## 2026-08-05 文创销售导出补供应商
 
@@ -2188,5 +2205,40 @@ P0-P2 已完成运营支出记录、票据图片上传和报销 PDF 生成。按
 
 - 本次未修改数据库结构。
 - 烟测产生的业务记录已清理。
+
+---
+## 2026-08-05 支出记录模块优化：编辑弹窗化
+
+**背景**
+
+支出记录列表点击“编辑”时，原逻辑会把页面顶部的新增支出表单切换为编辑状态，并滚动到页面顶部。现场使用更希望保持列表上下文不丢失，编辑应以弹窗形式打开。
+
+**本次改动**
+
+- 支出页面顶部表单固定为“新增支出记录”，不再承载编辑状态。
+- 支出列表“编辑”按钮改为打开 `expense-edit-modal` 弹窗。
+- 弹窗内独立回填日期、项目、类别、金额、说明、经手人、发票、付款凭证和关联活动。
+- 弹窗保存走 `_saveExpenseEdit()`，更新成功后关闭弹窗并刷新支出列表与已生成 PDF 列表。
+- 弹窗支持点击遮罩或“取消”关闭。
+- `app/index.html` 更新 `ui.js` cache-bust token 为 `expense-edit-modal-20260805`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**涉及文件**
+
+- `app/js/ui.js`
+- `app/index.html`
+- `dist/` 镜像文件
+
+**验证**
+
+- `node --check app/js/ui.js` 通过。
+- `node --check dist/js/ui.js` 通过。
+- 本地预览 `GET http://localhost:3000/` 包含 `expense-edit-modal-20260805`。
+- 本地 HTTP 拉取 `ui.js?v=expense-edit-modal-20260805` 确认包含 `expense-edit-modal`。
+
+**边界**
+
+- 本次未修改数据库结构、后端 API 或生产数据。
+- 本次尚未部署到云端，未推送 Git。
 
 ---

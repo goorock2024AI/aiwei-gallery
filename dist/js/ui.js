@@ -1480,7 +1480,7 @@ const UI = {
 
     html(page, `
       <div class="card">
-        <div class="card-title">${this._editingExpenseId ? '编辑支出记录' : '新增支出记录'}</div>
+        <div class="card-title">新增支出记录</div>
         <form id="expense-form" class="form-grid">
           <div class="form-group">
             <label>日期</label>
@@ -1495,8 +1495,7 @@ const UI = {
           <div class="form-group"><label>付款凭证</label><select id="exp-receipt">${MODELS.RECEIPT_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>关联活动</label><input type="text" id="exp-activity" placeholder="关联展览/活动名称"></div>
           <div class="form-actions full">
-            <button type="submit" class="btn btn-primary">${this._editingExpenseId ? '保存修改' : '保存记录'}</button>
-            ${this._editingExpenseId ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditExpense()">取消编辑</button>' : ''}
+            <button type="submit" class="btn btn-primary">保存记录</button>
           </div>
         </form>
       </div>
@@ -1515,10 +1514,6 @@ const UI = {
     `);
 
     document.getElementById('exp-filter-month').value = this._expenseFilterMonth || todayStr().slice(0, 7);
-    if (this._editingExpenseId) {
-      const r = await Store.getById('expense', this._editingExpenseId);
-      if (r) this._fillExpenseForm(r);
-    }
     await this._renderExpenseList();
     await this._renderExpensePdfList();
   },
@@ -1606,32 +1601,81 @@ const UI = {
       relatedActivity: $('#exp-activity').value
     };
     const errs = validateExpense(data);
-    if (errs.length) { this.toast(errs[0], 'error'); if (btn) { btn.disabled = false; btn.textContent = this._editingExpenseId ? '保存修改' : '保存记录'; } return; }
+    if (errs.length) { this.toast(errs[0], 'error'); if (btn) { btn.disabled = false; btn.textContent = '保存记录'; } return; }
 
-    if (this._editingExpenseId) {
-      await Store.update('expense', this._editingExpenseId, data);
-      this.toast('支出记录已更新');
-      this._editingExpenseId = null;
-    } else {
-      const created = await Store.add('expense', createExpense(data));
-      const shouldUpload = confirm('支出记录已保存。是否现在上传发票或支付凭证？');
-      this.toast('支出记录已保存');
-      await this.renderExpensePage();
-      if (shouldUpload && created?.id) await this._showExpenseAttachmentModal(created.id);
+    const created = await Store.add('expense', createExpense(data));
+    const shouldUpload = confirm('支出记录已保存。是否现在上传发票或支付凭证？');
+    this.toast('支出记录已保存');
+    await this.renderExpensePage();
+    if (shouldUpload && created?.id) await this._showExpenseAttachmentModal(created.id);
+  },
+
+  async _editExpense(id) {
+    const r = await Store.getById('expense', id);
+    if (!r) { this.toast('未找到支出记录', 'error'); return; }
+    document.getElementById('expense-edit-modal')?.remove();
+    const overlay = document.createElement('div');
+    const safeId = this._escAttr(r.id);
+    overlay.className = 'modal-overlay';
+    overlay.id = 'expense-edit-modal';
+    overlay.innerHTML = `
+      <div class="modal-card modal-card-wide" onclick="event.stopPropagation()">
+        <div class="modal-title">编辑支出记录</div>
+        <form id="expense-edit-form" class="form-grid" onsubmit="event.preventDefault(); UI._saveExpenseEdit('${safeId}')">
+          <div class="form-group">
+            <label>日期</label>
+            <div style="display:flex;gap:6px"><input type="date" id="exp-edit-date" value="${this._escHtml(r.date || todayStr())}" style="flex:1">${this._todayBtn('exp-edit-date')}</div>
+          </div>
+          <div class="form-group"><label>项目</label><select id="exp-edit-project">${MODELS.PROJECT_TYPES.map(p => `<option value="${this._escHtml(p)}"${p === r.project ? ' selected' : ''}>${this._escHtml(p)}</option>`).join('')}</select></div>
+          <div class="form-group"><label>支出类别</label><select id="exp-edit-category">${MODELS.EXPENSE_CATEGORIES.map(c => `<option value="${this._escHtml(c)}"${c === r.category ? ' selected' : ''}>${this._escHtml(c)}</option>`).join('')}</select></div>
+          <div class="form-group"><label>金额</label><input type="number" id="exp-edit-amount" min="0" step="0.01" placeholder="0.00" value="${this._escHtml(r.amount ?? '')}" required></div>
+          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-edit-desc" placeholder="支出具体内容" value="${this._escHtml(r.description || '')}"></div>
+          <div class="form-group"><label>经手人</label><input type="text" id="exp-edit-handler" placeholder="经手人姓名" value="${this._escHtml(r.handler || '')}"></div>
+          <div class="form-group"><label>发票</label><select id="exp-edit-invoice">${MODELS.INVOICE_STATUSES.map(s => `<option value="${this._escHtml(s)}"${s === r.invoiceStatus ? ' selected' : ''}>${this._escHtml(s)}</option>`).join('')}</select></div>
+          <div class="form-group"><label>付款凭证</label><select id="exp-edit-receipt">${MODELS.RECEIPT_STATUSES.map(s => `<option value="${this._escHtml(s)}"${s === r.receiptStatus ? ' selected' : ''}>${this._escHtml(s)}</option>`).join('')}</select></div>
+          <div class="form-group"><label>关联活动</label><input type="text" id="exp-edit-activity" placeholder="关联展览/活动名称" value="${this._escHtml(r.relatedActivity || '')}"></div>
+          <div class="modal-actions full">
+            <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+            <button type="submit" class="btn btn-primary">保存修改</button>
+          </div>
+        </form>
+      </div>`;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
+    document.getElementById('exp-edit-amount')?.focus();
+  },
+
+  async _saveExpenseEdit(id) {
+    const form = document.getElementById('expense-edit-form');
+    const btn = form?.querySelector('button[type="submit"]');
+    if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
+    const data = {
+      date: $('#exp-edit-date').value,
+      project: $('#exp-edit-project').value,
+      category: $('#exp-edit-category').value,
+      amount: +($('#exp-edit-amount').value || 0),
+      description: $('#exp-edit-desc').value,
+      handler: $('#exp-edit-handler').value,
+      invoiceStatus: $('#exp-edit-invoice').value,
+      receiptStatus: $('#exp-edit-receipt').value,
+      relatedActivity: $('#exp-edit-activity').value
+    };
+    const errs = validateExpense(data);
+    if (errs.length) {
+      this.toast(errs[0], 'error');
+      if (btn) { btn.disabled = false; btn.textContent = '保存修改'; }
       return;
     }
-    await this.renderExpensePage();
-  },
-
-  _editExpense(id) {
-    this._editingExpenseId = id;
-    this.renderExpensePage();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  },
-
-  _cancelEditExpense() {
-    this._editingExpenseId = null;
-    this.renderExpensePage();
+    try {
+      await Store.update('expense', id, data);
+      this.toast('支出记录已更新');
+      document.getElementById('expense-edit-modal')?.remove();
+      await this._renderExpenseList();
+      await this._renderExpensePdfList();
+    } catch (e) {
+      this.toast('支出记录更新失败：' + (e.message || e), 'error');
+      if (btn) { btn.disabled = false; btn.textContent = '保存修改'; }
+    }
   },
 
   async _deleteExpense(id) {
