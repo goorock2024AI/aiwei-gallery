@@ -42,6 +42,62 @@
 - API 容器日志无启动错误；本次未修改数据库、后端容器或生产业务数据。
 
 ---
+## 2026-08-08 产品管理热修：咖啡产品新增配置持久化云端发布
+
+**发布内容**
+
+- 已上传 `server.js`、`app/index.html`、`app/js/ui.js` 到腾讯云 `/opt/aiwei`。
+- 已重建并启动 API 容器。
+- 回滚点：`/opt/aiwei/backups/product-config-save-20260808-121323`。
+
+**线上验证**
+
+- 云端文件 mtime：2026-08-08 12:13，大小分别为 `index.html 5138`、`ui.js 245208`、`server.js 47462` bytes。
+- `GET http://122.51.56.50/` 返回 `200 / 5138 bytes`，页面包含 `product-config-save-20260808`。
+- `GET /js/ui.js?v=product-config-save-20260808` 包含保存成功后再更新内存的防护逻辑。
+- API 容器 `aiwei-api-1` 已重新创建并运行，日志显示 `AIWEI API server running on port 3000`。
+- `GET /rest/v1/app_config?key=eq.coffee_products` 返回 200。
+- `GET /rest/v1/revenue?limit=1` 返回 200。
+- 线上配置保存烟测通过：临时追加 `__smoke_config_*` 咖啡项后，`PATCH /rest/v1/app_config?key=eq.coffee_products` 可持久化；随后已恢复原始咖啡配置，复查无测试项残留。
+
+**边界**
+
+- 本次未修改数据库结构，未保留测试业务数据。
+- 本次仅临时改写并恢复 `coffee_products` 配置，用于验证按 `key` 更新的线上链路。
+---
+## 2026-08-08 产品管理热修：咖啡产品新增配置持久化
+
+**背景**
+
+产品管理中新增咖啡产品后，页面提示“已新增”，收银台也能临时显示并录入收入；但重新进入产品管理页面后新增项消失。截图同时显示接口错误 `Missing id filter`。
+
+**根因**
+
+- 门票、咖啡、工坊产品配置存储在 `app_config` 表，主键是 `key`，不是 `id`。
+- 前端 `Store.saveConfig()` 更新已有配置时发送 `PATCH /rest/v1/app_config?key=eq.coffee_products`。
+- 后端通用 PATCH 只接受 `id=eq.xxx`，因此返回 `Missing id filter`，导致配置没有写入数据库。
+- 前端在保存前先修改内存 `MODELS.coffeeProducts`，所以收银台短时间可见；刷新后重新从数据库加载，新增项丢失。
+
+**本次改动**
+
+- `server.js`：通用 PATCH 默认仍使用 `id`，但对 `app_config` 允许 `key=eq.xxx` 更新。
+- `app/js/ui.js`：新增、编辑、删除门票/咖啡/工坊配置时，先构造待保存数组，只有 `Store.saveConfig()` 成功后才更新内存和刷新页面。
+- `app/index.html`：升级 `store.js`、`ui.js` cache-bust token 为 `product-config-save-20260808`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**验证**
+
+- `node --check server.js` 通过。
+- `node --check app/js/ui.js` 通过。
+- `node --check app/js/store.js` 通过。
+- `node --check dist/js/ui.js`、`node --check dist/js/store.js` 通过。
+- 线上只读核对：`GET /rest/v1/app_config?key=eq.coffee_products` 返回配置行，且表结构为 `key TEXT PRIMARY KEY`，证实应按 key 更新。
+
+**边界**
+
+- 本次尚未部署到云端，未修改生产数据。
+- 需要部署后用临时咖啡产品做一次线上新增、刷新、收银台可见性验证，并清理测试产品。
+---
 ## 2026-08-05 支出记录模块优化：编辑弹窗化云端发布
 
 **发布内容**

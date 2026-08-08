@@ -3809,20 +3809,24 @@ const UI = {
       const dbKeyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products' };
       const listKey = listKeyMap[type];
       const dbKey = dbKeyMap[type];
-      MODELS[listKey] = MODELS[listKey] || [];
+      const currentItems = MODELS[listKey] || [];
+      const nextItems = currentItems.slice();
       if (isEdit) {
-        const idx = MODELS[listKey].indexOf(item);
-        if (idx >= 0) MODELS[listKey][idx] = newItem;
+        const idx = currentItems.indexOf(item);
+        if (idx < 0) { UI.toast('产品不存在', 'error'); return; }
+        nextItems[idx] = newItem;
       } else {
-        MODELS[listKey].push(newItem);
+        nextItems.push(newItem);
       }
+      const saved = await Store.saveConfig(dbKey, nextItems);
+      if (!saved) return;
+      MODELS[listKey] = nextItems;
       // 同步旧常量（票务/咖啡）
       if (type === 'ticket') {
         MODELS.TICKET_PRICE = MODELS.ticketProducts[0]?.price || 10;
         MODELS.COMBO_PRICE = MODELS.ticketProducts.length > 1 ? MODELS.ticketProducts[1].price : 25;
       }
       if (type === 'coffee') MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15;
-      await Store.saveConfig(dbKey, MODELS[listKey]);
       UI.toast(isEdit ? '已更新' : '已新增');
       overlay.remove();
       UI._refreshCurrentProductTab();
@@ -3852,13 +3856,16 @@ const UI = {
     const item = items[idx];
     if (!item) return;
     if (!confirm(`确认删除「${item.name}」？`)) return;
-    items.splice(idx, 1);
+    const nextItems = items.slice();
+    nextItems.splice(idx, 1);
+    const saved = await Store.saveConfig(dbKey, nextItems);
+    if (!saved) return;
+    MODELS[listKey] = nextItems;
     if (type === 'ticket') {
       MODELS.TICKET_PRICE = MODELS.ticketProducts[0]?.price || 10;
       MODELS.COMBO_PRICE = MODELS.ticketProducts.length > 1 ? MODELS.ticketProducts[1].price : 25;
     }
     if (type === 'coffee') MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15;
-    await Store.saveConfig(dbKey, items);
     this.toast('已删除');
     this._refreshCurrentProductTab();
   },
