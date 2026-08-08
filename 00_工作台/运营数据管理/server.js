@@ -1049,12 +1049,16 @@ async function handleREST(req, res, urlInfo) {
 
     // --- PATCH /rest/v1/table?id=eq.xxx ---
     else if (method === 'PATCH') {
-      // Get id from query or path
-      let idVal;
+      // Get row filter from query or path. Most tables use id; app_config uses key as its primary key.
+      let filterCol = 'id';
+      let filterVal;
       if (query.id && query.id.startsWith('eq.')) {
-        idVal = query.id.slice(3);
+        filterVal = query.id.slice(3);
       } else if (parts.length === 4) {
-        idVal = parts[3];
+        filterVal = parts[3];
+      } else if (dbTable === 'app_config' && query.key && query.key.startsWith('eq.')) {
+        filterCol = 'key';
+        filterVal = query.key.slice(3);
       } else {
         return sendError(res, 400, 'Missing id filter');
       }
@@ -1074,8 +1078,8 @@ async function handleREST(req, res, urlInfo) {
           const keys = Object.keys(data);
           const vals = keys.map(k => JSONB_COLS.has(k) && Array.isArray(data[k]) ? JSON.stringify(data[k]) : data[k]);
           const setClauses = keys.map((k, i) => `"${k}" = $${i + 1}`);
-          vals.push(idVal);
-          const sql = `UPDATE "${dbTable}" SET ${setClauses.join(',')} WHERE "id" = $${vals.length} RETURNING *`;
+          vals.push(filterVal);
+          const sql = `UPDATE "${dbTable}" SET ${setClauses.join(',')} WHERE "${filterCol}" = $${vals.length} RETURNING *`;
           const result = await pool.query(sql, vals);
           sendJSON(res, 200, result.rows.length ? toCamel(result.rows[0]) : null);
         } catch (e) {
