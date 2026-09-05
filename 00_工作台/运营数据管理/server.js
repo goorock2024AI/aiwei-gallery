@@ -1222,6 +1222,7 @@ async function handleREST(req, res, urlInfo) {
           data = normalizeTimestamps(data);
           const guard = guardEditorWrite(requester, dbTable, method, data);
           if (!guard.ok) return sendError(res, 403, guard.message);
+          if (dbTable === 'product_aliases') data = await prepareProductAlias(data);
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -1266,6 +1267,11 @@ async function handleREST(req, res, urlInfo) {
           data = normalizeTimestamps(data);
           const guard = guardEditorWrite(requester, dbTable, method, data);
           if (!guard.ok) return sendError(res, 403, guard.message);
+          if (dbTable === 'product_aliases') {
+            const old = await pool.query('SELECT * FROM product_aliases WHERE id = $1', [filterVal]);
+            if (!old.rows.length) return sendError(res, 404, '别名不存在');
+            data = await prepareProductAlias(data, old.rows[0]);
+          }
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -1318,6 +1324,32 @@ async function handleREST(req, res, urlInfo) {
   } catch (e) {
     sendError(res, 500, e.message);
   }
+}
+
+// Validate alias writes on the API as well as the maintenance form.
+async function prepareProductAlias(data, existing = null) {
+  const row = { ...existing, ...data };
+  row.alias_name = String(row.alias_name || '').trim();
+  if (!row.alias_name || row.alias_name.length > 100) throw new Error('别名须为 1–100 个字符');
+  if (row.unit_price !== null && row.unit_price !== undefined) {
+    if (row.unit_price === '' || !Number.isFinite(Number(row.unit_price)) || Number(row.unit_price) < 0) throw new Error('匹配单价须为非负数或留空');
+    row.unit_price = Number(row.unit_price);
+  }
+  if ('is_active' in data && typeof data.is_active !== 'boolean') throw new Error('启用状态必须为布尔值');
+  if (!existing || 'standard_product_id' in data) {
+    if (!row.standard_product_id) throw new Error('请选择标准商品');
+    const result = await pool.query('SELECT * FROM creative_products WHERE id = $1', [row.standard_product_id]);
+    const product = result.rows[0];
+    if (!product || product.is_active === false) throw new Error('标准商品不存在或已停用');
+    row.standard_name = product.standard_name || product.name;
+    row.business_type_code = product.business_type_code || (product.is_beverage ? 'beverage_retail' : 'creative_retail');
+    row.is_beverage = row.business_type_code === 'beverage_retail';
+    row.package_spec = product.package_spec || '';
+  }
+  row.updated_at = new Date().toISOString();
+  // Preserve identity on edits; generic PATCH must not rename the alias primary key.
+  if (existing) row.id = existing.id;
+  return row;
 }
 
 // --- Static file server ---

@@ -285,7 +285,7 @@ const UI = {
                   <div class="pos-input-row">
                     <div class="form-group"><label>单价</label><input type="number" id="rt-price" min="0" step="0.01" placeholder="0.00" style="width:80px"></div>
                     <div class="form-group"><label>数量</label><input type="number" id="rt-qty" min="1" value="1" style="width:60px"></div>
-                    <div class="form-group"><label>产品名</label><input type="text" id="rt-name" placeholder="产品名称" style="width:120px"></div>
+                    <div class="form-group"><label>产品名</label><input type="text" id="rt-name" oninput="UI._selectedRetailProduct = null" placeholder="产品名称" style="width:120px"></div>
                     <button type="button" class="btn btn-sm btn-secondary" onclick="UI._selectCreativeFromPOS()" title="从产品库选择" style="margin-bottom:1px;font-size:16px">📋</button>
                     <button type="button" class="btn btn-sm btn-primary" onclick="UI._addRetailItem()" style="margin-bottom:1px">+ 添加</button>
                   </div>
@@ -470,6 +470,12 @@ const UI = {
       if (aReady !== bReady) return aReady - bReady;
       return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
     });
+    try {
+      const aliases = await Store._request('GET', '/rest/v1/product_aliases?is_active=eq.true&limit=5000');
+      normalized.forEach(p => { p._aliases = (aliases || []).filter(a => a.standardProductId === p.id).map(a => a.aliasName).join(' '); });
+    } catch (error) {
+      this.toast('别名检索暂不可用，可按商品名称选择', 'error');
+    }
     const hotKeywords = await this._getCreativePOSHotKeywords(normalized);
 
     const overlay = document.createElement('div');
@@ -482,9 +488,9 @@ const UI = {
         </div>` : '';
     overlay.innerHTML = `
       <div class="modal-card modal-card-wide">
-        <div class="modal-title">📦 选择文创产品</div>
+        <div class="modal-title">📦 选择文创 / 饮料</div>
         <div class="pos-creative-picker-toolbar">
-          <input type="text" id="cp-search-pos" placeholder="按名称 / SKU / 供应商搜索..." oninput="UI._renderCreativePOSList()">
+          <input type="text" id="cp-search-pos" placeholder="按名称 / 标准名 / 条码 / 别名搜索..." oninput="UI._renderCreativePOSList()">
           <select id="cp-supplier-pos" onchange="UI._renderCreativePOSList()">
             <option value="">全部供应商</option>
             ${suppliers.map(s => `<option value="${this._escHtml(s)}">${this._escHtml(s)}</option>`).join('')}
@@ -562,7 +568,7 @@ const UI = {
     let list = overlay._cpList;
     if (supplier) list = list.filter(p => p._supplier === supplier);
     if (q) {
-      list = list.filter(p => [p.name, p.sku, p.supplier, p.notes].some(v => String(v || '').toLowerCase().includes(q)));
+      list = list.filter(p => [p.name, p.standardName, p.packageSpec, p.barcode, p._aliases, p.sku, p.supplier, p.notes].some(v => String(v || '').toLowerCase().includes(q)));
     }
     if (!list.length) {
       listEl.innerHTML = '<div class="empty-state" style="padding:24px"><div class="icon">📦</div>没有匹配的产品</div>';
@@ -575,11 +581,11 @@ const UI = {
         <button type="button" class="cp-select-item ${canSelect ? '' : 'is-disabled'}" ${canSelect ? `onclick="UI._fillCreativeFromPOS('${p.id}')"` : 'disabled'} title="${reason}">
           <span class="cp-select-main">
             <strong>${this._escHtml(p.name || '-')}</strong>
-            <span>${this._escHtml([p.sku, p._supplier].filter(Boolean).join(' · '))}</span>
+            <span>${this._escHtml([p.standardName, p.packageSpec, this._cpBusinessTypeLabel(p.businessTypeCode, p.isBeverage), p.sku, p._supplier].filter(Boolean).join(' · '))}</span>
           </span>
           <span class="cp-select-side">
             <strong>¥${p._retailPrice.toFixed(2)}</strong>
-            <span class="${p._stock > 0 ? 'tag tag-success' : 'tag tag-danger'}">库存 ${p._stock}${this._escHtml(p._unit)}</span>
+            <span class="${p._stock > 0 ? 'tag tag-success' : 'tag tag-danger'}">${this._cpBool(p.isCountableStock ?? p.is_countable_stock, true) ? '库存 ' + p._stock + this._escHtml(p._unit) : '不计库存'}</span>
             ${reason ? `<span class="cp-select-reason">${reason}</span>` : ''}
           </span>
         </button>`;
@@ -591,6 +597,7 @@ const UI = {
     if (overlay && overlay._cpList) {
       const p = overlay._cpList.find(x => x.id === id);
       if (p) {
+        this._selectedRetailProduct = { ...p };
         document.getElementById('rt-name').value = p.name;
         document.getElementById('rt-price').value = p._retailPrice || +p.retailPrice || 0;
         document.getElementById('rt-qty').value = 1;
@@ -600,6 +607,7 @@ const UI = {
   },
 
   // —— 添加文创产品 ——
+  _selectedRetailProduct: null,
   _retailItems: [],
   _addRetailItem() {
     const priceInput = document.getElementById('rt-price');
@@ -608,11 +616,11 @@ const UI = {
     if (!priceInput || !priceInput.value || +priceInput.value <= 0) { this.toast('请输入有效单价', 'error'); return; }
     if (!nameInput || !nameInput.value.trim()) { this.toast('请输入产品名称', 'error'); return; }
     const price = +priceInput.value;
-    const qty = +qtyInput.value || 1;
+    const qty = qtyInput.value === '' ? 1 : Number(qtyInput.value);
     const name = nameInput.value.trim();
-    const amount = qty * price;
-
-    this._retailItems.push({ productName: name, qty, unitPrice: price, amount });
+    if (!Number.isFinite(price) || !Number.isFinite(qty) || qty <= 0) { this.toast('请输入有效数量和单价', 'error'); return; }
+    this._retailItems.push(createRetailSaleItem(name, qty, price, this._selectedRetailProduct));
+    this._selectedRetailProduct = null;
     this._renderRetailList();
     priceInput.value = '';
     qtyInput.value = 1;
@@ -629,7 +637,7 @@ const UI = {
     this._retailItems.forEach((item, idx) => {
       total += item.amount;
       h += `<div class="pos-item-row">
-        <span class="pos-item-name">${item.productName} × ${item.qty}</span>
+        <span class="pos-item-name">${this._escHtml(item.productName)} × ${item.qty}${item.snapshotVersion === 1 ? ' · ' + this._escHtml(this._cpBusinessTypeLabel(item.businessTypeCode, item.isBeverage)) : ' · 未关联商品'}</span>
         <span class="pos-item-amount">¥${item.amount.toFixed(2)}</span>
         <button type="button" class="pos-item-del" onclick="UI._removeRetailItem(${idx})">✕</button>
       </div>`;
@@ -776,7 +784,7 @@ const UI = {
           coffeeAmount: cItems.reduce((s, i) => s + i.amount, 0),
           workshopItems: this._workshopItems.map(i => ({ ...i })),
           workshopAmount: this._workshopItems.reduce((s, i) => s + i.amount, 0),
-          retailItems: this._retailItems.map(i => ({ productName: i.productName, qty: i.qty, unitPrice: i.unitPrice, amount: i.amount })),
+          retailItems: this._retailItems.map(i => ({ ...i })),
           retailAmount: this._retailItems.reduce((s, i) => s + i.amount, 0),
           otherAmount: +($('#rev-other')?.value || 0),
           otherDesc: $('#rev-other-desc')?.value || '',
@@ -809,7 +817,7 @@ const UI = {
           const amt = item.qty * item.unitPrice;
           const saved = await Store.add('revenue', createRevenue({
             ...baseRecord,
-            retailItems: [{ productName: item.productName, qty: item.qty, unitPrice: item.unitPrice, amount: amt }],
+            retailItems: [{ ...item, amount: amt }],
             retailAmount: amt,
             cashAmount: isCash ? amt : 0,
             accountAmount: isCash ? 0 : amt,
@@ -865,6 +873,7 @@ const UI = {
     document.getElementById('rev-notes').value = '';
     this._workshopItems = [];
     this._retailItems = [];
+    this._selectedRetailProduct = null;
     this._renderWorkshopList();
     this._renderRetailList();
     document.querySelectorAll('.pos-payment-btn').forEach(b => b.classList.toggle('active', b.dataset.payment === '扫码支付'));
@@ -873,6 +882,7 @@ const UI = {
 
   // —— 编辑模式预填 ——
   async _fillPOSEdit(id) {
+    this._selectedRetailProduct = null;
     const r = await Store.getById('revenue', id);
     if (!r) return;
     document.getElementById('rev-date').value = r.date || todayStr();
@@ -903,7 +913,7 @@ const UI = {
     this._renderWorkshopList();
 
     // 文创
-    this._retailItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(i => ({ ...i }));
+    this._retailItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(normalizeRetailSaleItem);
     this._renderRetailList();
 
     // 其他
@@ -924,6 +934,7 @@ const UI = {
     this._editingId = null;
     this._workshopItems = [];
     this._retailItems = [];
+    this._selectedRetailProduct = null;
     this.renderRevenuePage();
   },
 
@@ -1095,7 +1106,7 @@ const UI = {
       const wItems = Array.isArray(r.workshopItems) ? r.workshopItems : [];
       wItems.forEach(i => lines.push(fmtItem('🔧', i.qty || 0, itemName(i) || '工坊', itemPrice(i))));
       // 文创明细
-      const retItems = Array.isArray(r.retailItems) ? r.retailItems : [];
+      const retItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(normalizeRetailSaleItem);
       retItems.forEach(i => lines.push(fmtItem('🛒', i.qty || 0, itemName(i) || '文创', itemPrice(i))));
 
       // 兜底 tag：金额>0 但明细数组为空（历史旧数据），保留旧版汇总式显示
@@ -3518,6 +3529,90 @@ const UI = {
   },
 
   /** 文创产品 tab：查询框 + 供应商筛选 + 分页（重构版） */
+  async _openProductAliases() {
+    if (!Auth.can('edit', 'creative-products')) return this.toast('无权维护商品别名', 'error');
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `<div class="modal-card modal-card-wide">
+      <div class="modal-title">商品别名</div>
+      <p>将常用名称关联到标准商品。可限定单价，区分同名商品；停用后不再匹配未归类记录。已保存的销售快照保持不变。</p>
+      <div data-alias-status role="status">正在加载…</div>
+      <form data-alias-form>
+        <div class="form-group"><label for="alias-name">别名</label><input id="alias-name" required maxlength="100" placeholder="例如：水"></div>
+        <div class="form-group"><label for="alias-product">标准商品</label><select id="alias-product" required><option value="">请选择商品</option>${this._creativeProducts.filter(p => this._cpBool(p.isActive, true)).map(p => `<option value="${this._escHtml(p.id)}">${this._escHtml([p.standardName || p.name, p.packageSpec, p.sku].filter(Boolean).join(' · '))}</option>`).join('')}</select></div>
+        <div class="form-group"><label for="alias-price">匹配单价（留空表示不限）</label><input id="alias-price" type="number" min="0" step="0.01"></div>
+        <div class="form-group"><label for="alias-notes">备注</label><input id="alias-notes" maxlength="500"></div>
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-alias-reset>清空</button><button type="submit" class="btn btn-primary" disabled>保存别名</button></div>
+      </form>
+      <div class="form-group"><label for="alias-search">查找别名</label><input id="alias-search" data-alias-search placeholder="搜索别名或标准商品"></div>
+      <div class="table-wrap" data-alias-list></div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary" data-alias-close>关闭</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const form = overlay.querySelector('form');
+    const submit = form.querySelector('[type=submit]');
+    const status = overlay.querySelector('[data-alias-status]');
+    const list = overlay.querySelector('[data-alias-list]');
+    let rows = [], editingId = null, busy = false;
+    const reset = () => { form.reset(); editingId = null; submit.textContent = '保存别名'; };
+    const render = () => {
+      const q = overlay.querySelector('[data-alias-search]').value.trim().toLowerCase();
+      list.innerHTML = `<table class="data-table"><thead><tr><th>别名</th><th>标准商品 / 规格</th><th>单价</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.filter(r => [r.aliasName, r.standardName].some(v => String(v || '').toLowerCase().includes(q))).map(r => `<tr><td>${this._escHtml(r.aliasName)}</td><td>${this._escHtml(r.standardName)}<br>${this._escHtml(r.packageSpec || '')}</td><td>${r.unitPrice == null ? '不限' : this._fmt(r.unitPrice)}</td><td>${r.isActive ? '启用' : '停用'}</td><td><button type="button" class="btn btn-sm btn-secondary" data-alias-edit="${this._escHtml(r.id)}">编辑</button> <button type="button" class="btn btn-sm btn-secondary" data-alias-toggle="${this._escHtml(r.id)}">${r.isActive ? '停用' : '启用'}</button></td></tr>`).join('') || '<tr><td colspan="5">暂无匹配别名</td></tr>'}</tbody></table>`;
+    };
+    const load = async () => {
+      rows = await Store._request('GET', '/rest/v1/product_aliases?order=created_at.desc&limit=5000');
+      status.textContent = `共 ${rows.length} 条别名`;
+      render();
+      submit.disabled = false;
+    };
+    overlay.querySelector('[data-alias-close]').onclick = () => { if (!busy) overlay.remove(); };
+    overlay.querySelector('[data-alias-reset]').onclick = () => { if (!busy) reset(); };
+    overlay.querySelector('[data-alias-search]').oninput = render;
+    list.onclick = async e => {
+      if (busy) return;
+      const edit = e.target.closest('[data-alias-edit]');
+      const toggle = e.target.closest('[data-alias-toggle]');
+      const row = rows.find(r => r.id === (edit?.dataset.aliasEdit || toggle?.dataset.aliasToggle));
+      if (!row) return;
+      if (edit) {
+        editingId = row.id;
+        form.querySelector('#alias-name').value = row.aliasName;
+        form.querySelector('#alias-product').value = row.standardProductId;
+        form.querySelector('#alias-price').value = row.unitPrice ?? '';
+        form.querySelector('#alias-notes').value = row.notes || '';
+        submit.textContent = '保存修改';
+      } else {
+        busy = true;
+        submit.disabled = true;
+        try { await Store.update('productAliases', row.id, { isActive: !row.isActive }); await load(); }
+        catch (error) { status.textContent = '状态更新失败：' + error.message; }
+        finally { busy = false; submit.disabled = false; }
+      }
+    };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      if (busy) return;
+      const aliasName = form.querySelector('#alias-name').value.trim();
+      const standardProductId = form.querySelector('#alias-product').value;
+      const rawPrice = form.querySelector('#alias-price').value;
+      if (!aliasName || !standardProductId) { status.textContent = '请填写别名并选择标准商品'; return; }
+      const record = { aliasName, standardProductId, unitPrice: rawPrice === '' ? null : Number(rawPrice), notes: form.querySelector('#alias-notes').value.trim() };
+      busy = true;
+      submit.disabled = true;
+      try {
+        if (editingId) await Store.update('productAliases', editingId, record);
+        else await Store.add('productAliases', { id: createId(), ...record, isActive: true });
+        reset();
+        await load();
+        this.toast('别名已保存');
+      } catch (error) { status.textContent = '保存失败：' + error.message; }
+      finally { busy = false; submit.disabled = false; }
+    };
+    try { await load(); }
+    catch (error) { status.textContent = '别名数据加载失败，请稍后重试：' + error.message; }
+  },
+
   _renderCreativeTab() {
     const keyword = (this._productSearch.creative || '').trim().toLowerCase();
     let list = this._creativeProducts;
@@ -3556,6 +3651,7 @@ const UI = {
       <button type="button" class="btn btn-sm btn-primary" onclick="UI._addCreativeProduct()">+ 新增产品</button>
       <button type="button" class="btn btn-sm btn-secondary" onclick="UI._importCreativeProducts()">📥 导入库存</button>
       <button type="button" class="btn btn-sm btn-secondary" onclick="UI._downloadImportTemplate()">📋 下载模板</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._openProductAliases()">商品别名</button>
       ${canExport ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品</button>' : ''}
       ${canExport ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 销售清单</button>' : ''}
       <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="cp-count">${list.length} 个${keyword||this._cpFilterSupplier ? ' (筛选后)' : ''} · 共 ${this._creativeProducts.length} 个</span>

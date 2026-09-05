@@ -33,7 +33,8 @@ const TABLE_NAMES = {
   artworks: 'artworks',
   partners: 'partners',
   contentPosts: 'content_posts',
-  creativeProducts: 'creative_products'
+  creativeProducts: 'creative_products',
+  productAliases: 'product_aliases'
 };
 
 const CONFIG_TABLE = 'app_config';

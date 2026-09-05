@@ -100,6 +100,29 @@ function calcWorkshopTotal(items) {
   }, 0);
 }
 
+// Only explicitly selected catalog products acquire a sale-time identity.
+function createRetailSaleItem(name, qty, unitPrice, product = null) {
+  const item = { productName: name, qty, unitPrice, amount: qty * unitPrice };
+  if (!product || name !== product.name) return item;
+  const p = createCreativeProduct(product);
+  return { ...item, snapshotVersion: 1, snapshotAt: new Date().toISOString(),
+    productId: product.id, standardName: p.standardName, businessTypeCode: p.businessTypeCode,
+    packageSpec: p.packageSpec, isBeverage: p.businessTypeCode === 'beverage_retail', isCountableStock: p.isCountableStock,
+    costPriceSnapshot: p.costPrice, sku: p.sku || '', barcode: p.barcode || '' };
+}
+
+// The API converts JSONB keys to snake_case on write, but only converts the
+// outer record back on read. Normalize line keys before rendering/editing.
+function normalizeRetailSaleItem(item) {
+  const line = Object.fromEntries(Object.entries(item || {}).map(([key, value]) =>
+    [key.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), value]));
+  line.productName = line.productName ?? line.name ?? '';
+  line.qty = Number(line.qty ?? line.quantity ?? 1);
+  line.unitPrice = Number(line.unitPrice ?? line.price ?? 0);
+  line.amount = Number(line.amount ?? line.qty * line.unitPrice);
+  return line;
+}
+
 function calcRetailTotal(items) {
   return items.reduce((sum, item) => sum + (+item.qty || 0) * (+item.unitPrice || 0), 0);
 }

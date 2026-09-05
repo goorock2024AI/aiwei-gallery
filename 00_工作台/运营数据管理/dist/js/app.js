@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-  const APP_VERSION = '1.3.3';
-  const LAST_UPDATE = '2026-07-21 12:50';
+  const APP_VERSION = '2.0.0-dev.m3-04.2';
+  const LAST_UPDATE = '2026-09-05';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
     const icpEl = document.getElementById('sidebar-icp');
@@ -200,9 +200,10 @@
       }
     });
     if (Auth.currentUser.needPasswordChange) {
+      $('#login-overlay').style.display = 'none';
       $('#change-pwd-overlay').style.display = 'flex';
       return;
     }
-    await _initApp();
+    _enterApp();
   });
 })();

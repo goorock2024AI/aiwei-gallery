@@ -16,8 +16,16 @@ const SUPABASE_CONFIG = {
 const TABLE_NAMES = {
   revenue: 'revenue',
   expense: 'expense',
+  expenseAttachments: 'expense_attachments',
+  expenseReimbursements: 'expense_reimbursements',
   space: 'space_usage',
+  spacePayment: 'space_payments',
+  spaceWithPayments: 'space_usage_with_payments',
+  revenueFacts: 'revenue_facts',
   gallery: 'gallery_sales',
+  transactionAdjustments: 'transaction_adjustments',
+  cashMovements: 'cash_movements',
+  dailyClosings: 'daily_closings',
   users: 'users',
   operationLogs: 'operation_logs',
   projectRegistry: 'project_registry',
@@ -25,7 +33,8 @@ const TABLE_NAMES = {
   artworks: 'artworks',
   partners: 'partners',
   contentPosts: 'content_posts',
-  creativeProducts: 'creative_products'
+  creativeProducts: 'creative_products',
+  productAliases: 'product_aliases'
 };
 
 const CONFIG_TABLE = 'app_config';

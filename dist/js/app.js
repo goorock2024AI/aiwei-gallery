@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-  const APP_VERSION = '1.1.0';
-  const LAST_UPDATE = '2026-07-07 16:30';
+  const APP_VERSION = '2.0.0-dev.m3-04.2';
+  const LAST_UPDATE = '2026-09-05';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
     const icpEl = document.getElementById('sidebar-icp');
@@ -39,6 +39,12 @@
     const page = document.getElementById('page-' + tab);
     if (page) page.classList.add('active');
 
+    // 移动端抽屉：选中 tab 后自动关闭
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.classList.remove('open');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (overlay) overlay.classList.remove('show');
+
     // 异步渲染
     try {
       switch (tab) {
@@ -47,11 +53,16 @@
         case 'expense': await UI.renderExpensePage(); break;
         case 'gallery': await UI.renderGalleryPage(); break;
         case 'space': await UI.renderSpacePage(); break;
+        case 'daily-closing': await UI.renderDailyClosingPage(); break;
+        case 'project-list': await UI.renderProjectListPage(); break;
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;
         case 'products': await UI.renderProductPage(); break;
         case 'users': await UI.renderUsersPage(); break;
         case 'logs': await UI.renderLogsPage(); break;
+        default:
+          UI.toast('未知页面：' + tab + '（请强刷浏览器 Ctrl+Shift+R）', 'error');
+          break;
       }
     } catch (err) {
       console.error('渲染错误：', err);
@@ -126,6 +137,23 @@
     }
   });
 
+  // 移动端：汉堡按钮打开/关闭侧边栏抽屉
+  function _toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (!sidebar) return;
+    sidebar.classList.toggle('open');
+    overlay?.classList.toggle('show');
+  }
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('#sidebar-overlay')) {
+      const sidebar = document.getElementById('sidebar');
+      sidebar?.classList.remove('open');
+      document.getElementById('sidebar-overlay')?.classList.remove('show');
+    }
+  });
+  document.getElementById('sidebar-toggle')?.addEventListener('click', _toggleSidebar);
+
   // 进入主应用
   function _enterApp() {
     $('#login-overlay').style.display = 'none';
@@ -172,9 +200,10 @@
       }
     });
     if (Auth.currentUser.needPasswordChange) {
+      $('#login-overlay').style.display = 'none';
       $('#change-pwd-overlay').style.display = 'flex';
       return;
     }
-    await _initApp();
+    _enterApp();
   });
 })();
