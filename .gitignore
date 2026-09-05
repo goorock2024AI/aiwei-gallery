@@ -90,3 +90,12 @@ supabase/.temp/
 .dev.vars*
 !.dev.vars.example
 !.env.example
+
+# Local development state and credentials
+/tmp/
+/00_工作台/运营数据管理/tmp/
+.env.*
+*.env
+*.pem
+*.key
+!.env.example
