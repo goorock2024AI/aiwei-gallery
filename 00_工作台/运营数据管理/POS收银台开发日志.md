@@ -1,4 +1,280 @@
 
+## 2026-08-23 数据看板第一轮优化发布上线
+
+**分析**
+
+馆长确认本地预览调整可部署上线。本次发布范围为前端静态文件：`index.html`、`js/charts.js`、`css/style.css`；不涉及后端重建、数据库、权限或生产数据写入。
+
+**设计**
+
+- 使用前端静态热修路径发布。
+- 发布前保留远端备份，上传即生效。
+- 发布后验证 HTTPS 入口 token、静态资源、只读 API、远端文件 mtime/size 和 API 容器日志。
+- 回滚对象为本次备份目录中的三份静态文件。
+
+**执行**
+
+- 生产备份目录：`/opt/aiwei/backups/dashboard-ux-adjust-20260823-20260823-135330`
+- 已上传：
+  - `/opt/aiwei/app/index.html`
+  - `/opt/aiwei/app/js/charts.js`
+  - `/opt/aiwei/app/css/style.css`
+- 修复 `scripts/deploy-static-hotfix.ps1` 中 `$home` 变量名与 PowerShell 只读变量冲突，避免后续发布验证阶段中断。
+
+**验证**
+
+- 发布前 `node --check app/js/charts.js` 通过。
+- 发布前 `node scripts/check-revenue-comparison-chart.js` 通过。
+- 发布前 `node scripts/check-dist-sync.js` 通过。
+- 远端文件 mtime/size：
+  - `index.html` 5215 bytes，2026-08-23 13:53:37 +0800
+  - `js/charts.js` 59464 bytes，2026-08-23 13:53:41 +0800
+  - `css/style.css` 51228 bytes，2026-08-23 13:53:44 +0800
+- HTTPS 入口 `https://iwe.ucanart.cc/?v=dashboard-ux-adjust-20260823` 返回 200 且命中新 token。
+- `https://iwe.ucanart.cc/js/charts.js?v=dashboard-ux-adjust-20260823` 返回 200，包含“总收入”选项逻辑。
+- `https://iwe.ucanart.cc/css/style.css?v=dashboard-ux-adjust-20260823` 返回 200，包含解释层样式。
+- `revenue` 和 `revenue_facts` 只读 API 返回 200。
+- `docker compose ps` 显示 nginx、api、db 容器运行中；API 日志无 SyntaxError/ReferenceError。
+- 发布脚本修复后 PowerShell parser 检查通过。
+
+**复盘**
+
+上线过程暴露出发布脚本中的 `$home` 变量名问题。文件已成功上传，但脚本验证阶段中断；随后已手工完成同等线上验证，并修复脚本，避免同类问题再次出现。
+
+**继续发现**
+
+后续可将“静态 + API 代理”的本地预览方式固化为默认命令，减少纯静态预览导致无法登录的问题。
+
+**边界**
+
+- 本次已发布线上前端静态文件，未修改后端、数据库、权限或生产数据。
+
+---
+
+## 2026-08-23 数据看板预览反馈调整：对比图瘦身与结构排序
+
+**分析**
+
+本轮来自本地预览反馈：收入对比图需要显式支持“总收入”选项和环比增长率；下方解释卡片与 12 行月度明细没有提供有效增量，反而增加阅读噪音；收入结构和支出分类图表应按占比/金额从高到低排序，便于快速判断主次。
+
+**设计**
+
+- 收入对比筛选项新增“总收入”，总收入按全分类收入独立绘制。
+- 上方指标保留总额、同比、环比增长率、峰值月份。
+- 删除收入对比图下方解释卡片和月度明细表。
+- 收入结构图表和摘要统一按金额从高到低排序。
+- 支出分类图表和摘要明确按金额从高到低排序，并保持颜色与分类绑定。
+
+**执行**
+
+- `app/js/charts.js` 调整收入对比选择、数据集构建、tooltip 环比信息和结构排序逻辑。
+- `app/index.html` 更新 `style.css` 与 `charts.js` cache-bust token 为 `dashboard-ux-adjust-20260823`。
+- `scripts/check-revenue-comparison-chart.js` 同步新图例文案，并新增“总收入”选项断言。
+- 同步 `00_工作台/运营数据管理/dist/` 与根目录 `dist/` 静态镜像。
+
+**验证**
+
+- `node --check app/js/charts.js` 通过。
+- `node scripts/check-revenue-comparison-chart.js` 通过。
+- `node scripts/check-dist-sync.js` 通过。
+- `git diff --check` 无格式错误，仅保留 LF/CRLF 提示。
+- 本地预览页已刷新到 `http://127.0.0.1:4173/`。
+
+**复盘**
+
+这次调整遵循“有问题就有建议，有建议就有理由”的方向：删掉不产生判断价值的解释卡片和月度明细，把注意力收回到图表、总收入选项、环比增长率和结构主次排序。
+
+**继续发现**
+
+后续如果继续优化看板，应优先检查顶部筛选控件关系和收入/支出是否需要形成净经营结果视图；不并入本轮。
+
+**边界**
+
+- 本次未部署线上，未修改后端、数据库、权限或生产数据。
+
+---
+
+## 2026-08-23 数据看板第一轮优化：经营阅读路径与解释层
+
+**分析**
+
+本轮真实目标不是“修某个图表”，而是提升馆长通过数据看板获得经营判断的能力。经讨论确认第一轮只做前端静态优化：重排信息架构、统一图表口径、增加解释层；不做图表导出、不做异常阈值、不改后端、数据库、权限或生产数据。
+
+**设计**
+
+- 顶部收入总览从同级卡片矩阵调整为主判断 + 辅助诊断 + 分类追溯条。
+- 数据看板阅读顺序调整为：趋势变化 -> 结构归因 -> 明细追溯。
+- 当月日趋势保留经营基准线，但降低视觉权重并改为解释性命名。
+- 收入结构和支出结构按分类数量选择图表：2 类或 6 类以上用横条，3-5 类用环形；名称、金额和占比统一由摘要承接。
+- 收入对比、月度收入趋势、日收入趋势、支出趋势增加轻量解释层，说明峰值、主要贡献和追溯建议。
+
+**执行**
+
+- `app/js/charts.js` 新增解释层渲染 helper、排序 helper、经营总览主次结构、图表顺序调整和结构图表切换规则。
+- `app/css/style.css` 新增报告分区标题、经营主卡、诊断卡、分类条和解释层样式，并补移动端单列适配。
+- `app/index.html` 更新 `style.css` 与 `charts.js` cache-bust token 为 `dashboard-ux-flow-20260823`。
+- 同步 `00_工作台/运营数据管理/dist/` 与根目录 `dist/` 静态镜像。
+
+**验证**
+
+- `node --check app/js/charts.js` 通过。
+- `node scripts/check-revenue-comparison-chart.js` 通过，确认收入对比图原有筛选与合计线逻辑未回退。
+- `node scripts/check-dist-sync.js` 通过。
+- 本地静态 HTTP 服务拉取 `index.html`、`js/charts.js`、`css/style.css` 均命中新 token `dashboard-ux-flow-20260823`。
+
+**复盘**
+
+这次按新流程先确认真实目标，再进入实现，避免把第三方 UX 报告里的单点建议直接当任务目标。第一轮没有追求一次性重做整页，而是优先建立经营阅读路径和解释层，风险可控。
+
+**继续发现**
+
+后续第二轮可继续评估：顶部年份/月度/搜索控件关系、值班记录/日记摘要图表可读性、收入与支出是否需要形成净经营结果视图。这些不并入本轮任务。
+
+**边界**
+
+- 本次未部署线上，未修改后端、数据库、权限或生产数据。
+
+---
+
+## 2026-08-22 任务流程调整：先分级，再通过分析确认真实目标
+
+**分析**
+
+复盘“数据看板优化”和流程讨论后确认：任务分级不应塞进六步法本体；六步法的核心也不是机械执行六个步骤，而是在分析阶段确认真实目标，执行中避免中途问题替代目标，验证时回到业务结果。方向型任务如果直接把用户原话当开发目标，容易完成表层任务但没有达成预期业务效果。
+
+**设计**
+
+- `CLAUDE.md` 和 `AIWEI.md` 只保留短入口规则：先初步分级和路由，再进入执行闭环。
+- `delivery-optimization.md` 承担运营系统任务的初步分级、路由和上下文读取控制。
+- `six-step-loop.md` 回到执行闭环定位，强调真实目标、问题不替代目标、验证业务结果。
+- 交付 skill 同步改为先分级，再按等级执行对应深度的闭环。
+
+**执行**
+
+- 新增 L0/L1/L2/L3 分级口径。
+- 写入方向型任务规则：如“优化某模块”“提升体验”“增强分析能力”等，必须先通过问答确认真实目标，不得直接进入设计或开发。
+- 修正 `delivery-optimization.md` 中前端 runbook、验证矩阵和运行事实的 `references/` 路径指针。
+
+**验证**
+
+- `Select-String` 确认入口和 skill 均包含“初步分级”“真实目标”“方向型任务”“执行闭环”等关键规则。
+- `git diff --check` 无格式错误，仅保留既有 LF/CRLF 提示。
+- `Get-Item` 确认 `references/runbook-frontend-static-hotfix.md`、`references/minimum-verification-matrix.md`、`references/runtime-facts.md` 路径存在。
+
+**复盘**
+
+这次调整避免继续“修补六步法”。分级发生在入口，六步法负责执行质量；方向型任务先问清业务目标，是防止数据看板这类产品优化任务跑偏的关键。
+
+**继续发现**
+
+后续处理“数据看板优化”时，应先完成目标澄清：使用者是谁、要提升什么经营判断、当前看板哪里造成误判、本轮边界是什么。流程路径问题已修正，不并入数据看板业务优化任务。
+
+**边界**
+
+- 本次只调整流程文档和交付 skill，不修改业务代码、不部署线上、不改变生产数据。
+
+---
+
+## 2026-08-22 交付流程收束：部署上线相关文档去重
+
+**分析**
+
+部署上线相关内容分散在 `delivery-optimization.md`、`release-checklist.md`、`minimum-verification-matrix.md`、`runbook-frontend-static-hotfix.md`、`runtime-facts.md`、`deployment-gotchas.md` 和长版部署方案中，存在分类、验证、备份、token、API 日志等重复表达。问题不是缺少新模板，而是入口和职责边界不够收束。
+
+**设计**
+
+- 保留 `delivery-optimization.md` 作为唯一默认入口。
+- 保留 `runtime-facts.md` 作为唯一默认运行事实源。
+- 保留 `runbook-frontend-static-hotfix.md` 作为前端静态快线动作。
+- 保留 `minimum-verification-matrix.md` 作为验证标准库。
+- 保留 `deployment-gotchas.md` 作为踩坑记忆。
+- 将 `release-checklist.md` 降级为兼容索引，不再作为默认流程入口。
+
+**执行**
+
+- `CLAUDE.md` 的运营系统触发规则改为只先读 `delivery-optimization.md`。
+- 部署方案的低开销入口改为只指向 `delivery-optimization.md`，并声明部署方案只作为深度运维背景。
+- 交付 skill 的部署读取规则改为先读 `delivery-optimization.md`，仅被指向时再读长版部署方案。
+- `delivery-optimization.md` 重写为入口路由与文件职责说明。
+- `runbook-frontend-static-hotfix.md` 删除重复验证细项，改为引用验证矩阵。
+- `release-checklist.md` 降级为兼容索引，只保留去向和共性原则。
+
+**验证**
+
+- `Select-String` 确认 `delivery-optimization.md` 包含“唯一默认入口”，`release-checklist.md` 包含“兼容索引”。
+- `rg` 复查重复表达，确认前端发布 mtime/API 日志等验证细项主要保留在 `minimum-verification-matrix.md`，路径事实保留在 `runtime-facts.md`。
+- `git diff --check` 通过。
+
+**复盘**
+
+这次收束比新增部署模板更符合第一性原则：部署流程只需要入口、事实源、动作、验证标准和踩坑记忆。之前的问题是多个文档同时承担入口和检查职责，容易诱导重复读取。
+
+**继续发现**
+
+下一步如果要改造六步法，应在 `docs/agents/six-step-loop.md` 和任务分级入口中处理，不再新建平行流程文档。
+
+**边界**
+
+- 本次只调整流程文档和项目 skill 指针，不修改业务代码、不部署线上、不改变生产数据。
+
+---
+
+## 2026-08-22 CLAUDE.md 拆分优化：短入口与条件引用
+
+**背景**
+
+复盘发现 `CLAUDE.md` 同时承载项目入口、运营系统部署手册、长版六步法和历史踩坑，导致每次任务常驻上下文过重。当前阶段先拆分文件，不改造六步法本身。
+
+**本次改动**
+
+- `CLAUDE.md` 从 13.52KB / 238 行压缩到 2.46KB / 57 行，只保留项目常驻规则和触发指针。
+- 新增 `docs/agents/six-step-loop.md`，承接现行六步法详细说明、验证失败回落和完成标准。
+- 新增 `references/runtime-facts.md`，承接运营系统正式入口、容器、路径映射、本地预览和部署命令要点。
+- 新增 `references/deployment-gotchas.md`，承接部署踩坑和正确做法。
+- `CLAUDE.md` 中保留低开销交付、前端静态热修、部署事实、数据库/高风险流程的条件触发指针。
+
+**验证**
+
+- 体量统计确认 `CLAUDE.md` 为 `2523 bytes / 57 lines`。
+- `Test-Path` 确认所有 `CLAUDE.md` 指向的新增/既有文档均存在。
+- `Select-String` 确认六步流程、低开销交付、前端发布脚本、运行事实和部署踩坑均可从入口追踪到。
+
+**边界**
+
+- 本次只拆分 agent 规则文档，不修改业务代码、不部署线上、不改变生产数据。
+- 现行六步法语义未改；任务分级引入六步法属于下一步改造。
+
+---
+
+## 2026-08-22 交付流程优化：低开销任务执行与发布模板
+
+**背景**
+
+复盘最近几次优化和上线部署任务后，发现前端静态热修存在重复读长文档、重复拼部署命令、重复验证同一事实和日志描述过长的问题。目标是在不降低生产安全的前提下，减少不必要的 token、时间和人工命令错误。
+
+**本次改动**
+
+- 新增 `references/delivery-optimization.md`：建立任务分级、上下文读取规则、验证节制、日志模板和完成标准。
+- 新增 `references/minimum-verification-matrix.md`：按前端静态热修、后端 API、数据库/财务变更、线上排障定义最小必要验证。
+- 新增 `references/runbook-frontend-static-hotfix.md`：固化前端静态热修流程。
+- 新增 `references/release-checklist.md`：补齐项目内发布清单路径，避免后续 agent 读取相对路径失败。
+- 新增 `scripts/deploy-static-hotfix.ps1`：脚本化前端静态热修的备份、上传、mtime/size、HTTPS token、API 冒烟和日志 tail。
+- `package.json` 新增 `deploy:static-hotfix` 入口。
+- `CLAUDE.md` 和部署方案新增低开销交付流程入口，确保后续运营系统任务先归类再执行。
+
+**验证**
+
+- PowerShell parser 检查 `scripts/deploy-static-hotfix.ps1` 无语法错误。
+- `node -e "JSON.parse(...package.json...)"` 通过。
+- `Select-String` 确认 `CLAUDE.md`、部署方案和新增 references 均包含低开销流程入口。
+
+**边界**
+
+- 本次只新增流程文档、发布脚本和项目规则入口，不部署线上、不修改生产数据、不改变现有业务功能。
+- `scripts/deploy-static-hotfix.ps1` 只适用于前端静态热修；涉及后端、数据库、权限、财务写入时必须升级为对应高强度流程。
+
+---
+
 ## 2026-08-05 文创销售导出补进货价
 
 **背景**
@@ -40,6 +316,149 @@
   - `GET /js/ui.js?v=creative-sales-cost-20260805` 返回 200
   - `GET /rest/v1/revenue?limit=1` 返回 200
 - API 容器日志无启动错误；本次未修改数据库、后端容器或生产业务数据。
+
+---
+
+## 2026-08-21 支出记录优化：简化项目与支出类别
+
+**背景**
+
+支出新增表单同时要求填写“项目”和“支出类别”。其中“项目”对当前支出录入属于重复负担，且原支出类别包含材料、茶歇、通信、打印、运费等过细或低频项，不利于后续按财务口径汇总。
+
+**本次改动**
+
+- `app/js/models.js`：
+  - `PROJECT_TYPES` 简化为 `['运营']`，作为后台默认口径保留。
+  - `EXPENSE_CATEGORIES` 改为通用财务分类：人员劳务、场地物业、办公行政、市场推广、活动展览成本、商品采购、物料耗材、设备资产、交通差旅、税费手续费、维修保洁、其他支出。
+  - `createExpense` 默认类别从“材料”改为“其他支出”。
+- `app/js/ui.js`：
+  - 新增支出表单移除“项目”选择控件。
+  - 新增支出保存时自动写入 `project: '运营'`。
+  - 编辑支出弹窗移除可见“项目”选择控件，但用隐藏字段保留历史记录原项目，避免编辑旧记录时无意覆盖。
+  - 编辑旧类别时，如类别不在新分类中，临时显示为“历史类别”，保证旧数据可编辑。
+- `app/js/import-export.js`：支出导入缺省类别改为“其他支出”。
+- `app/index.html` 更新 `models.js`、`ui.js`、`import-export.js` cache-bust token 为 `expense-category-simplify-20260821`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**验证**
+
+- `node --check app/js/models.js`、`app/js/ui.js`、`app/js/import-export.js` 均通过。
+- 项目内 `dist/` 与根目录 `dist/` 同名文件均通过 `node --check`。
+- `node scripts/check-dist-sync.js` 通过。
+- 本地预览 `GET http://localhost:3000/` 返回 `200 / 4897 bytes`，页面包含 `expense-category-simplify-20260821`。
+- 本地预览 `GET /js/ui.js?v=expense-category-simplify-20260821` 返回 `200`，确认新增支出不再包含 `id="exp-project"`，且包含 `project: '运营'`。
+- 本地预览 `GET /js/models.js?v=expense-category-simplify-20260821` 返回 `200`，确认包含新类别“人员劳务”，不再包含旧类别“茶歇”。
+- Node 逻辑烟测通过：新类别存在、旧类别集不再生效、新增支出默认项目为“运营”、新增支出项目控件不再渲染。
+
+**边界**
+
+- 本次仅修改前端表单、模型默认值、导入缺省值和缓存 token，不修改数据库结构、后端 API 或生产业务数据。
+- 支出列表、导出和 PDF 仍保留 `project` 字段展示，以兼容历史数据和既有报销文件。
+- 已发布到云端（2026-08-21 17:14）：上传 `/opt/aiwei/app/index.html`、`/opt/aiwei/app/js/models.js`、`/opt/aiwei/app/js/ui.js` 与 `/opt/aiwei/app/js/import-export.js`。
+- 回滚备份：`/opt/aiwei/backups/expense-category-simplify-20260821-20260821-171259`。
+- 线上校验通过：
+  - `GET https://iwe.ucanart.cc/?v=expense-category-simplify-20260821` 返回 `200 / 5223 bytes`，页面包含 `expense-category-simplify-20260821`。
+  - `GET /js/models.js?v=expense-category-simplify-20260821` 返回 `200 / 13992 bytes`，脚本包含“人员劳务”，且不包含旧类别“茶歇”。
+  - `GET /js/ui.js?v=expense-category-simplify-20260821` 返回 `200 / 248957 bytes`，确认新增支出不再包含 `id="exp-project"`，且包含 `project: '运营'`。
+  - `GET /js/import-export.js?v=expense-category-simplify-20260821` 返回 `200 / 23143 bytes`，导入缺省类别包含“其他支出”。
+  - `GET /rest/v1/expense?limit=1` 返回 `200`。
+  - `GET /rest/v1/revenue?limit=1` 返回 `200`。
+  - `aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，DB healthy；API 日志无启动错误。
+
+---
+
+## 2026-08-21 数据看板优化：收入对比查询
+
+**背景**
+
+数据看板原先偏“当月逐日趋势”和固定图表，想看某类收入逐月变化、跨类别对比或同比/环比时不够直观。外部参考看板普遍采用“全局筛选器 + period-over-period 对比 + 明细表”的组合，本次按这个方向补齐收入查询能力。
+
+**本次改动**
+
+- `app/js/charts.js` 新增“收入对比分析”模块：
+  - 支持门票、咖啡套票、咖啡、工坊、文创、场地、画廊、其他多选。
+  - 按选中分类展示全年 12 个月逐月趋势。
+  - 同图叠加上一年同口径合计虚线，支持同比观察。
+  - 顶部展示筛选收入合计、年度同比、最新月环比、峰值月份。
+  - 下方表格列出每月收入、去年同月、同比、贡献最高分类和主要项目/来源。
+- 查询口径优先读取 `revenue_facts` 统一收入事实视图；旧环境无视图数据时降级从 `revenue`、`gallery`、`space` 聚合。
+- `app/css/style.css` 新增收入对比控件、指标卡、表格和移动端样式。
+- `app/index.html` 更新 `style.css`、`ui.js`、`charts.js` cache-bust token 为 `dashboard-compare-query-20260821`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**验证**
+
+- `node --check app/js/charts.js` 通过。
+- `node --check dist/js/charts.js` 通过（项目内 `dist/` 与根目录 `dist/` 均通过）。
+- `node scripts/check-dist-sync.js` 通过，确认 app 与项目内 dist 关键文件同步。
+- 本地预览 `http://localhost:3000/` 返回页面并包含 `dashboard-compare-query-20260821`。
+- 本地预览切换 `UPSTREAM=https://iwe.ucanart.cc` 后：
+  - `GET /rest/v1/revenue_facts?limit=1` 返回 `200 / 231 bytes`。
+  - `GET /rest/v1/revenue?limit=1` 返回 `200 / 540 bytes`。
+- Node 逻辑烟测通过：模拟门票、场地旧口径、画廊收入后，收入对比聚合可正确按月累加，并将“场地旧口径”归并为“场地”。
+
+**边界**
+
+- 本次仅修改前端静态看板查询与展示，不修改数据库结构、后端 API 或生产业务数据。
+- 已发布到云端（2026-08-21 16:59）：上传 `/opt/aiwei/app/index.html`、`/opt/aiwei/app/css/style.css` 与 `/opt/aiwei/app/js/charts.js`。
+- 回滚备份：`/opt/aiwei/backups/dashboard-compare-query-20260821-20260821-165910`。
+- 线上校验通过：
+  - `GET https://iwe.ucanart.cc/?v=dashboard-compare-query-20260821` 返回 `200 / 5204 bytes`，页面包含 `dashboard-compare-query-20260821`。
+  - `GET /js/charts.js?v=dashboard-compare-query-20260821` 返回 `200 / 50268 bytes`，脚本包含 `renderRevenueComparison`。
+  - `GET /css/style.css?v=dashboard-compare-query-20260821` 返回 `200 / 47668 bytes`，样式包含 `revenue-compare-summary`。
+  - `GET /rest/v1/revenue_facts?limit=1` 返回 `200`。
+  - `GET /rest/v1/revenue?limit=1` 返回 `200`。
+  - `aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，DB healthy；API 日志无启动错误。
+- 本机浏览器自动化环境缺少可加载的 Playwright 包，本次未完成截图级视觉验收；已保留本地预览地址供人工查看。
+
+---
+## 2026-08-22 数据看板热修：收入对比曲线与筛选同步
+
+**背景**
+
+昨日新增“收入对比分析”后，现场反馈至少两个问题：图表缺少当前年度月度总收入曲线；只选择“门票”时，图表仍出现“画廊”曲线。
+
+**根因**
+
+- 当前年度合计只用于顶部指标、tooltip 和表格，没有作为 Chart.js 数据集渲染。
+- 收入对比筛选函数在页面已有筛选控件时，仍可能回退读取 localStorage 中的旧分类，造成可见勾选状态与图表数据集不一致。
+
+**本次改动**
+
+- `app/js/charts.js` 新增 `_buildRevenueComparisonDatasets()`：
+  - 固定生成“2026年合计”当前年度月度总收入曲线。
+  - 中间只生成当前勾选分类曲线。
+  - 末尾保留“2025年同口径合计”虚线。
+- `_getRevenueCompareSelection()` 改为：页面筛选控件存在时，只读取当前控件的 checked 状态，不再混用 localStorage 旧值。
+- 新增 `scripts/check-revenue-comparison-chart.js`，覆盖“只选门票时不渲染画廊曲线”和“当前年度合计曲线存在”。
+- `app/index.html` 更新 `charts.js` cache-bust token 为 `dashboard-compare-total-20260822`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**验证**
+
+- `node --check app/js/charts.js` 通过。
+- `node --check dist/js/charts.js` 通过（项目内 `dist/` 与根目录 `dist/` 均通过）。
+- `node scripts/check-revenue-comparison-chart.js` 通过。
+- `node scripts/check-dist-sync.js` 通过。
+- 本地预览使用 `UPSTREAM=https://iwe.ucanart.cc`：
+  - `GET http://localhost:3000/` 页面包含 `dashboard-compare-total-20260822`。
+  - `GET /js/charts.js?v=dashboard-compare-total-20260822` 返回 `200 / 49150 bytes`。
+  - `GET /rest/v1/revenue_facts?limit=1` 返回 `200 / 231 bytes`。
+- 线上 HTTPS API 直连校验：`GET https://iwe.ucanart.cc/rest/v1/revenue_facts?limit=1` 返回 `200 / 231 bytes`。
+
+**边界**
+
+- 本次仅修改前端静态图表逻辑、缓存 token、验证脚本与开发日志，不修改数据库结构、后端 API 或生产业务数据。
+- 已发布到云端（2026-08-22 10:58）：上传 `/opt/aiwei/app/index.html` 与 `/opt/aiwei/app/js/charts.js`。
+- 回滚备份：`/opt/aiwei/backups/dashboard-compare-total-20260822-20260822-105830`。
+- 线上校验通过：
+  - 云端文件 mtime 为 2026-08-22 10:58，大小分别为 `index.html 5223 bytes`、`charts.js 51054 bytes`。
+  - `GET https://iwe.ucanart.cc/?v=dashboard-compare-total-20260822` 返回 `200 / 5223 bytes`，页面包含 `dashboard-compare-total-20260822`。
+  - `GET /js/charts.js?v=dashboard-compare-total-20260822` 返回 `200 / 51054 bytes`，脚本包含 `_buildRevenueComparisonDatasets` 与 `current-total`。
+  - `GET /css/style.css?v=dashboard-compare-total-20260822` 返回 `200 / 47668 bytes`，样式包含 `revenue-compare-summary`。
+  - `GET /rest/v1/revenue_facts?limit=1` 返回 `200 / 231 bytes`。
+  - `GET /rest/v1/revenue?limit=1` 返回 `200 / 540 bytes`。
+  - `aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，DB healthy；API 日志无 SyntaxError/ReferenceError。
 
 ---
 ## 2026-08-08 产品管理热修：咖啡产品新增配置持久化云端发布
@@ -2298,3 +2717,519 @@ P0-P2 已完成运营支出记录、票据图片上传和报销 PDF 生成。按
 - 本次尚未部署到云端，未推送 Git。
 
 ---
+## 2026-08-15 POS 文创选择优化：热销按钮一键选择
+
+**背景**
+
+POS 收银台“文创/零售 → 从产品库选择”弹窗中，热销快捷按钮原先只是把产品名作为搜索关键词写入搜索框，前台仍需再点击一次列表产品，实际比直接找产品多了一步。
+
+**本次改动**
+
+- 热销按钮从“筛选关键词”改为“直接选择产品”。
+- 点击热销按钮后，按产品名精确匹配有零售价的产品，并直接调用 `_fillCreativeFromPOS(product.id)` 回填产品名和单价。
+- 若极端情况下找不到匹配产品，保留降级逻辑：回到原搜索筛选行为。
+- `app/index.html` 更新 `ui.js` cache-bust token 为 `creative-hot-direct-select-20260815`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**线上发布**
+
+- 已上传 `/opt/aiwei/app/js/ui.js` 与 `/opt/aiwei/app/index.html`。
+- 回滚点：`/opt/aiwei/backups/creative-hot-direct-select-20260815-20260815-134453`。
+
+**验证**
+
+- `node --check app/js/ui.js`、项目内 `dist/` 与根目录 `dist/` 同名文件均通过。
+- 线上 `GET https://iwe.ucanart.cc/` 返回 200，页面包含 `creative-hot-direct-select-20260815`。
+- 线上 `GET /js/ui.js?v=creative-hot-direct-select-20260815` 返回 200，脚本包含 `data-product-name` 与 `_selectCreativePOSHotProduct`。
+- Node 逻辑烟测：热销产品可按名称直接匹配到产品 ID；无零售价产品不会被热销直选。
+- `GET /rest/v1/revenue?limit=1` 返回 200，核心 API 未受影响。
+
+**边界**
+
+- 本次只优化热销按钮交互，不改变普通搜索/供应商筛选/列表点击流程。
+- 不修改数据库、库存、价格或收入记录。
+
+---
+## 2026-08-15 POS 文创选择热修：解除 0 库存禁选
+
+**背景**
+
+部分文创/零售产品早期录入时没有完整统计库存，导致系统库存为 0 但现场实际有货。原 POS 选择弹窗把 `库存 > 0` 作为可选条件，现场会被误拦截。
+
+**本次改动**
+
+- POS 文创产品选择弹窗不再以库存数量判断是否可选。
+- 排序和热门候选只要求产品有零售价，不再要求库存大于 0。
+- 保留“无零售价不可选”的限制，避免误收款金额为 0。
+- 库存标签继续展示当前系统库存，提醒后续需要单独校准库存数据。
+- `app/index.html` 更新 `ui.js` cache-bust token 为 `creative-zero-stock-select-20260815`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**线上发布**
+
+- 已上传 `/opt/aiwei/app/js/ui.js` 与 `/opt/aiwei/app/index.html`。
+- 回滚点：`/opt/aiwei/backups/creative-zero-stock-select-20260815-20260815-131805`。
+
+**验证**
+
+- `node --check app/js/ui.js`、项目内 `dist/` 与根目录 `dist/` 同名文件均通过。
+- 线上 `GET https://iwe.ucanart.cc/` 返回 200，页面包含 `creative-zero-stock-select-20260815`。
+- 线上 `GET /js/ui.js?v=creative-zero-stock-select-20260815` 返回 200，脚本包含 `const canSelect = p._retailPrice > 0`。
+- Node 逻辑烟测：`库存 0 + 零售价 38` 的模拟商品 `canSelect === true`。
+- `GET /rest/v1/revenue?limit=1` 返回 200，核心 API 未受影响。
+
+**边界**
+
+- 本次仅解除 POS 文创/零售选择弹窗的 0 库存禁选限制。
+- 未修改数据库、未调整实际库存数量、未改变库存扣减/校准逻辑。
+- 画廊作品“售罄不可选”属于另一条业务链路，本次未改。
+
+---
+## 2026-08-15 页面备案号展示
+
+**背景**
+
+根据国内网站备案展示要求，需要在运营数据管理系统页面版本号前显示备案号。
+
+**本次改动**
+
+- `app/index.html`：新增独立 `sidebar-icp` 元素，位于版本号前方，内容为 `滇ICP备2026015607号-1`。
+- `app/js/app.js`：备案号与版本号分开填充，避免版本号刷新覆盖备案展示。
+- `app/css/style.css`：新增 `#sidebar-icp` 样式，让备案号在侧边栏底部稳定显示。
+- `app/index.html` 更新 `style.css` 与 `app.js` cache-bust token 为 `beian-sidebar-display-20260815`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**线上发布**
+
+- 已上传 `/opt/aiwei/app/index.html`、`/opt/aiwei/app/js/app.js` 与 `/opt/aiwei/app/css/style.css`。
+- 回滚点：`/opt/aiwei/backups/beian-version-20260815-20260815-131054`。
+- 二次显示修正回滚点：`/opt/aiwei/backups/beian-sidebar-display-20260815-20260815-133054`。
+
+**验证**
+
+- `node --check app/js/app.js`、项目内 `dist/` 与根目录 `dist/` 同名文件均通过。
+- `GET https://iwe.ucanart.cc/` 返回 200，HTML 包含 `sidebar-icp`、`滇ICP备2026015607号-1` 与 `beian-sidebar-display-20260815`。
+- `GET /js/app.js?v=beian-sidebar-display-20260815` 返回 200，脚本包含 `滇ICP备2026015607号-1`。
+- `GET /css/style.css?v=beian-sidebar-display-20260815` 返回 200，样式包含 `#sidebar-icp`。
+- `GET /rest/v1/revenue?limit=1` 返回 200，核心 API 未受影响。
+
+**边界**
+
+- 本次仅修改前端展示文案和缓存 token，不修改数据库、后端 API 或生产业务数据。
+
+---
+## 2026-08-15 域名 HTTPS 后登录配置热修：API 改为同源
+
+**背景**
+
+运营数据管理系统已接入 `iwe.ucanart.cc` HTTPS 网关，旧前端配置仍写死 `http://122.51.56.50`，在 HTTPS 域名下登录和后续 API 请求存在 mixed content / 旧入口风险。
+
+**本次改动**
+
+- `app/js/supabase-config.js`：API base 改为浏览器当前 `window.location.origin`，即 `https://iwe.ucanart.cc` 下自动请求同源 `/rest/v1/...`。
+- `app/index.html`：`supabase-config.js` cache-bust token 更新为 `same-origin-api-20260815`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像中的同名配置。
+- 更新运维事实：正式入口为 `https://iwe.ucanart.cc`，宿主机 `wechat-gateway` 承接 80/443，运营系统容器映射为 `8081:80`。
+
+**线上发布**
+
+- 已上传 `/opt/aiwei/app/js/supabase-config.js` 与 `/opt/aiwei/app/index.html`。
+- 回滚点：`/opt/aiwei/backups/same-origin-api-20260815-20260815-104907`。
+
+**验证**
+
+- `node --check app/js/supabase-config.js`、项目内 `dist/` 与根目录 `dist/` 同名文件均通过。
+- `GET https://iwe.ucanart.cc/` 返回 `200 / 5149 bytes`，页面包含 `same-origin-api-20260815`。
+- `GET /js/supabase-config.js?v=same-origin-api-20260815` 返回 `200 / 1197 bytes`，配置包含 `AIWEI_API_BASE` 且不再包含 `122.51.56.50`。
+- Node 模拟浏览器环境确认 `SUPABASE_CONFIG.url === 'https://iwe.ucanart.cc'`。
+- `GET https://iwe.ucanart.cc/rest/v1/revenue?limit=1` 返回 `200`。
+- `POST https://iwe.ucanart.cc/rest/v1/login` 空请求返回 `400`，无效账号返回 `401 用户不存在`，确认 HTTPS 登录接口已到达后端。
+
+**边界**
+
+- 本次不修改数据库、不重置密码、不改用户权限、不写入生产业务数据。
+- 未使用真实账号密码做登录；需由馆长或授权测试人员用真实账号完成最终业务登录验收。
+
+---
+## 2026-08-10 数据管理优化：收入导出计入空间与画廊收入
+
+**背景**
+
+数据管理页“导出收入数据”原先只读取 `revenue` 收银台收入表，空间使用的到账明细和画廊销售收入虽然已在统计图表口径中计入，但未进入该 CSV 导出。
+
+**本次改动**
+
+- `app/js/import-export.js`：`ImportExport.exportCSV('revenue')` 改为导出全收入明细。
+- 优先读取 `revenue_facts` 统一收入事实视图，覆盖收银台、空间、画廊及视图内已有调整项。
+- 当旧环境没有 `revenue_facts` 数据时，前端兜底从 `revenue`、`space`、`gallery` 聚合：
+  - 收银台按门票、咖啡套票、咖啡、工坊、文创、其他等分类拆行。
+  - 空间按 `payments.paymentDate` 和到账金额拆行计入“场地”收入。
+  - 画廊按成交价计入收入金额，按 `price - commission` 计入净收入。
+- 导出字段改为：日期、来源、分类、收入金额、净收入、收款方式、项目/关联、经手人、原记录ID、创建时间。
+- 更新 `app/index.html` 的 `import-export.js` cache-bust token 为 `full-revenue-export-20260810`。
+- 同步更新项目内 `dist/` 与根目录 `dist/` 镜像文件。
+
+**验证**
+
+- `node --check app/js/import-export.js` 通过。
+- `node --check dist/js/import-export.js` 通过（项目内 `dist/` 与根目录 `dist/` 均通过）。
+- Node 逻辑烟测通过：模拟 POS 收入、空间到账、画廊销售后，聚合结果包含 `pos:10/15`、`space:300`、`gallery:1000/800`。
+
+**边界**
+
+- 本次仅修改前端静态导出逻辑，未修改数据库结构、后端 API 或生产业务数据。
+- 已发布到云端（2026-08-10 12:42）：上传 `/opt/aiwei/app/index.html` 与 `/opt/aiwei/app/js/import-export.js`。
+- 回滚备份：`/opt/aiwei/backups/frontend-20260810-124216-full-revenue-export`。
+- 线上校验通过：
+  - `GET http://122.51.56.50/` 返回 `200 / 5138 bytes`，页面包含 `full-revenue-export-20260810`。
+  - `GET /js/import-export.js?v=full-revenue-export-20260810` 返回 `200 / 23024 bytes`，脚本包含 `_exportAllRevenueCSV`、`_loadAllRevenueFacts` 与 `Store.getAll('revenueFacts')`。
+  - `GET /rest/v1/revenue_facts?limit=1` 返回 `200 / 249 bytes`。
+  - `GET /rest/v1/revenue?limit=1` 返回 `200`。
+  - `aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，DB healthy；API 日志显示正常启动。
+
+---
+---
+## 2026-08-27 用户角色权限与产品上架确认流程
+
+**背景**
+
+保留管理员、编辑者、查看者三类角色，但需要把权限从“页面可见”细化为动作权限：编辑者可完整录入文创产品和画廊作品资料，正式上架由管理员确认；查看者扩展为多模块只读。
+
+**本次改动**
+
+- 前端新增 `Auth.can(action, scope)` 动作权限矩阵，保留 `hasModuleAccess()` 兼容现有导航。
+- 登录接口返回服务端签名 token；前端通用 REST、上传、特殊业务请求自动带 `Authorization: Bearer ...`。
+- 后端新增 token 校验与角色表权限：未登录请求拒绝；viewer 只读；editor 可日常录入但不可删除、导出、退款/作废、复核日结、确认上架/下架。
+- `creative_products`、`artworks` 增加 `approval_status`、`submitted_by`、`approved_by`、`approved_at` 字段；历史数据默认兼容为“已上架”。
+- 新增迁移脚本 `sql/20260827_role_permissions_product_approval.sql`。
+- 产品管理对 editor 开放文创/零售与画廊作品子页；门票、咖啡、工坊配置仍仅管理员维护。
+- 编辑者新增/导入/编辑文创产品和画廊作品时保存为“待确认”；管理员可上架、下架、删除。
+- POS 文创选择和画廊销售作品选择仅显示“已上架”产品/作品。
+- 查看者可进入收入、画廊、空间、日结、项目清单、数据看板，只读展示；隐藏新增、编辑、收款、保存、导出等动作。
+- `app/index.html`、项目 `dist/` 与根目录 `dist/` cache-bust token 更新为 `role-approval-20260827`。
+
+**涉及文件**
+
+- `server.js`
+- `app/js/auth.js`
+- `app/js/store.js`
+- `app/js/models.js`
+- `app/js/ui.js`
+- `app/js/import-export.js`
+- `app/sql/init.sql`
+- `app/index.html`
+- `dist/` 镜像文件
+- `sql/20260827_role_permissions_product_approval.sql`
+
+**验证**
+
+- `node --check server.js` 通过。
+- `node --check app/js/auth.js`、`store.js`、`models.js`、`ui.js`、`import-export.js` 通过。
+- 项目内 `dist/js` 与根目录 `dist/js` 同名文件语法检查通过。
+- 静态检查确认：
+  - `Auth.can()` 包含 admin/editor/viewer 动作权限。
+  - `products` 模块对 editor 可见。
+  - 文创产品和作品保存时 editor 固定为“待确认”。
+  - 上架/下架按钮仅管理员显示。
+  - POS 文创选择、画廊销售选择按“已上架”过滤。
+  - 导出函数入口有权限拦截。
+
+**边界**
+
+- 本次为本地开发与静态验证，未执行生产数据库迁移，未发布到线上。
+- 生产发布前必须执行 `sql/20260827_role_permissions_product_approval.sql`，并完成 admin/editor/viewer 三角色线上冒烟。
+- 旧浏览器 session 没有 token，发布后需要重新登录一次。
+- 查看者日结页当前只读加载收入事实与已复核日结，不拉取支出、现金、调整明细，避免扩大敏感数据面。
+
+**云端发布**
+
+- 已发布到云端（2026-08-27 11:15-11:25）：上传 `/opt/aiwei/server.js`、`/opt/aiwei/app/index.html`、`/opt/aiwei/app/js/auth.js`、`store.js`、`models.js`、`ui.js`、`import-export.js`、`/opt/aiwei/app/sql/init.sql` 与 `/opt/aiwei/sql/20260827_role_permissions_product_approval.sql`。
+- 发布前备份：`/opt/aiwei/backups/role-approval-20260827-20260827-111543`，包含生产数据库 dump、后端入口、首页、相关前端 JS 与初始化 SQL。
+- 已执行生产数据库迁移：为 `creative_products` 与 `artworks` 补齐 `approval_status`、`submitted_by`、`approved_by`、`approved_at` 字段；历史空值兼容为“已上架”。
+- 已重建并重启 API 容器，`aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，数据库健康检查通过。
+- 线上静态验证通过：
+  - `https://iwe.ucanart.cc/` 返回 200，页面包含 `role-approval-20260827`。
+  - `/js/auth.js?v=role-approval-20260827` 返回 200，脚本包含 token 授权头与 `Auth.can()`。
+  - `/js/ui.js?v=role-approval-20260827` 返回 200，脚本包含审批状态与仅上架可售过滤逻辑。
+- 线上接口与权限冒烟通过：
+  - 未登录访问 `/rest/v1/revenue?limit=1` 返回 401。
+  - 错误登录返回 401。
+  - admin/viewer/editor 三类角色均存在。
+  - admin 可读收入数据；viewer 可读收入数据但写入收入返回 403。
+  - editor 直接确认上架文创产品返回 403。
+  - editor 新增文创产品成功，状态为“待确认”；随后 admin 清理测试数据成功，测试残留为 0。
+- API 日志复查未见 `SyntaxError`、`ReferenceError` 或启动异常。
+
+**发布后边界**
+
+- 旧浏览器 session 因没有服务端 token，发布后需要重新登录一次。
+- 本次线上冒烟使用服务端生成 token 验证角色权限，未暴露或改动真实账号密码。
+- 仍需用真实 admin/editor/viewer 账号完成一次浏览器业务验收，重点检查：编辑者录入产品/作品后待确认、管理员上架后 POS/画廊销售可选、查看者多模块只读。
+
+---
+
+## 2026-08-27 查看者访问画廊销售页权限热修
+
+**背景**
+
+查看者进入画廊销售页时报错“操作失败：无权限访问该数据”。根因是画廊销售页在只读展示前会预加载 `artworks` 作品档案，用于作品信息关联；后端 viewer 只读白名单已允许 `gallery_sales`，但漏放 `artworks`。
+
+**本次改动**
+
+- `server.js`：viewer 的 GET 白名单新增 `artworks`。
+- 不调整 viewer 写权限；查看者仍不能新增、修改、删除作品，也不能审批上架/下架或导出数据。
+
+**云端发布**
+
+- 已发布到云端（2026-08-27 11:35）：上传 `/opt/aiwei/server.js`，并重建、重启 API 容器。
+- 发布前备份：`/opt/aiwei/backups/viewer-gallery-artworks-hotfix-20260827-113510`。
+
+**验证**
+
+- 本地 `node --check server.js` 通过。
+- 线上 API 冒烟通过：
+  - viewer 请求 `/rest/v1/gallery_sales?limit=1` 返回 200。
+  - viewer 请求 `/rest/v1/artworks?limit=1` 返回 200。
+  - viewer `POST /rest/v1/artworks` 返回 403。
+- 线上入口 `https://iwe.ucanart.cc/` 返回 200。
+- API 日志复查仅见正常启动，无启动异常。
+
+**边界**
+
+- 本次只修复查看者打开画廊销售页的只读依赖表权限。
+- 未修改数据库结构、前端静态文件、真实业务数据或账号密码。
+
+---
+
+## 2026-08-27 页面刷新健康检查 401 热修
+
+**背景**
+
+用户反馈页面刷新时显示“数据库连接失败：状态码 401”。根因是刷新进入应用后，`Store.healthCheck()` 仍以无 token 请求 `/rest/v1/revenue?limit=1`；权限体系上线后，未带授权头的业务 API 会正确返回 401。同时，查看者初始化会读取 `app_config`，后端只读白名单也需要补齐该配置表。
+
+**本次改动**
+
+- `app/js/store.js`：`healthCheck()` 增加 `Authorization` 请求头；无 token 或 401 时提示“登录已过期，请重新登录”，不再误报数据库连接失败。
+- `server.js`：viewer 的 GET 白名单新增 `app_config`。
+- `app/index.html`：`store.js` cache-bust token 更新为 `viewer-refresh-auth-20260827`。
+- 同步更新项目 `dist/` 与根目录 `dist/` 镜像中的 `index.html`、`store.js`。
+
+**云端发布**
+
+- 已发布到云端（2026-08-27 11:50）：上传 `/opt/aiwei/server.js`、`/opt/aiwei/app/index.html` 与 `/opt/aiwei/app/js/store.js`，并重建、重启 API 容器。
+- 发布前备份：`/opt/aiwei/backups/viewer-refresh-auth-hotfix-20260827-115010`。
+
+**验证**
+
+- 本地 `node --check server.js`、`app/js/store.js`、项目 `dist/js/store.js`、根目录 `dist/js/store.js` 均通过。
+- 线上入口 `https://iwe.ucanart.cc/` 返回 200，页面包含 `viewer-refresh-auth-20260827`。
+- 线上 `store.js?v=viewer-refresh-auth-20260827` 返回 200，脚本包含“登录已过期，请重新登录”。
+- viewer 线上冒烟通过：
+  - `/rest/v1/app_config` 返回 200。
+  - `/rest/v1/revenue?limit=1` 返回 200。
+  - `/rest/v1/gallery_sales?limit=1` 返回 200。
+  - `/rest/v1/artworks?limit=1` 返回 200。
+  - `POST /rest/v1/app_config` 返回 403。
+- API 日志复查仅见正常启动，无启动异常。
+
+**边界**
+
+- 本次不修改数据库结构、不写入生产业务数据、不改真实账号密码。
+- 旧页面缓存可能仍持有旧 `store.js`，遇到残留提示时需要刷新页面或重新登录。
+
+---
+
+## 2026-08-27 产品管理编辑弹窗保存体验热修
+
+**背景**
+
+用户反馈产品管理页“产品编辑”弹窗经常自动关闭，保存后缺少明确提示，列表不自动刷新，导致无法确认数据是否已更新。排查发现文创产品、画廊作品和基础配置弹窗均允许点击遮罩关闭；文创产品保存后没有重新拉取云端列表，只重绘当前内存数据；保存按钮没有保存中状态，网络慢或重复点击时反馈不稳定。
+
+**本次改动**
+
+- `app/js/ui.js`：
+  - 文创产品、画廊作品、基础配置弹窗取消“点击遮罩自动关闭”，只通过“取消”按钮关闭。
+  - 弹窗按钮统一补 `type="button"`。
+  - 保存时禁用保存按钮并显示“保存中...”，避免重复提交。
+  - 保存失败时保留弹窗并恢复按钮，明确提示失败原因。
+  - 文创产品保存成功后重新拉取 `creative_products`，再刷新列表。
+  - 画廊作品保存成功后重新拉取 `artworks`，再刷新列表。
+  - 成功提示改为“已更新/已新增，列表已刷新”；编辑者保存时仍提示“等待管理员确认”。
+- `app/index.html`：`ui.js` cache-bust token 更新为 `product-modal-save-20260827`。
+- 同步更新项目 `dist/` 与根目录 `dist/` 镜像。
+
+**云端发布**
+
+- 已发布到云端（2026-08-27 12:12）：上传 `/opt/aiwei/app/index.html` 与 `/opt/aiwei/app/js/ui.js`。
+- 发布前备份：`/opt/aiwei/backups/product-modal-save-hotfix-20260827-121216`。
+
+**验证**
+
+- 本地 `node --check app/js/ui.js`、项目 `dist/js/ui.js`、根目录 `dist/js/ui.js` 均通过。
+- `node scripts/check-dist-sync.js` 通过。
+- 线上入口 `https://iwe.ucanart.cc/` 返回 200，页面包含 `product-modal-save-20260827`。
+- 线上 `ui.js?v=product-modal-save-20260827` 返回 200，脚本包含“保存中...”与“产品已更新，列表已刷新”。
+- editor/admin 产品表只读冒烟：`creative_products?limit=1` 返回 200。
+- API 日志复查无启动异常。
+
+**边界**
+
+- 本次只修复产品管理弹窗交互和前端刷新逻辑。
+- 未修改数据库结构、后端 API、产品价格数据、库存数据或账号权限。
+- 仍建议用真实账号做一次浏览器验收：编辑文创产品、编辑画廊作品、确认保存失败时弹窗不关闭。
+
+---
+
+## 2026-08-27 日结报表本月列表优化
+
+**背景**
+
+用户希望日结报表页增加列表，能够显示最近当月的日结数据，便于从单日详情切换查看本月已保存日结。
+
+**本次改动**
+
+- `app/js/ui.js`：日结报表页新增“YYYY-MM 日结列表”，按日期倒序展示本月 `daily_closings` 数据。
+- 列表展示日期、状态、系统净收入、实收确认、差异、结账人和更新日期。
+- 列表“查看”按钮可切换日结日期并刷新单日详情。
+- 单日日结保存后继续刷新当前月列表。
+- `app/index.html`：`ui.js` cache-bust token 更新为 `daily-closing-month-list-20260827`。
+- 同步更新项目 `dist/` 与根目录 `dist/` 镜像。
+
+**验证**
+
+- 本地 `node --check app/js/ui.js`、项目 `dist/js/ui.js`、根目录 `dist/js/ui.js` 均通过。
+- `npm run check:dist-sync` 通过。
+- 本地预览 `http://localhost:3001/` 返回 200，首页包含 `daily-closing-month-list-20260827`。
+- 本地预览 `ui.js?v=daily-closing-month-list-20260827` 返回 200，脚本包含 `_renderDailyClosingMonthList` 与“本月暂无已保存日结”。
+
+**边界**
+
+- 本次只做前端静态优化，未修改数据库结构、后端 API、权限规则或生产业务数据。
+- 未执行线上发布；如需上线，可按静态热修流程发布 `index.html` 与 `ui.js`。
+
+**云端发布**
+
+- 已发布到云端（2026-08-27 16:30）：上传 `/opt/aiwei/app/index.html` 与 `/opt/aiwei/app/js/ui.js`。
+- 发布前备份：`/opt/aiwei/backups/daily-closing-month-list-20260827-163023`，包含旧版 `index.html` 与 `js_ui.js`。
+- 远端文件确认：
+  - `/opt/aiwei/app/index.html`：5183 bytes，mtime `2026-08-27 16:30:30 +0800`。
+  - `/opt/aiwei/app/js/ui.js`：265639 bytes，mtime `2026-08-27 16:30:34 +0800`。
+- 线上静态验证通过：
+  - `https://iwe.ucanart.cc/?v=daily-closing-month-list-20260827` 返回 200，页面包含 `daily-closing-month-list-20260827`。
+  - `https://iwe.ucanart.cc/js/ui.js?v=daily-closing-month-list-20260827` 返回 200，脚本包含 `_renderDailyClosingMonthList` 与“本月暂无已保存日结”。
+- 容器状态正常：`aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，数据库 healthy。
+- API 日志复查无 `SyntaxError`、`ReferenceError` 或启动异常。
+
+**发布后边界**
+
+- 未登录请求 `/rest/v1/revenue_facts?limit=1` 返回 401，符合当前登录权限规则。
+- 本次未修改数据库结构、后端 API、权限规则或生产业务数据。
+
+**修正发布**
+
+- 用户反馈上一版只展示已保存日结，未覆盖“未结存但已有经营流水”的日期，也缺少列表内的品类收入和收款方式明细。
+- 已修正并发布到云端（2026-08-27 17:21）：重新上传 `/opt/aiwei/app/index.html` 与 `/opt/aiwei/app/js/ui.js`。
+- 发布前备份：`/opt/aiwei/backups/daily-closing-ledger-20260827-172144`，包含上一版 `index.html` 与 `js_ui.js`。
+- 修正逻辑：
+  - 当月列表改为“日结台账”，由当月 `revenue_facts` 与当月 `daily_closings` 按日期合并生成。
+  - 有收入事实但没有日结记录的日期显示为“未结存”。
+  - 已结存日期显示原日结状态、实收确认和差异。
+  - 每行新增“品类收入”和“收款方式”明细。
+- 远端文件确认：
+  - `/opt/aiwei/app/index.html`：5179 bytes，mtime `2026-08-27 17:21:52 +0800`。
+  - `/opt/aiwei/app/js/ui.js`：267563 bytes，mtime `2026-08-27 17:21:56 +0800`。
+- 线上静态验证通过：
+  - `https://iwe.ucanart.cc/?v=daily-closing-ledger-20260827` 返回 200，页面包含 `daily-closing-ledger-20260827`。
+  - `https://iwe.ucanart.cc/js/ui.js?v=daily-closing-ledger-20260827` 返回 200，脚本包含“日结台账”“未结存”“品类收入”“收款方式”。
+- 容器状态正常：`aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，数据库 healthy。
+- API 日志复查无 `SyntaxError`、`ReferenceError` 或启动异常。
+
+**修正边界**
+
+- 本次只做前端静态修正，未修改数据库结构、后端 API、权限规则或生产业务数据。
+- 未登录 API 探针返回 401，符合当前登录权限规则。
+
+---
+
+## 2026-08-28 日结列表逐日台账与快速结存修正
+
+**背景**
+
+用户截图反馈顶部“日结列表”仍只展示已结算归档的数据，不能看到 8 月 27 日这类“有当天经营流水但尚未结存”的日结数据；同时希望可在顶部表格直接快速结存归档。
+
+**本次改动**
+
+- `app/js/ui.js`：
+  - 顶部“日结列表”改为按当前月份逐日生成，从当月 1 日到当天每天一行。
+  - 每行合并当日 `revenue_facts` 与 `daily_closings`：有日结记录显示原状态，无日结记录显示“未结存”。
+  - 每行保留系统净收入、实收确认、差异、结账人，并显示“品类收入”和“收款方式”明细。
+  - 未结存或草稿行增加“快速结存”按钮。
+  - 快速结存复用现有 `daily_closings` 写入链路，按系统净收入生成/更新当天日结，默认状态为“已确认”，差异为 0，并保留收入、支出、现金和调整摘要。
+  - 点击后按钮进入“结存中...”禁用状态，避免重复提交。
+- `app/index.html`：`ui.js` cache-bust token 更新为 `daily-closing-quick-archive-20260828`。
+- 同步更新项目 `dist/` 与根目录 `dist/` 镜像。
+
+**验证**
+
+- 本地 `node --check app/js/ui.js`、项目 `dist/js/ui.js`、根目录 `dist/js/ui.js` 均通过。
+- `npm run check:dist-sync` 通过。
+- 本地预览 `http://localhost:3001/` 返回 200，首页包含 `daily-closing-quick-archive-20260828`。
+- 本地预览 `ui.js?v=daily-closing-quick-archive-20260828` 返回 200，脚本包含 `_monthLedgerDates`、“快速结存”、“结存中...”、“未结存”、“品类收入”、“收款方式”。
+
+**云端发布**
+
+- 已发布到云端（2026-08-28 11:47）：上传 `/opt/aiwei/app/index.html` 与 `/opt/aiwei/app/js/ui.js`。
+- 发布前备份：`/opt/aiwei/backups/daily-closing-quick-archive-20260828-114734`，包含上一版 `index.html` 与 `js_ui.js`。
+- 远端文件确认：
+  - `/opt/aiwei/app/index.html`：5186 bytes，mtime `2026-08-28 11:47:42 +0800`。
+  - `/opt/aiwei/app/js/ui.js`：272585 bytes，mtime `2026-08-28 11:47:45 +0800`。
+- 线上静态验证通过：
+  - `https://iwe.ucanart.cc/?v=daily-closing-quick-archive-20260828` 返回 200，页面包含 `daily-closing-quick-archive-20260828`。
+  - `https://iwe.ucanart.cc/js/ui.js?v=daily-closing-quick-archive-20260828` 返回 200，脚本包含 `_monthLedgerDates`、“快速结存”、“结存中...”、“未结存”、“品类收入”、“收款方式”。
+- 容器状态正常：`aiwei-api-1`、`aiwei-db-1`、`aiwei-nginx-1` 均运行中，数据库 healthy。
+- API 日志复查无 `SyntaxError`、`ReferenceError` 或启动异常。
+
+**边界**
+
+- 本次未修改数据库结构、后端 API 或权限规则。
+- 未由 AI 代点“快速结存”，避免直接写入真实生产日结数据；快速结存由已登录且有权限的用户在页面中触发。
+- 未登录 API 探针返回 401，符合当前登录权限规则。
+
+---
+
+## 2026-09-03 M3-04 商品主数据字段与管理入口第一批开发
+
+**背景**
+
+2.0 美术馆运营管理进入 M3 核心流程升级。M3-03 已完成本地迁移、回滚和 API 权限验证；M3-04 先从文创/饮料商品主数据入口开始，避免直接大幅改动现场收银交易链路。
+
+**本次改动**
+
+- `app/js/models.js`：`createCreativeProduct` 增加标准名称、业务归属、包装规格、条码、是否饮料、是否计库存、是否启用字段。
+- `app/js/ui.js`：
+  - 文创/零售列表增加标准名称、SKU/条码、归属/规格、停用状态展示。
+  - 新增/编辑产品弹窗增加业务归属、包装规格、条码和商品属性。
+  - 搜索范围扩展到标准名称、条码、业务归属和包装规格。
+  - 产品导入模板、产品导出、销售清单导出补充 M3-04 新字段。
+- `app/sql/init.sql`：`creative_products` 初始化结构补齐 M3-02 的 7 个商品扩展字段。
+- `app/index.html`：`models.js`、`ui.js` cache-bust token 更新为 `m3-04-product-master-20260903`。
+- 同步更新项目 `dist/` 与根目录 `dist/` 镜像。
+
+**验证**
+
+- `node --check app/js/models.js`、`app/js/ui.js` 通过。
+- `node --check` 项目 `dist/js/models.js`、`dist/js/ui.js` 通过。
+- `node --check` 根目录 `dist/js/models.js`、`dist/js/ui.js` 通过。
+- `npm run check:dist-sync` 通过。
+- `npm run check:creative-pos-picker` 通过。
+- 本地资源探针确认入口已引用 `m3-04-product-master-20260903`。
+- 本地 API 运行时冒烟通过：`creative_products` 可接收并读回标准名称、业务归属、包装规格、条码、是否饮料、是否计库存、是否启用。
+- 本地测试商品和测试账号已清理，本地 API 已关闭。
+- 本地测试库已完整回滚并重建 1.0 基础结构，复查 `remaining_v2_objects = 0`。
+
+**边界**
+
+- 本次未连接生产库、未执行生产迁移、未部署线上版本。
+- 本次未写入、修改或回填真实商品、销售或历史经营数据。
+- 本次运行时验证只使用 `127.0.0.1` 的 M3-03 本地测试库，验证后已执行回滚收尾。
+- POS 销售提交仍保留 1.0 `retailItems` 结构；下一批再做文创/饮料销售明细快照和别名治理入口。

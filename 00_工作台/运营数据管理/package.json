@@ -2,6 +2,14 @@
   "name": "aiwei-api",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "check:dist-sync": "node scripts/check-dist-sync.js",
+    "check:creative-pos-picker": "node scripts/check-creative-pos-picker.js",
+    "check:revenue-comparison-chart": "node scripts/check-revenue-comparison-chart.js",
+    "m3:preflight": "powershell -ExecutionPolicy Bypass -File scripts/m3-03-preflight-check.ps1",
+    "m3:rehearsal": "node scripts/m3-03-node-migration-rehearsal.js",
+    "deploy:static-hotfix": "powershell -ExecutionPolicy Bypass -File scripts/deploy-static-hotfix.ps1"
+  },
   "dependencies": {
     "pdfkit": "^0.17.2",
     "pg": "^8.13.0",

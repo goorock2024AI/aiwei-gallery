@@ -24,10 +24,13 @@ description: Deliver Aiwei Art Museum operation data management system work. Use
 3. `00_工作台/运营数据管理/项目当前进度报告-20260711.md`
 4. 相关代码或文档
 
-涉及部署、路径、服务器、版本、SSH、缓存或线上验证时，再读：
+涉及运营系统优化、修复、部署、路径、服务器、版本、SSH、缓存或线上验证时，再读：
+
+- `00_工作台/运营数据管理/references/delivery-optimization.md`
+
+仅当 `delivery-optimization.md` 指向深度运维事实或部署背景时，再读：
 
 - `00_工作台/运营数据管理/艾维美术馆运营数据管理系统-部署方案.md`
-- `references/release-checklist.md`
 
 涉及数据库结构、表、字段、写入权限或数据口径时，再读：
 
@@ -35,9 +38,18 @@ description: Deliver Aiwei Art Museum operation data management system work. Use
 - `app/sql/init.sql`
 - 相关 migration 或 server 白名单
 
-## 六步流程
+## 任务分级与六步流程
 
-所有系统任务必须执行：
+系统任务先做初步分级和路由，再进入执行闭环。方向型任务（优化、重设计、提升体验、流程改造）必须先通过问答确认真实目标，不能把用户原话直接当作任务目标。
+
+分级口径：
+
+- L0：咨询、评估、流程讨论，不改文件；只讨论结论，不强制六步记录。
+- L1：小文档修改、样式微调、单点前端修复；压缩闭环。
+- L2：常规功能优化、多个文件改动、前后端联动；完整闭环，记录可简写。
+- L3：部署、数据库、权限、财务、生产写入；完整闭环，必须有授权、回滚和证据。
+
+进入闭环后执行：
 
 1. 分析：明确业务目标、现象、根因、影响范围、事实源。
 2. 设计：写出要改的文件、数据流、兼容策略、测试场景和回滚方式。
@@ -46,7 +58,7 @@ description: Deliver Aiwei Art Museum operation data management system work. Use
 5. 复盘：记录偏差、遗漏、可复用规则和仍未关闭的风险。
 6. 继续发现：检查相邻链路中是否存在同类问题，并决定是否建新任务。
 
-验证失败时遵循 `CLAUDE.md` 的回落规则。
+分析阶段要区分用户现象、表层修复项和真实业务目标。遇到新问题时，先判断是否阻塞真实目标；相邻问题记录为新任务，不自动扩大当前任务。验证失败时遵循 `CLAUDE.md` 的回落规则。
 
 ## 受理准入
 

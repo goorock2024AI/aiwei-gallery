@@ -15,6 +15,13 @@ const ImportExport = {
       return (!start || d >= start) && (!end || d <= end);
     });
   },
+  _filterByFactDateRange(records, start, end) {
+    if (!start && !end) return records;
+    return records.filter(r => {
+      const d = r.date || r.paymentDate || '';
+      return (!start || d >= start) && (!end || d <= end);
+    });
+  },
   _suffix() {
     const { start, end } = this._getExportDates();
     if (start && end) return '_' + start + '_' + end;
@@ -25,7 +32,15 @@ const ImportExport = {
 
   async exportCSV(type) {
     try {
+      if (!Auth.can('export', type)) {
+        UI.toast('当前账号无权限导出数据', 'error');
+        return;
+      }
       const { start, end } = this._getExportDates();
+      if (type === 'revenue') {
+        await this._exportAllRevenueCSV(start, end);
+        return;
+      }
       const all = await Store.getAll(type);
       const records = this._filterByDateRange(all, start, end);
       if (!records.length) { UI.toast('没有数据可以导出' + (all.length ? '（所选范围内无数据）' : ''), 'error'); return; }
@@ -37,16 +52,22 @@ const ImportExport = {
           const retailAmt = +(r.retailAmount || r.creativeAmount || 0);
           const retailItems = Array.isArray(r.retailItems) ? r.retailItems : [];
           const workshopItems = Array.isArray(r.workshopItems) ? r.workshopItems : [];
-          const retailDetail = retailItems.map(i => `${i.productName||''}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
-          const workshopDetail = workshopItems.map(i => `${i.name||''}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
+          // 字段名兼容：服务端 toCamel 不递归 JSONB 数组，读出来时 key 是 snake
+          const itName = i => i.productName ?? i.product_name ?? i.name ?? '';
+          const retailDetail = retailItems.map(i => `${itName(i)}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
+          const workshopDetail = workshopItems.map(i => `${itName(i)}×${i.qty||1}¥${(+i.amount||0).toFixed(2)}`).join('; ');
           return [r.date, r.ticketQty||0, r.ticketAmount||0, r.coffeeQty||0, r.coffeeAmount||0, r.workshopAmount||0, workshopDetail, retailAmt, retailDetail, r.venueAmount||0, r.otherAmount||0, r.otherDesc||'', r.cashAmount||0, r.accountAmount||0, r.handler||'', r.notes||'', r.createdAt||''];
         });
       } else if (type === 'expense') {
-      headers = ['日期','类型','项目','类别','金额','内容说明','经手人','发票状态','凭证状态','关联活动','创建时间'];
-      rows = records.map(r => [r.date, r.type, r.project, r.category, r.amount, r.description||'', r.handler||'', r.invoiceStatus, r.receiptStatus, r.relatedActivity||'', r.createdAt||'']);
+      const expenseRecords = records.filter(isOperationalExpenseRecord);
+      headers = ['日期','项目','类别','金额','内容说明','经手人','发票状态','凭证状态','报销状态','关联活动','创建时间'];
+      rows = expenseRecords.map(r => [r.date, r.project, r.category, r.amount, r.description||'', r.handler||'', r.invoiceStatus, r.receiptStatus, r.reimbursementStatus || '未报销', r.relatedActivity||'', r.createdAt||'']);
     } else if (type === 'space') {
-      headers = ['日期','空间','项目名称','类型','客户','状态','应收金额','已收金额','备注','创建时间'];
-      rows = records.map(r => [r.date, r.space, r.projectName, r.type, r.client||'', r.status, r.receivableAmount||0, r.receivedAmount||0, r.notes||'', r.createdAt||'']);
+      headers = ['日期','结束日期','空间','项目名称','类型','客户','状态','应收金额','预计到账日','到账明细','备注','创建时间'];
+      rows = records.map(r => {
+        const detail = (r.payments || []).map(p => `${p.paymentDate}:¥${(+(p.amount||0)).toFixed(2)}(${p.paymentMethod || '转账'})`).join(' | ');
+        return [r.date, r.endDate || '', r.space, r.projectName, r.type, r.client||'', r.status, r.receivableAmount||0, r.expectedPaymentDate||'', detail, r.notes||'', r.createdAt||''];
+      });
     } else if (type === 'gallery') {
       headers = ['日期','作品名称','艺术家','成交价','佣金','净收入','买家','收款方式','状态','关联展览','经手人','备注','创建时间'];
       rows = records.map(r => [r.date, r.artworkName, r.artist, r.price||0, r.commission||0, Math.max(0, (r.price||0) - (r.commission||0)), r.buyerName||'', r.paymentMethod||'', r.status||'', r.relatedExhibition||'', r.handler||'', r.notes||'', r.createdAt||'']);
@@ -68,7 +89,286 @@ const ImportExport = {
     } catch (e) { console.error('导出失败', e); UI.toast('导出失败：' + e.message, 'error'); }
   },
 
+  async _exportAllRevenueCSV(start, end) {
+    const all = await this._loadAllRevenueFacts();
+    const records = this._filterByFactDateRange(all, start, end);
+    if (!records.length) {
+      UI.toast('没有收入数据可以导出' + (all.length ? '（所选范围内无数据）' : ''), 'error');
+      return;
+    }
+
+    records.sort((a, b) => {
+      const dateCompare = String(a.date || '').localeCompare(String(b.date || ''));
+      if (dateCompare) return dateCompare;
+      return String(a.createdAt || '').localeCompare(String(b.createdAt || ''));
+    });
+
+    const headers = ['日期','来源','分类','收入金额','净收入','收款方式','项目/关联','经手人','原记录ID','创建时间'];
+    const rows = records.map(r => [
+      r.date || '',
+      this._revenueSourceLabel(r.source),
+      r.category || '',
+      this._money(r.amount),
+      this._money(r.netAmount ?? r.net_amount ?? r.amount),
+      r.paymentMethod || '',
+      r.projectName || '',
+      r.handler || '',
+      r.recordId || r.id || '',
+      r.createdAt || ''
+    ]);
+    this._downloadCSV(headers, rows, '收入');
+    UI.toast('收入数据已导出（含收银台、空间、画廊）');
+  },
+
+  async _loadAllRevenueFacts() {
+    const facts = await Store.getAll('revenueFacts');
+    if (facts.length) return facts.map(r => ({
+      ...r,
+      netAmount: r.netAmount ?? r.net_amount ?? r.amount,
+      recordId: r.recordId ?? r.record_id,
+      paymentMethod: r.paymentMethod ?? r.payment_method,
+      projectName: r.projectName ?? r.project_name,
+      createdAt: r.createdAt ?? r.created_at
+    }));
+
+    const [revenues, spaces, galleries] = await Promise.all([
+      Store.getAll('revenue'),
+      Store.getAll('space'),
+      Store.getAll('gallery')
+    ]);
+    const rows = [];
+    const push = (record, category, amount, extra = {}) => {
+      const value = +amount || 0;
+      if (!value) return;
+      rows.push({
+        id: `${record.id || createId()}:${category}`,
+        recordId: record.id || '',
+        date: extra.date || record.date || '',
+        source: extra.source || 'pos',
+        category,
+        amount: value,
+        netAmount: extra.netAmount ?? value,
+        paymentMethod: extra.paymentMethod ?? record.paymentMethod ?? '',
+        projectName: extra.projectName ?? record.projectName ?? '',
+        handler: extra.handler ?? record.handler ?? '',
+        createdAt: extra.createdAt ?? record.createdAt ?? ''
+      });
+    };
+
+    revenues.forEach(r => {
+      if ((r.status || '正常') === '已作废') return;
+      push(r, '门票', r.ticketAmount);
+      push(r, '咖啡套票', r.comboAmount);
+      push(r, '咖啡', r.coffeeAmount);
+      push(r, '工坊', r.workshopAmount);
+      push(r, '文创', (+r.retailAmount || 0) + (+r.creativeAmount || 0));
+      push(r, '场地旧口径', r.venueAmount);
+      push(r, '其他', r.otherAmount);
+    });
+
+    spaces.forEach(s => {
+      (s.payments || []).forEach(p => {
+        push(s, '场地', p.amount, {
+          source: 'space',
+          date: p.paymentDate || s.date || '',
+          paymentMethod: p.paymentMethod || '',
+          projectName: s.projectName || '',
+          handler: '',
+          createdAt: p.createdAt || s.createdAt || ''
+        });
+      });
+    });
+
+    galleries.forEach(g => {
+      if ((g.status || '已售出') === '已作废') return;
+      const net = (+g.price || 0) - (+g.commission || 0);
+      push(g, '画廊', g.price, {
+        source: 'gallery',
+        netAmount: net,
+        paymentMethod: g.paymentMethod || '',
+        projectName: g.relatedExhibition || '',
+        handler: g.handler || '',
+        createdAt: g.createdAt || ''
+      });
+    });
+
+    return rows;
+  },
+
+  _revenueSourceLabel(source) {
+    return { pos: '收银台', space: '空间', gallery: '画廊' }[source] || source || '';
+  },
+
+  _money(value) {
+    return (+value || 0).toFixed(2);
+  },
+
+  async exportRevenueCategoryCSV(category) {
+    try {
+      if (!Auth.can('export', 'revenue')) {
+        UI.toast('当前账号无权限导出数据', 'error');
+        return;
+      }
+      const categoryNames = { ticket: '门票明细', coffee: '咖啡明细', retail: '文创明细' };
+      const label = categoryNames[category] || '收入分类明细';
+      const { start, end } = this._getExportDates();
+      const all = await Store.getAll('revenue');
+      const productMetaByName = category === 'retail' ? await this._creativeProductMetaMap() : new Map();
+      const records = this._filterByDateRange(all, start, end);
+      const rows = [];
+
+      records.forEach(r => {
+        if (category === 'ticket') this._appendTicketDetailRows(rows, r);
+        else if (category === 'coffee') this._appendItemDetailRows(rows, r, {
+          categoryLabel: '咖啡',
+          itemsKey: 'coffeeItems',
+          amountKey: 'coffeeAmount',
+          qtyKey: 'coffeeQty',
+          fallbackName: '咖啡'
+        });
+        else if (category === 'retail') this._appendItemDetailRows(rows, r, {
+          categoryLabel: '文创',
+          itemsKey: 'retailItems',
+          amountKey: 'retailAmount',
+          legacyAmountKey: 'creativeAmount',
+          fallbackName: '文创',
+          productMetaByName
+        });
+      });
+
+      if (!rows.length) {
+        UI.toast(`没有${label}可以导出` + (all.length ? '（所选范围内无数据）' : ''), 'error');
+        return;
+      }
+
+      const headers = ['日期','分类','品名','供应商','进货价','数量','单价','金额','收款方式','现金收款','账户收款','记录状态','记录退款金额','经手人','备注','记录ID','创建时间'];
+      this._downloadCSV(headers, rows, label);
+      UI.toast(`${label}已导出`);
+    } catch (e) {
+      console.error('分类导出失败', e);
+      UI.toast('分类导出失败：' + e.message, 'error');
+    }
+  },
+
+  _appendTicketDetailRows(rows, record) {
+    const items = Array.isArray(record.ticketItems) ? record.ticketItems : [];
+    const regularItems = items.filter(i => this._itemName(i) !== '套票');
+    const comboItems = items.filter(i => this._itemName(i) === '套票');
+
+    if (regularItems.length || comboItems.length) {
+      regularItems.forEach(item => rows.push(this._buildRevenueDetailRow(record, '门票', this._itemName(item) || '门票', item)));
+      comboItems.forEach(item => rows.push(this._buildRevenueDetailRow(record, '套票', this._itemName(item) || '套票', item)));
+      return;
+    }
+
+    if ((+record.ticketAmount || 0) > 0) {
+      rows.push(this._buildRevenueDetailRow(record, '门票', '门票', {
+        qty: +record.ticketQty || '',
+        amount: +record.ticketAmount || 0
+      }));
+    }
+    if ((+record.comboAmount || 0) > 0) {
+      rows.push(this._buildRevenueDetailRow(record, '套票', '套票', {
+        qty: +record.comboQty || '',
+        amount: +record.comboAmount || 0
+      }));
+    }
+  },
+
+  _appendItemDetailRows(rows, record, config) {
+    const items = Array.isArray(record[config.itemsKey]) ? record[config.itemsKey] : [];
+    if (items.length) {
+      items.forEach(item => {
+        const name = this._itemName(item) || config.fallbackName;
+        const meta = config.productMetaByName?.get(this._normalizeCreativeProductName(name)) || {};
+        rows.push(this._buildRevenueDetailRow(
+        record,
+        config.categoryLabel,
+          name,
+          item,
+          meta.supplier || '',
+          meta.costPrice ?? ''
+        ));
+      });
+      return;
+    }
+
+    const amount = +(record[config.amountKey] || record[config.legacyAmountKey] || 0);
+    if (amount > 0) {
+      rows.push(this._buildRevenueDetailRow(record, config.categoryLabel, config.fallbackName, {
+        qty: config.qtyKey ? (+record[config.qtyKey] || '') : '',
+        amount
+      }, '', ''));
+    }
+  },
+
+  _buildRevenueDetailRow(record, categoryLabel, itemName, item = {}, supplier = '', costPrice = '') {
+    const qty = +item.qty || '';
+    const unitPrice = +(item.unitPrice ?? item.unit_price ?? item.price ?? 0);
+    const amount = +((item.amount ?? ((+item.qty || 0) * unitPrice)) || 0);
+    const cost = costPrice === '' ? '' : (+costPrice || 0).toFixed(2);
+    return [
+      record.date || '',
+      categoryLabel,
+      itemName || '',
+      supplier || '',
+      cost,
+      qty,
+      unitPrice || '',
+      amount,
+      record.paymentMethod || '',
+      record.cashAmount || 0,
+      record.accountAmount || 0,
+      record.status || '正常',
+      record.refundAmount || 0,
+      record.handler || '',
+      record.notes || '',
+      record.id || '',
+      record.createdAt || ''
+    ];
+  },
+
+  _itemName(item = {}) {
+    return item.productName ?? item.product_name ?? item.name ?? '';
+  },
+
+  async _creativeProductMetaMap() {
+    const products = await Store.getAll('creativeProducts');
+    const map = new Map();
+    products.forEach(p => {
+      const key = this._normalizeCreativeProductName(p.name || '');
+      if (key && !map.has(key)) {
+        map.set(key, {
+          supplier: p.supplier || '',
+          costPrice: p.costPrice ?? p.cost_price ?? ''
+        });
+      }
+    });
+    return map;
+  },
+
+  _normalizeCreativeProductName(name) {
+    return String(name || '').trim().toLowerCase();
+  },
+
+  _downloadCSV(headers, rows, label) {
+    const csvContent = '﻿' + headers.join(',') + '\n' + rows.map(row => row.map(v => {
+      const s = String(v !== undefined && v !== null ? v : '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `艾维美术馆_${label}${this._suffix()}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  },
+
   async exportAllJSON() {
+    if (!Auth.can('export', 'manage')) {
+      UI.toast('当前账号无权限导出数据', 'error');
+      return;
+    }
     const { start, end } = this._getExportDates();
     const [revAll, expAll, spaAll, galAll] = await Promise.all([
       Store.getAll('revenue'),
@@ -130,8 +430,22 @@ const ImportExport = {
       count += data.expense.length;
     }
     if (data.space && Array.isArray(data.space)) {
-      await Store.importData('space', data.space);
-      count += data.space.length;
+      // 拆分主表 + 子表：payments 跟着主记录一起导入
+      const mainRecs = [];
+      const paymentRecs = [];
+      data.space.forEach(r => {
+        const { payments, ...main } = r;
+        mainRecs.push(main);
+        if (Array.isArray(payments)) {
+          payments.forEach(p => paymentRecs.push({ ...p, spaceUsageId: r.id }));
+        }
+      });
+      await Store.importData('space', mainRecs);
+      count += mainRecs.length;
+      if (paymentRecs.length > 0) {
+        await Store.importData('spacePayment', paymentRecs);
+        count += paymentRecs.length;
+      }
     }
     if (data.gallery && Array.isArray(data.gallery)) {
       await Store.importData('gallery', data.gallery);
@@ -152,6 +466,7 @@ const ImportExport = {
 
     const headers = this._parseCSVLine(lines[0]);
     const records = [];
+    const spacePayments = [];
 
     for (let i = 1; i < lines.length; i++) {
       const vals = this._parseCSVLine(lines[i]);
@@ -167,18 +482,35 @@ const ImportExport = {
           projectName: record['关联项目'] || '', handler: record['经手人'] || '', notes: record['备注'] || ''
         }));
       } else if (type === 'expense') {
+        if (record['类型'] === '备用金借入') continue;
         records.push(createExpense({
-          date: record['日期'] || '', type: record['类型'] || '备用金支出', project: record['项目'] || '运营',
-          category: record['类别'] || '材料', amount: +record['金额'] || 0, description: record['内容说明'] || '',
+          date: record['日期'] || '', project: record['项目'] || '运营',
+          category: record['类别'] || '其他支出', amount: +record['金额'] || 0, description: record['内容说明'] || '',
           handler: record['经手人'] || '', invoiceStatus: record['发票状态'] || '待补', receiptStatus: record['凭证状态'] || '待补',
+          reimbursementStatus: record['报销状态'] || '未报销',
           relatedActivity: record['关联活动'] || ''
         }));
       } else if (type === 'space') {
         records.push(createSpaceUsage({
-          date: record['日期'] || '', space: record['空间'] || '1号厅', projectName: record['项目名称'] || '',
+          date: record['日期'] || '', endDate: record['结束日期'] || '',
+          space: record['空间'] || '1号厅', projectName: record['项目名称'] || '',
           type: record['类型'] || '展览', client: record['客户'] || '', status: record['状态'] || '筹备中',
-          receivableAmount: +record['应收金额'] || 0, receivedAmount: +record['已收金额'] || 0, notes: record['备注'] || ''
+          receivableAmount: +record['应收金额'] || 0,
+          expectedPaymentDate: record['预计到账日'] || '',
+          notes: record['备注'] || ''
         }));
+        // 兼容老 CSV：识别「已收金额」列（无则忽略），并自动创建一笔 payment
+        const oldReceived = +(record['已收金额'] || 0);
+        if (oldReceived > 0) {
+          const main = records[records.length - 1];
+          spacePayments.push(createSpacePayment({
+            spaceUsageId: main.id,
+            paymentDate: record['结束日期'] || record['日期'] || todayStr(),
+            amount: oldReceived,
+            paymentMethod: '原CSV迁移',
+            notes: '从老 CSV 已收金额字段迁移'
+          }));
+        }
       } else if (type === 'gallery') {
         records.push(createGallerySale({
           date: record['日期'] || '', artworkName: record['作品名称'] || '', artist: record['艺术家'] || '',
@@ -191,10 +523,12 @@ const ImportExport = {
 
     if (!records.length) { UI.toast('CSV 中未解析出有效数据', 'error'); return; }
 
-    const existing = await Store.getAll(type);
-    await Store.importData(type, [...existing, ...records]);
+    await Store.importData(type, records);
+    if (type === 'space' && spacePayments.length) {
+      await Store.importData('spacePayment', spacePayments);
+    }
     const typeNames = { revenue: '收入', expense: '支出', space: '空间使用', gallery: '画廊销售' };
-    UI.toast(`CSV 导入完成：${typeNames[type]} ${records.length} 条（追加模式）`);
+    UI.toast(`CSV 导入完成：${typeNames[type]} ${records.length + spacePayments.length} 条（追加模式）`);
   },
 
   _parseCSVLine(line) {

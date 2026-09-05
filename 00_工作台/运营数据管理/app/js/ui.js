@@ -49,6 +49,62 @@ const UI = {
     this.toast('当前账号无权限访问此页面', 'error');
   },
 
+  _approvalStatus(record) {
+    return record?.approvalStatus || record?.approval_status || '已上架';
+  },
+
+  _isListed(record) {
+    return this._approvalStatus(record) === '已上架' && this._cpBool(record?.isActive ?? record?.is_active, true);
+  },
+
+  _approvalTag(record) {
+    const status = this._approvalStatus(record);
+    const cls = status === '已上架' ? 'tag-success' : status === '待确认' ? 'tag-info' : status === '已下架' ? 'tag-danger' : 'tag-default';
+    return `<span class="tag ${cls}">${this._escHtml(status)}</span>`;
+  },
+
+  _canApproveProducts() {
+    return Auth.can('approve', 'creative-products') || Auth.isAdmin;
+  },
+
+  _canEditCatalog(scope) {
+    return Auth.can('edit', scope);
+  },
+
+  _canDeleteCatalog() {
+    return Auth.can('delete', 'creative-products') || Auth.isAdmin;
+  },
+
+  _cpBool(value, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', '是', '是的', '启用'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', '否', '不是', '停用'].includes(normalized)) return false;
+    return fallback;
+  },
+
+  _cpBusinessTypeOptions() {
+    return [
+      { code: 'creative_retail', label: '文创零售' },
+      { code: 'beverage_retail', label: '饮料零售' }
+    ];
+  },
+
+  _cpBusinessTypeLabel(code, isBeverage = false) {
+    const normalized = code || (isBeverage ? 'beverage_retail' : 'creative_retail');
+    const match = this._cpBusinessTypeOptions().find(item => item.code === normalized);
+    return match ? match.label : (normalized || '未设置');
+  },
+
+  _normalizeCpBusinessType(value, isBeverage = false) {
+    const raw = String(value || '').trim();
+    if (!raw) return isBeverage ? 'beverage_retail' : 'creative_retail';
+    if (raw === '饮料' || raw === '饮料零售' || raw.toLowerCase() === 'beverage') return 'beverage_retail';
+    if (raw === '文创' || raw === '文创零售' || raw === '非饮料文创' || raw.toLowerCase() === 'creative') return 'creative_retail';
+    return raw;
+  },
+
   // === 日期工具 ===
   _monthOptions() {
     const opts = [];
@@ -84,6 +140,16 @@ const UI = {
       opts += `<option value="${yr}">${yr}年</option>`;
     }
     return opts;
+  },
+
+  _expenseCategoryOptions(selected = '') {
+    const categories = MODELS.EXPENSE_CATEGORIES || [];
+    let list = categories.slice();
+    if (selected && !list.includes(selected)) list = [selected].concat(list);
+    return list.map(c => {
+      const label = selected && c === selected && !categories.includes(selected) ? `${c}（历史类别）` : c;
+      return `<option value="${this._escAttr(c)}"${c === selected ? ' selected' : ''}>${this._escHtml(label)}</option>`;
+    }).join('');
   },
 
   // === 首页概览 ===
@@ -147,6 +213,21 @@ const UI = {
   async renderRevenuePage() {
     const page = $('#page-revenue');
     if (!Auth.hasModuleAccess('revenue')) { this._noAccess(page); return; }
+    if (!Auth.can('create', 'revenue')) {
+      html(page, `
+        <div class="card">
+          <div class="card-title">收银收入记录</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>日期</label><input type="date" id="rev-filter-date" value="${todayStr()}" onchange="UI._filterRevenue()"></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rev-filter-date').value='${todayStr()}'; UI._filterRevenue()">今天</button>
+            <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="rev-count"></span>
+          </div>
+          <div id="revenue-list"><div class="loading-state"><div class="spinner"></div></div></div>
+        </div>
+      `);
+      await this._renderRevenueList();
+      return;
+    }
     // —— 编辑模式下也用 POS 布局，只是预填数据 ——
     const editing = this._editingId;
 
@@ -375,42 +456,134 @@ const UI = {
 
   // —— 从文创产品库选择 ——
   async _selectCreativeFromPOS() {
-    const products = await Store.getAll('creativeProducts') || [];
-    if (!products.length) { this.toast('请先在产品管理中录入文创产品', 'error'); return; }
-    // 过滤有库存且零售价 > 0 的产品
-    const available = products.filter(p => (p.stock || 0) > 0 && (p.retailPrice || 0) > 0);
-    if (!available.length) { this.toast('没有库存充足的产品可选', 'error'); return; }
+    const products = (await Store.getAll('creativeProducts') || []).filter(p => this._isListed(p));
+    if (!products.length) { this.toast('暂无已上架文创产品，请先由管理员确认上架', 'error'); return; }
+    const normalized = products.map(p => ({
+      ...p,
+      _stock: Number(p.stock ?? 0) || 0,
+      _retailPrice: Number(p.retailPrice ?? p.retail_price ?? 0) || 0,
+      _supplier: p.supplier || '',
+      _unit: p.unit || '个'
+    })).sort((a, b) => {
+      const aReady = a._retailPrice > 0 ? 0 : 1;
+      const bReady = b._retailPrice > 0 ? 0 : 1;
+      if (aReady !== bReady) return aReady - bReady;
+      return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
+    });
+    const hotKeywords = await this._getCreativePOSHotKeywords(normalized);
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.style.display = 'flex';
-    let listHtml = available.map(p => `
-      <div class="cp-select-item" onclick="UI._fillCreativeFromPOS('${p.id}')" style="cursor:pointer;padding:8px 12px;border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center">
-        <span><strong>${p.name}</strong> <span style="color:var(--gray-500);font-size:12px">${p.sku || ''}</span></span>
-        <span style="color:var(--green-700)">¥${(+p.retailPrice||0).toFixed(2)} <span style="color:var(--gray-500);font-size:12px">库存:${p.stock||0}${p.unit||'个'}</span></span>
-      </div>`).join('') || '<div style="padding:20px;text-align:center;color:var(--gray-500)">无可用产品</div>';
+    const suppliers = [...new Set(normalized.map(p => p._supplier).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    const hotHtml = hotKeywords.length ? `
+        <div class="pos-creative-hot-row">
+          ${hotKeywords.map(k => `<button type="button" class="cp-hot-chip" data-product-name="${this._escHtml(k)}" title="直接选择 ${this._escHtml(k)}">${this._escHtml(k)}</button>`).join('')}
+        </div>` : '';
     overlay.innerHTML = `
-      <div class="modal-card modal-card-md">
+      <div class="modal-card modal-card-wide">
         <div class="modal-title">📦 选择文创产品</div>
-        <div style="margin-bottom:10px"><input type="text" id="cp-search-pos" placeholder="搜索产品..." style="width:100%;padding:6px 10px" oninput="UI._filterCPSearch(this.value)"></div>
-        <div id="cp-select-list">${listHtml}</div>
+        <div class="pos-creative-picker-toolbar">
+          <input type="text" id="cp-search-pos" placeholder="按名称 / SKU / 供应商搜索..." oninput="UI._renderCreativePOSList()">
+          <select id="cp-supplier-pos" onchange="UI._renderCreativePOSList()">
+            <option value="">全部供应商</option>
+            ${suppliers.map(s => `<option value="${this._escHtml(s)}">${this._escHtml(s)}</option>`).join('')}
+          </select>
+        </div>
+        ${hotHtml}
+        <div id="cp-select-list" class="pos-creative-picker-list"></div>
         <div class="modal-actions">
           <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
         </div>
       </div>`;
-    // 存储供搜索过滤
-    overlay._cpList = available;
+    overlay._cpList = normalized;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelectorAll('.cp-hot-chip').forEach(btn => {
+      btn.addEventListener('click', () => this._selectCreativePOSHotProduct(btn.dataset.productName || ''));
+    });
+    this._renderCreativePOSList();
   },
 
-  _filterCPSearch(val) {
-    const list = document.getElementById('cp-select-list');
-    const items = document.querySelectorAll('.cp-select-item');
-    const q = val.toLowerCase().trim();
-    items.forEach(el => {
-      el.style.display = (!q || el.textContent.toLowerCase().includes(q)) ? '' : 'none';
-    });
+  async _getCreativePOSHotKeywords(products) {
+    const productNames = new Set(products.map(p => String(p.name || '').trim()).filter(Boolean));
+    const scores = new Map();
+    try {
+      const revenues = await Store.getAll('revenue') || [];
+      revenues.forEach(r => {
+        const items = Array.isArray(r.retailItems) ? r.retailItems : [];
+        items.forEach(item => {
+          const name = String(item.productName || item.product_name || item.name || '').trim();
+          if (!name || !productNames.has(name)) return;
+          const qty = Number(item.qty || item.quantity || 1) || 1;
+          scores.set(name, (scores.get(name) || 0) + qty);
+        });
+      });
+    } catch (err) {
+      console.warn('Failed to load creative hot products', err);
+    }
+
+    const hot = [...scores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name)
+      .slice(0, 5);
+    products
+      .filter(p => p._retailPrice > 0 && p.name)
+      .forEach(p => {
+        if (hot.length < 5 && !hot.includes(p.name)) hot.push(p.name);
+      });
+    return hot.slice(0, 5);
+  },
+
+  _applyCreativePOSKeyword(keyword) {
+    const input = document.getElementById('cp-search-pos');
+    if (!input) return;
+    input.value = keyword;
+    this._renderCreativePOSList();
+  },
+
+  _selectCreativePOSHotProduct(productName) {
+    const overlay = document.querySelector('.modal-overlay');
+    const name = String(productName || '').trim();
+    const product = overlay?._cpList?.find(p => String(p.name || '').trim() === name && p._retailPrice > 0);
+    if (product) {
+      this._fillCreativeFromPOS(product.id);
+      return;
+    }
+    this._applyCreativePOSKeyword(name);
+  },
+
+  _renderCreativePOSList() {
+    const overlay = document.querySelector('.modal-overlay');
+    const listEl = document.getElementById('cp-select-list');
+    if (!overlay || !listEl || !overlay._cpList) return;
+    const q = (document.getElementById('cp-search-pos')?.value || '').trim().toLowerCase();
+    const supplier = document.getElementById('cp-supplier-pos')?.value || '';
+    let list = overlay._cpList;
+    if (supplier) list = list.filter(p => p._supplier === supplier);
+    if (q) {
+      list = list.filter(p => [p.name, p.sku, p.supplier, p.notes].some(v => String(v || '').toLowerCase().includes(q)));
+    }
+    if (!list.length) {
+      listEl.innerHTML = '<div class="empty-state" style="padding:24px"><div class="icon">📦</div>没有匹配的产品</div>';
+      return;
+    }
+    listEl.innerHTML = list.map(p => {
+      const canSelect = p._retailPrice > 0;
+      const reason = p._retailPrice <= 0 ? '\u65e0\u96f6\u552e\u4ef7' : '';
+      return `
+        <button type="button" class="cp-select-item ${canSelect ? '' : 'is-disabled'}" ${canSelect ? `onclick="UI._fillCreativeFromPOS('${p.id}')"` : 'disabled'} title="${reason}">
+          <span class="cp-select-main">
+            <strong>${this._escHtml(p.name || '-')}</strong>
+            <span>${this._escHtml([p.sku, p._supplier].filter(Boolean).join(' · '))}</span>
+          </span>
+          <span class="cp-select-side">
+            <strong>¥${p._retailPrice.toFixed(2)}</strong>
+            <span class="${p._stock > 0 ? 'tag tag-success' : 'tag tag-danger'}">库存 ${p._stock}${this._escHtml(p._unit)}</span>
+            ${reason ? `<span class="cp-select-reason">${reason}</span>` : ''}
+          </span>
+        </button>`;
+    }).join('');
   },
 
   _fillCreativeFromPOS(id) {
@@ -419,7 +592,7 @@ const UI = {
       const p = overlay._cpList.find(x => x.id === id);
       if (p) {
         document.getElementById('rt-name').value = p.name;
-        document.getElementById('rt-price').value = +p.retailPrice || 0;
+        document.getElementById('rt-price').value = p._retailPrice || +p.retailPrice || 0;
         document.getElementById('rt-qty').value = 1;
       }
       overlay.remove();
@@ -963,7 +1136,7 @@ const UI = {
         <td>${r.handler || '—'}</td>
         <td class="action-cell">
           <div class="row-actions">
-            ${this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>` : ''}
+            ${Auth.can('edit', 'revenue') && this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>` : ''}
             ${canAdjust ? `<button class="btn btn-sm btn-secondary" onclick="UI._refundRevenue('${r.id}')">退款</button>` : ''}
             ${canAdjust ? `<button class="btn btn-sm btn-danger" onclick="UI._voidRevenue('${r.id}')">作废</button>` : ''}
             ${Auth.isAdmin ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>` : ''}
@@ -1362,8 +1535,8 @@ const UI = {
           </td>
           <td><span class="tag tag-info">${this._escHtml(r.status || '筹备中')}</span></td>
           <td class="row-actions" style="white-space:nowrap">
-            ${isPending ? `<button class="btn btn-primary btn-sm" onclick="UI._openQuickCollectModal('${r.id}')">💰 收款</button> ` : ''}
-            <button class="btn btn-secondary btn-sm" onclick="UI._editSpace('${r.id}')">详情</button>
+            ${Auth.can('create', 'space') && isPending ? `<button class="btn btn-primary btn-sm" onclick="UI._openQuickCollectModal('${r.id}')">💰 收款</button> ` : ''}
+            ${Auth.can('edit', 'space') ? `<button class="btn btn-secondary btn-sm" onclick="UI._editSpace('${r.id}')">详情</button>` : ''}
           </td>
         </tr>
       `;
@@ -1386,6 +1559,7 @@ const UI = {
   },
 
   _openQuickCollectModal(spaceId) {
+    if (!Auth.can('create', 'space')) { this.toast('当前账号无权限录入到账', 'error'); return; }
     const r = (this._projectListRecords || []).find(x => x.id === spaceId);
     if (!r) { this.toast('记录不存在', 'error'); return; }
     const recv = +r.receivableAmount || 0;
@@ -1486,8 +1660,7 @@ const UI = {
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="exp-date" value="${todayStr()}" style="flex:1">${this._todayBtn('exp-date')}</div>
           </div>
-          <div class="form-group"><label>项目</label><select id="exp-project">${MODELS.PROJECT_TYPES.map(p => `<option value="${p}">${p}</option>`).join('')}</select></div>
-          <div class="form-group"><label>支出类别</label><select id="exp-category">${MODELS.EXPENSE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
+          <div class="form-group"><label>支出类别</label><select id="exp-category">${this._expenseCategoryOptions()}</select></div>
           <div class="form-group"><label>金额</label><input type="number" id="exp-amount" min="0" step="0.01" placeholder="0.00" required></div>
           <div class="form-group full"><label>内容说明</label><input type="text" id="exp-desc" placeholder="支出具体内容"></div>
           <div class="form-group"><label>经手人</label><input type="text" id="exp-handler" placeholder="经手人姓名"></div>
@@ -1520,7 +1693,7 @@ const UI = {
 
   _fillExpenseForm(r) {
     $('#exp-date').value = r.date;
-    $('#exp-project').value = r.project;
+    if ($('#exp-project')) $('#exp-project').value = r.project;
     $('#exp-category').value = r.category;
     $('#exp-amount').value = r.amount;
     $('#exp-desc').value = r.description || '';
@@ -1591,7 +1764,7 @@ const UI = {
 
     const data = {
       date: $('#exp-date').value,
-      project: $('#exp-project').value,
+      project: '运营',
       category: $('#exp-category').value,
       amount: +($('#exp-amount').value || 0),
       description: $('#exp-desc').value,
@@ -1622,12 +1795,12 @@ const UI = {
       <div class="modal-card modal-card-wide" onclick="event.stopPropagation()">
         <div class="modal-title">编辑支出记录</div>
         <form id="expense-edit-form" class="form-grid" onsubmit="event.preventDefault(); UI._saveExpenseEdit('${safeId}')">
+          <input type="hidden" id="exp-edit-project" value="${this._escAttr(r.project || '运营')}">
           <div class="form-group">
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="exp-edit-date" value="${this._escHtml(r.date || todayStr())}" style="flex:1">${this._todayBtn('exp-edit-date')}</div>
           </div>
-          <div class="form-group"><label>项目</label><select id="exp-edit-project">${MODELS.PROJECT_TYPES.map(p => `<option value="${this._escHtml(p)}"${p === r.project ? ' selected' : ''}>${this._escHtml(p)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>支出类别</label><select id="exp-edit-category">${MODELS.EXPENSE_CATEGORIES.map(c => `<option value="${this._escHtml(c)}"${c === r.category ? ' selected' : ''}>${this._escHtml(c)}</option>`).join('')}</select></div>
+          <div class="form-group"><label>支出类别</label><select id="exp-edit-category">${this._expenseCategoryOptions(r.category || '')}</select></div>
           <div class="form-group"><label>金额</label><input type="number" id="exp-edit-amount" min="0" step="0.01" placeholder="0.00" value="${this._escHtml(r.amount ?? '')}" required></div>
           <div class="form-group full"><label>内容说明</label><input type="text" id="exp-edit-desc" placeholder="支出具体内容" value="${this._escHtml(r.description || '')}"></div>
           <div class="form-group"><label>经手人</label><input type="text" id="exp-edit-handler" placeholder="经手人姓名" value="${this._escHtml(r.handler || '')}"></div>
@@ -1651,7 +1824,7 @@ const UI = {
     if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
     const data = {
       date: $('#exp-edit-date').value,
-      project: $('#exp-edit-project').value,
+      project: $('#exp-edit-project')?.value || '运营',
       category: $('#exp-edit-category').value,
       amount: +($('#exp-edit-amount').value || 0),
       description: $('#exp-edit-desc').value,
@@ -1951,6 +2124,31 @@ const UI = {
     if (!Auth.hasModuleAccess('space')) { this._noAccess(page); return; }
     const editing = this._editingSpaceId;
     const records = await Store.getAll('space');
+    if (!Auth.can('create', 'space')) {
+      html(page, `
+        <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div>
+        <div class="card">
+          <div class="card-title">🏛 空间使用日历（本月）</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>月份</label><input type="month" id="sp-gantt-month" value="${this._spaceGanttMonth || todayStr().slice(0,7)}" onchange="UI._onGanttMonthChange()"></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('sp-gantt-month').value='${todayStr().slice(0,7)}'; UI._onGanttMonthChange()">本月</button>
+          </div>
+          <div id="space-gantt">${this._renderSpaceGantt(records, this._spaceGanttMonth || todayStr().slice(0,7))}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">空间使用记录</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>筛选月份</label><select id="sp-filter-month" onchange="UI._filterSpace()">${this._monthOptions()}</select></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('sp-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterSpace()">本月</button>
+            <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="sp-count"></span>
+          </div>
+          <div id="space-list"><div class="loading-state"><div class="spinner"></div></div></div>
+        </div>
+      `);
+      document.getElementById('sp-filter-month').value = this._spaceFilterMonth || todayStr().slice(0, 7);
+      await this._renderSpaceList();
+      return;
+    }
 
     html(page, `
       <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div>
@@ -2319,8 +2517,8 @@ const UI = {
         <td>${r.rentalType === '免费' ? '—' : '¥' + this._fmt(r.receivedAmount || 0)}</td>
         <td>${expected || '—'}</td>
         <td class="row-actions">
-          <button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>
-          <button class="btn btn-sm btn-danger" onclick="UI._deleteSpace('${r.id}')">删除</button>
+          ${Auth.can('edit', 'space') ? `<button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>` : ''}
+          ${Auth.can('delete', 'space') ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteSpace('${r.id}')">删除</button>` : ''}
         </td>
       </tr>`;
     });
@@ -2352,7 +2550,7 @@ const UI = {
       try {
         const r = await fetch((SUPABASE_CONFIG.url || '') + '/rest/v1/space_usage/check-conflict', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {}) },
           body: JSON.stringify({
             space: data.space,
             date: data.date,
@@ -2417,9 +2615,9 @@ const UI = {
   // === 画廊销售 ===
   async _pickGalleryArtwork() {
     await this._loadArtworks();
-    const list = this._artworks;
+    const list = (this._artworks || []).filter(a => this._isListed(a));
     if (!list.length) {
-      this.toast('作品库为空，请先在「产品管理 → 画廊」录入作品', 'error');
+      this.toast('暂无已上架作品，请先由管理员确认上架', 'error');
       return;
     }
     const overlay = document.createElement('div');
@@ -2524,6 +2722,28 @@ const UI = {
     if (!Auth.hasModuleAccess('gallery')) { this._noAccess(page); return; }
     const editing = this._editingGalleryId;
     await this._loadArtworks();
+    if (!Auth.can('create', 'gallery')) {
+      html(page, `
+        <div class="stats-grid" id="gallery-sales-stats">
+          <div class="stat-card"><div class="stat-label">本年画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+          <div class="stat-card"><div class="stat-label">本月画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+          <div class="stat-card"><div class="stat-label">本日画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">画廊销售记录</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>筛选月份</label><select id="gal-filter-month" onchange="UI._filterGallery()">${this._monthOptions()}</select></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('gal-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterGallery()">本月</button>
+            <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="gal-count"></span>
+          </div>
+          <div id="gallery-list"><div class="loading-state"><div class="spinner"></div></div></div>
+        </div>
+      `);
+      document.getElementById('gal-filter-month').value = this._galleryFilterMonth || todayStr().slice(0, 7);
+      await this._renderGallerySalesStats();
+      await this._renderGalleryList();
+      return;
+    }
 
     html(page, `
       <div class="stats-grid" id="gallery-sales-stats">
@@ -2804,7 +3024,7 @@ const UI = {
         <td><span class="tag ${statusClass}">${statusText}</span></td>
         <td>${r.paymentMethod || '-'}</td>
         <td class="row-actions">
-          ${this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>` : ''}
+          ${Auth.can('edit', 'gallery') && this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>` : ''}
           ${canAdjust ? `<button class="btn btn-sm btn-secondary" onclick="UI._refundGallery('${r.id}')">退款</button>` : ''}
           ${canAdjust ? `<button class="btn btn-sm btn-danger" onclick="UI._voidGallery('${r.id}')">作废</button>` : ''}
           ${Auth.isAdmin ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteGallery('${r.id}')">删除</button>` : ''}
@@ -3147,6 +3367,7 @@ const UI = {
   async renderProductPage() {
     if (!Auth.hasModuleAccess('products')) { this._noAccess($('#page-products')); return; }
     const page = $('#page-products');
+    if (!Auth.isAdmin && !['creative', 'gallery'].includes(this._productTab)) this._productTab = 'creative';
     const tab = this._productTab;
     // 确保配置已从数据库加载
     await Store.loadAppConfig();
@@ -3163,10 +3384,10 @@ const UI = {
 
     html(page, `
       <div class="sub-tabs" id="product-sub-tabs">
-        <button class="sub-tab-btn ${tab==='ticket'?'active':''}" data-ptab="ticket">🎫 门票 <span class="badge">${counts.ticket}</span></button>
-        <button class="sub-tab-btn ${tab==='coffee'?'active':''}" data-ptab="coffee">☕ 咖啡 <span class="badge">${counts.coffee}</span></button>
+        ${Auth.isAdmin ? `<button class="sub-tab-btn ${tab==='ticket'?'active':''}" data-ptab="ticket">🎫 门票 <span class="badge">${counts.ticket}</span></button>
+        <button class="sub-tab-btn ${tab==='coffee'?'active':''}" data-ptab="coffee">☕ 咖啡 <span class="badge">${counts.coffee}</span></button>` : ''}
         <button class="sub-tab-btn ${tab==='creative'?'active':''}" data-ptab="creative">📦 文创/零售 <span class="badge">${counts.creative}</span></button>
-        <button class="sub-tab-btn ${tab==='workshop'?'active':''}" data-ptab="workshop">🔧 工坊 <span class="badge">${counts.workshop}</span></button>
+        ${Auth.isAdmin ? `<button class="sub-tab-btn ${tab==='workshop'?'active':''}" data-ptab="workshop">🔧 工坊 <span class="badge">${counts.workshop}</span></button>` : ''}
         <button class="sub-tab-btn ${tab==='gallery'?'active':''}" data-ptab="gallery">🖼️ 画廊 <span class="badge">${counts.gallery}</span></button>
       </div>
       <div id="product-tab-content">${this._renderProductTabContent(tab)}</div>
@@ -3237,6 +3458,9 @@ const UI = {
 
   /** 门票/咖啡/工坊：简单配置表 + 查询框 + 内嵌表单 */
   _renderSimpleConfigTab(type, label, headers, fields) {
+    if (!Auth.isAdmin) {
+      return '<div class="card"><p style="color:var(--gray-500)">该配置仅管理员可维护</p></div>';
+    }
     const listKey = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' }[type];
     const allItems = MODELS[listKey] || [];
     const keyword = (this._productSearch[type] || '').trim().toLowerCase();
@@ -3300,7 +3524,11 @@ const UI = {
     if (this._cpFilterSupplier) list = list.filter(p => p.supplier === this._cpFilterSupplier);
     if (keyword) list = list.filter(p =>
       String(p.name || '').toLowerCase().includes(keyword) ||
+      String(p.standardName || p.standard_name || '').toLowerCase().includes(keyword) ||
       String(p.sku || '').toLowerCase().includes(keyword) ||
+      String(p.barcode || '').toLowerCase().includes(keyword) ||
+      String(p.businessTypeCode || p.business_type_code || '').toLowerCase().includes(keyword) ||
+      String(p.packageSpec || p.package_spec || '').toLowerCase().includes(keyword) ||
       String(p.supplier || '').toLowerCase().includes(keyword) ||
       String(p.notes || '').toLowerCase().includes(keyword)
     );
@@ -3309,11 +3537,14 @@ const UI = {
     if (this._cpPage >= totalPages) this._cpPage = totalPages - 1;
     const start = this._cpPage * this._CP_PAGE_SIZE;
     const pageItems = list.slice(start, start + this._CP_PAGE_SIZE);
+    const canApprove = this._canApproveProducts();
+    const canExport = Auth.can('export', 'creative-products');
+    const canDelete = this._canDeleteCatalog();
 
     const toolbar = `<div class="filter-bar" style="flex-wrap:wrap;gap:8px">
       <div class="form-group" style="min-width:220px;margin-bottom:0">
         <label>查询</label>
-        <input type="text" id="prod-search-creative" placeholder="按名称/SKU/供应商/备注搜索..." value="${this._escHtml(this._productSearch.creative || '')}" oninput="UI._onProductSearch('creative', this.value)">
+        <input type="text" id="prod-search-creative" placeholder="按名称/标准名/SKU/条码/规格/供应商搜索..." value="${this._escHtml(this._productSearch.creative || '')}" oninput="UI._onProductSearch('creative', this.value)">
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label>供应商</label>
@@ -3325,28 +3556,46 @@ const UI = {
       <button type="button" class="btn btn-sm btn-primary" onclick="UI._addCreativeProduct()">+ 新增产品</button>
       <button type="button" class="btn btn-sm btn-secondary" onclick="UI._importCreativeProducts()">📥 导入库存</button>
       <button type="button" class="btn btn-sm btn-secondary" onclick="UI._downloadImportTemplate()">📋 下载模板</button>
-      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品</button>
-      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 销售清单</button>
+      ${canExport ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品</button>' : ''}
+      ${canExport ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 销售清单</button>' : ''}
       <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="cp-count">${list.length} 个${keyword||this._cpFilterSupplier ? ' (筛选后)' : ''} · 共 ${this._creativeProducts.length} 个</span>
     </div>`;
 
-    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>SKU</th><th>供应商</th><th>进货价</th><th>零售价</th><th>库存</th><th>单位</th><th>备注</th><th style="width:90px">操作</th></tr></thead><tbody>';
+    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>标准名称</th><th>SKU/条码</th><th>归属/规格</th><th>供应商</th><th>进货价</th><th>零售价</th><th>库存</th><th>状态</th><th>备注</th><th style="width:130px">操作</th></tr></thead><tbody>';
     if (!pageItems.length) {
-      table += `<tr><td colspan="9" style="text-align:center;color:var(--gray-500);padding:16px">${keyword ? '没有匹配项' : '暂无文创产品，请新增或导入'}</td></tr>`;
+      table += `<tr><td colspan="11" style="text-align:center;color:var(--gray-500);padding:16px">${keyword ? '没有匹配项' : '暂无文创产品，请新增或导入'}</td></tr>`;
     } else {
       pageItems.forEach(p => {
+        const status = this._approvalStatus(p);
+        const standardName = p.standardName || p.standard_name || p.name || '-';
+        const businessTypeCode = p.businessTypeCode || p.business_type_code || '';
+        const isBeverage = this._cpBool(p.isBeverage ?? p.is_beverage, businessTypeCode === 'beverage_retail');
+        const isActive = this._cpBool(p.isActive ?? p.is_active, true);
+        const isCountableStock = this._cpBool(p.isCountableStock ?? p.is_countable_stock, true);
+        const packageSpec = p.packageSpec || p.package_spec || '-';
+        const barcode = p.barcode || '';
         table += `<tr>
           <td>${this._escHtml(p.name || '-')}</td>
-          <td>${this._escHtml(p.sku || '-')}</td>
+          <td>${this._escHtml(standardName)}</td>
+          <td>
+            <div>${this._escHtml(p.sku || '-')}</div>
+            ${barcode ? `<div style="font-size:11px;color:var(--gray-500)">${this._escHtml(barcode)}</div>` : ''}
+          </td>
+          <td>
+            <span class="tag ${isBeverage ? 'tag-info' : 'tag-success'}">${this._escHtml(this._cpBusinessTypeLabel(businessTypeCode, isBeverage))}</span>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:4px">${this._escHtml(packageSpec)}</div>
+          </td>
           <td>${this._escHtml(p.supplier || '-')}</td>
           <td>¥${this._fmt(p.costPrice)}</td>
           <td><strong>¥${this._fmt(p.retailPrice)}</strong></td>
-          <td><span class="tag ${(p.stock || 0) <= 0 ? 'tag-danger' : 'tag-success'}">${p.stock || 0}</span></td>
-          <td>${this._escHtml(p.unit || '个')}</td>
+          <td><span class="tag ${(p.stock || 0) <= 0 ? 'tag-danger' : 'tag-success'}">${isCountableStock ? (p.stock || 0) : '不计'}</span><span style="margin-left:4px">${this._escHtml(p.unit || '个')}</span></td>
+          <td>${this._approvalTag(p)}${isActive ? '' : '<br><span class="tag tag-danger" style="margin-top:4px">停用</span>'}</td>
           <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis">${this._escHtml(p.notes || '-')}</td>
           <td class="row-actions">
             <button class="btn btn-sm btn-secondary" onclick="UI._editCreativeProduct('${p.id}')">编辑</button>
-            <button class="btn btn-sm btn-danger" onclick="UI._deleteCreativeProduct('${p.id}')">删除</button>
+            ${canApprove && status !== '已上架' ? `<button class="btn btn-sm btn-primary" onclick="UI._approveCreativeProduct('${p.id}')">上架</button>` : ''}
+            ${canApprove && status === '已上架' ? `<button class="btn btn-sm btn-secondary" onclick="UI._unlistCreativeProduct('${p.id}')">下架</button>` : ''}
+            ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteCreativeProduct('${p.id}')">删除</button>` : ''}
           </td>
         </tr>`;
       });
@@ -3425,6 +3674,8 @@ const UI = {
       });
     };
     list = filterByChip(list);
+    const canApprove = this._canApproveProducts();
+    const canDelete = this._canDeleteCatalog();
 
     // 顶部库存看板（5 张卡）
     const statsHtml = `<div class="stats-grid artwork-stats">
@@ -3484,12 +3735,13 @@ const UI = {
     // 最近售出聚合
     const lastSoldMap = this._artworkLastSoldMap || {};
 
-    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th style="width:80px">编号</th><th style="width:64px">缩略图</th><th>标题</th><th>艺术家</th><th style="width:90px">库存</th><th style="width:100px">零售价</th><th style="width:110px">最近售出</th><th>状态</th><th>位置</th><th style="width:90px">操作</th></tr></thead><tbody>';
+    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th style="width:80px">编号</th><th style="width:64px">缩略图</th><th>标题</th><th>艺术家</th><th style="width:90px">库存</th><th style="width:100px">零售价</th><th style="width:110px">最近售出</th><th>作品状态</th><th>上架状态</th><th>位置</th><th style="width:130px">操作</th></tr></thead><tbody>';
     if (!list.length) {
-      table += `<tr><td colspan="10" style="text-align:center;color:var(--gray-500);padding:16px">${keyword || chip !== 'all' ? '没有匹配项' : '暂无作品档案，请新增或导入'}</td></tr>`;
+      table += `<tr><td colspan="11" style="text-align:center;color:var(--gray-500);padding:16px">${keyword || chip !== 'all' ? '没有匹配项' : '暂无作品档案，请新增或导入'}</td></tr>`;
     } else {
       list.forEach(a => {
         const statusClass = a.status === '在库' ? 'tag-success' : a.status === '在展' ? 'tag-info' : a.status === '已售' ? 'tag-danger' : a.status === '借出' ? 'tag-warning' : 'tag-default';
+        const approvalStatus = this._approvalStatus(a);
         const imgUrl = this._resolveImageUrl(a.imageUrl || a.image_url || '');
         const thumbCell = imgUrl
           ? `<img src="${this._escHtml(imgUrl)}" class="aw-thumb" onerror="this.outerHTML='<div class=&quot;aw-thumb aw-thumb--placeholder&quot;>无图</div>'">`
@@ -3513,14 +3765,17 @@ const UI = {
           <td>¥${this._fmt(a.retailPrice ?? a.retail_price)}</td>
           <td style="font-size:12px">${lastSoldCell}</td>
           <td><span class="tag ${statusClass}">${this._escHtml(a.status || '在库')}</span></td>
+          <td>${this._approvalTag(a)}</td>
           <td style="max-width:120px">${this._escHtml(a.location || '-')}</td>
           <td class="row-actions" onclick="event.stopPropagation()">
             <button class="btn btn-sm btn-secondary" onclick="UI._editArtwork('${a.id}')">编辑</button>
-            <button class="btn btn-sm btn-danger" onclick="UI._deleteArtwork('${a.id}')">删除</button>
+            ${canApprove && approvalStatus !== '已上架' ? `<button class="btn btn-sm btn-primary" onclick="UI._approveArtwork('${a.id}')">上架</button>` : ''}
+            ${canApprove && approvalStatus === '已上架' ? `<button class="btn btn-sm btn-secondary" onclick="UI._unlistArtwork('${a.id}')">下架</button>` : ''}
+            ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteArtwork('${a.id}')">删除</button>` : ''}
           </td>
         </tr>
         <tr class="artwork-detail-row" id="aw-detail-${this._escHtml(a.id)}" style="display:none;background:var(--cream)">
-          <td colspan="10" style="padding:12px 16px">
+          <td colspan="11" style="padding:12px 16px">
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 24px;font-size:13px">
               <div><span style="color:var(--gray-500)">结算价：</span><strong>¥${this._fmt(a.settlementPrice ?? a.settlement_price)}</strong></div>
               <div><span style="color:var(--gray-500)">年份：</span>${this._escHtml(a.year || '-')}</div>
@@ -3564,6 +3819,7 @@ const UI = {
     const ARTWORK_STATUSES = ['在库', '在展', '已售', '借出', '下架'];
     const initialNo = d.artworkNo || d.artwork_no || (isEdit ? '' : this._nextArtworkNo());
     const initialImg = this._resolveImageUrl(d.imageUrl || d.image_url || '');
+    const currentApproval = this._approvalStatus(d);
     overlay.innerHTML = `
       <div class="modal-card modal-card-form">
         <div class="modal-title">${isEdit ? '编辑作品' : '新增作品'}</div>
@@ -3590,6 +3846,11 @@ const UI = {
               ${ARTWORK_STATUSES.map(s => `<option value="${s}"${(d.status||'在库') === s ? ' selected' : ''}>${s}</option>`).join('')}
             </select>
           </div>
+          <div class="form-group"><label>上架状态</label>
+            ${Auth.isAdmin ? `<select id="aw-approval">
+              ${['草稿','待确认','已上架','已下架'].map(s => `<option value="${s}"${currentApproval === s ? ' selected' : ''}>${s}</option>`).join('')}
+            </select>` : `<div style="padding:8px;background:var(--cream);border-radius:var(--radius-sm)">保存后进入待确认</div>`}
+          </div>
           <div class="form-group full">
             <label>作品照片</label>
             <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
@@ -3609,12 +3870,11 @@ const UI = {
           <div class="form-group full"><label>备注</label><textarea id="aw-notes" rows="2">${this._escHtml(d.notes || '')}</textarea></div>
         </div>
         <div class="modal-actions">
-          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
-          <button class="btn btn-primary" id="aw-save-btn">${isEdit ? '保存修改' : '创建作品'}</button>
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button type="button" class="btn btn-primary" id="aw-save-btn">${isEdit ? '保存修改' : '创建作品'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
     // 初始化可用库存预览
     this._updateQtyPreview();
@@ -3648,6 +3908,7 @@ const UI = {
         fd.append('file', file);
         const r = await fetch((SUPABASE_CONFIG.url || '') + '/rest/v1/artworks/upload', {
           method: 'POST',
+          headers: typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {},
           body: fd
         });
         const body = await r.json();
@@ -3678,6 +3939,8 @@ const UI = {
     }
 
     overlay.querySelector('#aw-save-btn').addEventListener('click', async () => {
+      const saveBtn = overlay.querySelector('#aw-save-btn');
+      if (saveBtn?.disabled) return;
       const title = overlay.querySelector('#aw-title').value.trim();
       if (!title) { UI.toast('请输入作品标题', 'error'); return; }
       const record = {
@@ -3693,23 +3956,35 @@ const UI = {
         settlementPrice: Number(overlay.querySelector('#aw-settlement-price').value) || 0,
         retailPrice: Number(overlay.querySelector('#aw-retail-price').value) || 0,
         status: overlay.querySelector('#aw-status').value,
+        approvalStatus: Auth.isAdmin ? overlay.querySelector('#aw-approval').value : '待确认',
+        submittedBy: d.submittedBy || d.submitted_by || Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+        approvedBy: Auth.isAdmin && overlay.querySelector('#aw-approval')?.value === '已上架' ? (Auth.currentUser?.displayName || Auth.currentUser?.username || '') : (d.approvedBy || d.approved_by || ''),
+        approvedAt: Auth.isAdmin && overlay.querySelector('#aw-approval')?.value === '已上架' ? new Date().toISOString() : (d.approvedAt || d.approved_at || null),
         imageUrl: overlay.querySelector('#aw-image-stored').value.trim(),
         notes: overlay.querySelector('#aw-notes').value.trim(),
         updatedAt: new Date().toISOString()
       };
       try {
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.textContent = '保存中...';
+        }
         if (isEdit && d.id) {
           await Store.update('artworks', d.id, record);
-          UI.toast('作品已更新');
+          UI.toast(Auth.isAdmin ? '作品已更新，列表已刷新' : '作品已更新，等待管理员确认，列表已刷新');
         } else {
           await Store.add('artworks', createArtwork(record));
-          UI.toast('作品已新增');
+          UI.toast(Auth.isAdmin ? '作品已新增，列表已刷新' : '作品已提交待确认，列表已刷新');
         }
-        overlay.remove();
         await UI._loadArtworks();
         UI._refreshCurrentProductTab();
+        overlay.remove();
       } catch (e) {
         UI.toast('保存失败：' + (e.message || e), 'error');
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = isEdit ? '保存修改' : '创建作品';
+        }
       }
     });
   },
@@ -3769,7 +4044,33 @@ const UI = {
     this._showArtworkModal(a, true);
   },
 
+  async _approveArtwork(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可确认上架', 'error'); return; }
+    await Store.update('artworks', id, {
+      approvalStatus: '已上架',
+      approvedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+      approvedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('作品已上架');
+    await this._loadArtworks();
+    this._refreshCurrentProductTab();
+  },
+
+  async _unlistArtwork(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可下架', 'error'); return; }
+    if (!confirm('确认下架该作品？下架后不会出现在画廊销售可选列表。')) return;
+    await Store.update('artworks', id, {
+      approvalStatus: '已下架',
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('作品已下架');
+    await this._loadArtworks();
+    this._refreshCurrentProductTab();
+  },
+
   async _deleteArtwork(id) {
+    if (!this._canDeleteCatalog()) { this.toast('仅管理员可删除', 'error'); return; }
     const a = this._artworks.find(x => x.id === id);
     if (!confirm(`确认删除作品「${a ? a.title : id}」？`)) return;
     await Store.delete('artworks', id);
@@ -3793,13 +4094,14 @@ const UI = {
           <div class="form-group full"><label>单价（元）*</label><input type="number" id="cfg-price" min="0" step="0.01" value="${d.price || ''}" placeholder="0.00"></div>
         </div>
         <div class="modal-actions">
-          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
-          <button class="btn btn-primary" id="cfg-save-btn">${isEdit ? '保存修改' : '创建'}</button>
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button type="button" class="btn btn-primary" id="cfg-save-btn">${isEdit ? '保存修改' : '创建'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
     overlay.querySelector('#cfg-save-btn').addEventListener('click', async () => {
+      const saveBtn = overlay.querySelector('#cfg-save-btn');
+      if (saveBtn?.disabled) return;
       const name = overlay.querySelector('#cfg-name').value.trim();
       const price = parseFloat(overlay.querySelector('#cfg-price').value);
       if (!name) { UI.toast('请输入名称', 'error'); return; }
@@ -3818,8 +4120,18 @@ const UI = {
       } else {
         nextItems.push(newItem);
       }
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = '保存中...';
+      }
       const saved = await Store.saveConfig(dbKey, nextItems);
-      if (!saved) return;
+      if (!saved) {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = isEdit ? '保存修改' : '创建';
+        }
+        return;
+      }
       MODELS[listKey] = nextItems;
       // 同步旧常量（票务/咖啡）
       if (type === 'ticket') {
@@ -3827,7 +4139,7 @@ const UI = {
         MODELS.COMBO_PRICE = MODELS.ticketProducts.length > 1 ? MODELS.ticketProducts[1].price : 25;
       }
       if (type === 'coffee') MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15;
-      UI.toast(isEdit ? '已更新' : '已新增');
+      UI.toast(isEdit ? '已更新，列表已刷新' : '已新增，列表已刷新');
       overlay.remove();
       UI._refreshCurrentProductTab();
     });
@@ -4022,55 +4334,100 @@ const UI = {
     overlay.className = 'modal-overlay';
     overlay.style.display = 'flex';
     const d = data || {};
+    const currentApproval = this._approvalStatus(d);
+    const currentIsBeverage = this._cpBool(d.isBeverage ?? d.is_beverage, (d.businessTypeCode || d.business_type_code) === 'beverage_retail');
+    const currentBusinessType = this._normalizeCpBusinessType(d.businessTypeCode || d.business_type_code, currentIsBeverage);
+    const currentIsActive = this._cpBool(d.isActive ?? d.is_active, true);
+    const currentIsCountableStock = this._cpBool(d.isCountableStock ?? d.is_countable_stock, true);
     overlay.innerHTML = `
       <div class="modal-card modal-card-md">
         <div class="modal-title">${isEdit ? '编辑文创产品' : '新增文创产品'}</div>
         <div class="form-grid">
-          <div class="form-group"><label>产品名称 *</label><input type="text" id="cp-name" value="${d.name || ''}" placeholder="必填"></div>
-          <div class="form-group"><label>SKU/编码</label><input type="text" id="cp-sku" value="${d.sku || ''}" placeholder="选填"></div>
-          <div class="form-group"><label>供应商</label><input type="text" id="cp-supplier" value="${d.supplier || ''}" placeholder="选填"></div>
+          <div class="form-group"><label>产品名称 *</label><input type="text" id="cp-name" value="${this._escHtml(d.name || '')}" placeholder="必填"></div>
+          <div class="form-group"><label>标准名称</label><input type="text" id="cp-standard-name" value="${this._escHtml(d.standardName || d.standard_name || d.name || '')}" placeholder="用于合并同一产品"></div>
+          <div class="form-group"><label>SKU/编码</label><input type="text" id="cp-sku" value="${this._escHtml(d.sku || '')}" placeholder="选填"></div>
+          <div class="form-group"><label>条码</label><input type="text" id="cp-barcode" value="${this._escHtml(d.barcode || '')}" placeholder="选填"></div>
+          <div class="form-group"><label>业务归属</label><select id="cp-business-type">
+            ${this._cpBusinessTypeOptions().map(item => `<option value="${item.code}"${currentBusinessType === item.code ? ' selected' : ''}>${item.label}</option>`).join('')}
+          </select></div>
+          <div class="form-group"><label>包装规格</label><input type="text" id="cp-package-spec" value="${this._escHtml(d.packageSpec || d.package_spec || '')}" placeholder="如 330ml 瓶装"></div>
+          <div class="form-group"><label>供应商</label><input type="text" id="cp-supplier" value="${this._escHtml(d.supplier || '')}" placeholder="选填"></div>
           <div class="form-group"><label>进货价</label><input type="number" id="cp-cost" min="0" step="0.01" value="${d.costPrice || 0}" placeholder="0.00"></div>
           <div class="form-group"><label>零售价 *</label><input type="number" id="cp-retail" min="0" step="0.01" value="${d.retailPrice || 0}" placeholder="0.00"></div>
           <div class="form-group"><label>库存数量</label><input type="number" id="cp-stock" min="0" step="1" value="${d.stock || 0}" placeholder="0"></div>
           <div class="form-group"><label>单位</label><select id="cp-unit">
-            ${['个','件','套','只','对','盒','包'].map(u => `<option value="${u}"${(d.unit||'个') === u ? ' selected' : ''}>${u}</option>`).join('')}
+            ${['个','件','套','只','对','盒','包','瓶','听'].map(u => `<option value="${u}"${(d.unit||'个') === u ? ' selected' : ''}>${u}</option>`).join('')}
           </select></div>
-          <div class="form-group full"><label>备注</label><input type="text" id="cp-notes" value="${d.notes || ''}" placeholder="选填"></div>
+          <div class="form-group"><label>商品属性</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px"><input type="checkbox" id="cp-is-beverage" ${currentIsBeverage ? 'checked' : ''}> 饮料商品</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px"><input type="checkbox" id="cp-is-countable-stock" ${currentIsCountableStock ? 'checked' : ''}> 参与库存计数</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="cp-is-active" ${currentIsActive ? 'checked' : ''}> 参与经营统计</label>
+          </div>
+          <div class="form-group"><label>上架状态</label>
+            ${Auth.isAdmin ? `<select id="cp-approval">
+              ${['草稿','待确认','已上架','已下架'].map(s => `<option value="${s}"${currentApproval === s ? ' selected' : ''}>${s}</option>`).join('')}
+            </select>` : `<div style="padding:8px;background:var(--cream);border-radius:var(--radius-sm)">保存后进入待确认</div>`}
+          </div>
+          <div class="form-group full"><label>备注</label><input type="text" id="cp-notes" value="${this._escHtml(d.notes || '')}" placeholder="选填"></div>
         </div>
         <div class="modal-actions">
-          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
-          <button class="btn btn-primary" id="cp-save-btn">${isEdit ? '保存修改' : '创建产品'}</button>
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button type="button" class="btn btn-primary" id="cp-save-btn">${isEdit ? '保存修改' : '创建产品'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
 
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-
     overlay.querySelector('#cp-save-btn').addEventListener('click', async () => {
+      const saveBtn = overlay.querySelector('#cp-save-btn');
+      if (saveBtn?.disabled) return;
       const name = overlay.querySelector('#cp-name').value.trim();
       if (!name) { UI.toast('请输入产品名称', 'error'); return; }
+      const selectedBusinessType = overlay.querySelector('#cp-business-type')?.value || '';
+      const isBeverage = (overlay.querySelector('#cp-is-beverage')?.checked || false) || selectedBusinessType === 'beverage_retail';
+      const businessTypeCode = this._normalizeCpBusinessType(isBeverage ? 'beverage_retail' : selectedBusinessType, isBeverage);
       const record = {
         name,
+        standardName: overlay.querySelector('#cp-standard-name').value.trim() || name,
+        businessTypeCode,
+        packageSpec: overlay.querySelector('#cp-package-spec').value.trim(),
+        barcode: overlay.querySelector('#cp-barcode').value.trim(),
+        isBeverage,
+        isCountableStock: overlay.querySelector('#cp-is-countable-stock')?.checked !== false,
+        isActive: overlay.querySelector('#cp-is-active')?.checked !== false,
         sku: overlay.querySelector('#cp-sku').value.trim(),
         supplier: overlay.querySelector('#cp-supplier').value.trim(),
         costPrice: +overlay.querySelector('#cp-cost').value || 0,
         retailPrice: +overlay.querySelector('#cp-retail').value || 0,
         stock: +overlay.querySelector('#cp-stock').value || 0,
         unit: overlay.querySelector('#cp-unit').value,
-        notes: overlay.querySelector('#cp-notes').value.trim()
+        approvalStatus: Auth.isAdmin ? overlay.querySelector('#cp-approval').value : '待确认',
+        submittedBy: d.submittedBy || d.submitted_by || Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+        approvedBy: Auth.isAdmin && overlay.querySelector('#cp-approval')?.value === '已上架' ? (Auth.currentUser?.displayName || Auth.currentUser?.username || '') : (d.approvedBy || d.approved_by || ''),
+        approvedAt: Auth.isAdmin && overlay.querySelector('#cp-approval')?.value === '已上架' ? new Date().toISOString() : (d.approvedAt || d.approved_at || null),
+        notes: overlay.querySelector('#cp-notes').value.trim(),
+        updatedAt: new Date().toISOString()
       };
       try {
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.textContent = '保存中...';
+        }
         if (isEdit && d.id) {
           await Store.update('creativeProducts', d.id, record);
-          UI.toast('产品已更新');
+          UI.toast(Auth.isAdmin ? '产品已更新，列表已刷新' : '产品已更新，等待管理员确认，列表已刷新');
         } else {
           await Store.add('creativeProducts', createCreativeProduct(record));
-          UI.toast('产品已新增');
+          UI.toast(Auth.isAdmin ? '产品已新增，列表已刷新' : '产品已提交待确认，列表已刷新');
         }
-        overlay.remove();
+        await UI._loadCreativeProducts();
         await UI._refreshCurrentProductTab();
+        overlay.remove();
       } catch (e) {
         UI.toast('保存失败：' + (e.message || e), 'error');
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = isEdit ? '保存修改' : '创建产品';
+        }
       }
     });
   },
@@ -4085,7 +4442,33 @@ const UI = {
     this._showCreativeProductModal(p, true);
   },
 
+  async _approveCreativeProduct(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可确认上架', 'error'); return; }
+    await Store.update('creativeProducts', id, {
+      approvalStatus: '已上架',
+      approvedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+      approvedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('产品已上架');
+    await this._loadCreativeProducts();
+    this._refreshCurrentProductTab();
+  },
+
+  async _unlistCreativeProduct(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可下架', 'error'); return; }
+    if (!confirm('确认下架该产品？下架后不会出现在收银台可选列表。')) return;
+    await Store.update('creativeProducts', id, {
+      approvalStatus: '已下架',
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('产品已下架');
+    await this._loadCreativeProducts();
+    this._refreshCurrentProductTab();
+  },
+
   async _deleteCreativeProduct(id) {
+    if (!this._canDeleteCatalog()) { this.toast('仅管理员可删除', 'error'); return; }
     const p = this._creativeProducts.find(x => x.id === id);
     if (!confirm(`确认删除产品「${p ? p.name : id}」？`)) return;
     await Store.delete('creativeProducts', id);
@@ -4107,7 +4490,11 @@ const UI = {
         let imported = 0;
         for (const row of data) {
           try {
-            await Store.add('creativeProducts', createCreativeProduct(row));
+            await Store.add('creativeProducts', createCreativeProduct({
+              ...row,
+              approvalStatus: Auth.isAdmin ? '已上架' : '待确认',
+              submittedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || ''
+            }));
             imported++;
           } catch (err) {
             console.warn('导入失败:', row, err);
@@ -4136,8 +4523,16 @@ const UI = {
             const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
             resolve(rows.map(r => {
               const nameVal = this._getCPField(r, ['产品名称','产品名','名称','name','Name','商品名','商品名称']);
+              const isBeverage = this._cpBool(this._getCPField(r, ['是否饮料','饮料','isBeverage','is_beverage']), false);
               return {
                 name: String(nameVal || '').trim(),
+                standardName: String(this._getCPField(r, ['标准名称','归一名称','standardName','standard_name']) || nameVal || '').trim(),
+                businessTypeCode: this._normalizeCpBusinessType(this._getCPField(r, ['业务归属','业务类型','businessTypeCode','business_type_code']), isBeverage),
+                packageSpec: String(this._getCPField(r, ['包装规格','规格','packageSpec','package_spec']) || '').trim(),
+                barcode: String(this._getCPField(r, ['条码','barcode','Barcode']) || '').trim(),
+                isBeverage,
+                isCountableStock: this._cpBool(this._getCPField(r, ['是否计库存','参与库存计数','isCountableStock','is_countable_stock']), true),
+                isActive: this._cpBool(this._getCPField(r, ['是否启用','参与经营统计','isActive','is_active']), true),
                 sku: String(this._getCPField(r, ['SKU','sku','Sku','编码','编号','货号']) || '').trim(),
                 supplier: String(this._getCPField(r, ['供应商','supplier','Supplier','供货商']) || '').trim(),
                 costPrice: +(+this._getCPField(r, ['进货价','costPrice','cost_price','进价','成本价']) || 0),
@@ -4160,8 +4555,16 @@ const UI = {
               headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
               const nameVal = this._getCPField(row, ['产品名称','产品名','名称','name','Name','商品名','商品名称']);
               if (!nameVal) continue;
+              const isBeverage = this._cpBool(this._getCPField(row, ['是否饮料','饮料','isBeverage','is_beverage']), false);
               results.push({
                 name: String(nameVal || '').trim(),
+                standardName: String(this._getCPField(row, ['标准名称','归一名称','standardName','standard_name']) || nameVal || '').trim(),
+                businessTypeCode: this._normalizeCpBusinessType(this._getCPField(row, ['业务归属','业务类型','businessTypeCode','business_type_code']), isBeverage),
+                packageSpec: String(this._getCPField(row, ['包装规格','规格','packageSpec','package_spec']) || '').trim(),
+                barcode: String(this._getCPField(row, ['条码','barcode','Barcode']) || '').trim(),
+                isBeverage,
+                isCountableStock: this._cpBool(this._getCPField(row, ['是否计库存','参与库存计数','isCountableStock','is_countable_stock']), true),
+                isActive: this._cpBool(this._getCPField(row, ['是否启用','参与经营统计','isActive','is_active']), true),
                 sku: String(this._getCPField(row, ['SKU','sku','Sku','编码','编号','货号']) || '').trim(),
                 supplier: String(this._getCPField(row, ['供应商','supplier','Supplier','供货商']) || '').trim(),
                 costPrice: +(+this._getCPField(row, ['进货价','costPrice','cost_price','进价','成本价']) || 0),
@@ -4213,11 +4616,23 @@ const UI = {
   },
 
   async _exportCreativeProducts() {
+    if (!Auth.can('export', 'creative-products')) {
+      this.toast('当前账号无权限导出产品数据', 'error');
+      return;
+    }
     await this._loadCreativeProducts();
     if (!this._creativeProducts.length) { this.toast('没有产品可导出', 'error'); return; }
-    const headers = ['产品名称','SKU','供应商','进货价','零售价','库存','单位','备注'];
+    const headers = ['产品名称','标准名称','业务归属','包装规格','条码','是否饮料','是否计库存','是否启用','SKU','供应商','进货价','零售价','库存','单位','备注'];
     const rows = this._creativeProducts.map(p => [
-      p.name || '', p.sku || '', p.supplier || '',
+      p.name || '',
+      p.standardName || p.standard_name || p.name || '',
+      this._cpBusinessTypeLabel(p.businessTypeCode || p.business_type_code, this._cpBool(p.isBeverage ?? p.is_beverage, false)),
+      p.packageSpec || p.package_spec || '',
+      p.barcode || '',
+      this._cpBool(p.isBeverage ?? p.is_beverage, false) ? '是' : '否',
+      this._cpBool(p.isCountableStock ?? p.is_countable_stock, true) ? '是' : '否',
+      this._cpBool(p.isActive ?? p.is_active, true) ? '是' : '否',
+      p.sku || '', p.supplier || '',
       (+p.costPrice || 0).toFixed(2), (+p.retailPrice || 0).toFixed(2),
       p.stock || 0, p.unit || '个', p.notes || ''
     ]);
@@ -4225,6 +4640,10 @@ const UI = {
   },
 
   async _exportCreativeSales() {
+    if (!Auth.can('export', 'creative-products')) {
+      this.toast('当前账号无权限导出销售清单', 'error');
+      return;
+    }
     const { start, end } = ImportExport._getExportDates();
     await this._loadCreativeProducts();
     const productMetaByName = this._creativeProductMetaMap();
@@ -4238,7 +4657,7 @@ const UI = {
     if (!records.length) { this.toast('所选范围内无文创销售记录', 'error'); return; }
 
     // 展开每条 retailItems
-    const headers = ['日期','产品名称','供应商','进货价','数量','单价','金额','收款方式','经手人','备注','创建时间'];
+    const headers = ['日期','产品名称','标准名称','业务归属','包装规格','是否饮料','供应商','进货价','数量','单价','金额','收款方式','经手人','备注','创建时间'];
     const rows = [];
     // 字段名兼容：服务端 toCamel 不递归 JSONB 数组，所以读出来时是 snake（product_name/unit_price）；
     // 少数旧数据可能保留录入时的 camel（productName/unitPrice）。两种都要支持。
@@ -4252,6 +4671,10 @@ const UI = {
         rows.push([
           r.date,
           name,
+          meta.standardName || '',
+          meta.businessType || '',
+          meta.packageSpec || '',
+          meta.isBeverage ? '是' : '否',
           meta.supplier || '',
           meta.costPrice === '' ? '' : (+meta.costPrice || 0).toFixed(2),
           item.qty || 1,
@@ -4271,12 +4694,19 @@ const UI = {
     const map = new Map();
     (this._creativeProducts || []).forEach(p => {
       const key = this._normalizeCreativeProductName(p.name || '');
+      const meta = {
+        standardName: p.standardName || p.standard_name || p.name || '',
+        businessType: this._cpBusinessTypeLabel(p.businessTypeCode || p.business_type_code, this._cpBool(p.isBeverage ?? p.is_beverage, false)),
+        packageSpec: p.packageSpec || p.package_spec || '',
+        isBeverage: this._cpBool(p.isBeverage ?? p.is_beverage, false),
+        supplier: p.supplier || '',
+        costPrice: p.costPrice ?? p.cost_price ?? ''
+      };
       if (key && !map.has(key)) {
-        map.set(key, {
-          supplier: p.supplier || '',
-          costPrice: p.costPrice ?? p.cost_price ?? ''
-        });
+        map.set(key, meta);
       }
+      const standardKey = this._normalizeCreativeProductName(p.standardName || p.standard_name || '');
+      if (standardKey && !map.has(standardKey)) map.set(standardKey, meta);
     });
     return map;
   },
@@ -4300,8 +4730,8 @@ const UI = {
   },
 
   _downloadImportTemplate() {
-    const headers = ['产品名称','SKU','供应商','进货价','零售价','库存','单位','备注'];
-    const example = ['示例文创笔记本','CP-001','示例供应商','15','38','100','个','首批进货'];
+    const headers = ['产品名称','标准名称','业务归属','包装规格','条码','是否饮料','是否计库存','是否启用','SKU','供应商','进货价','零售价','库存','单位','备注'];
+    const example = ['纯悦水','纯悦水','饮料零售','550ml 瓶装','','是','是','是','DR-001','示例供应商','1.8','4','100','瓶','示例饮料'];
     const csvContent = '﻿' + headers.join(',') + '\n' + example.join(',') + '\n';
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -4326,7 +4756,11 @@ const UI = {
         let imported = 0, skipped = 0;
         for (const row of rows) {
           try {
-            await Store.add('artworks', createArtwork(row));
+            await Store.add('artworks', createArtwork({
+              ...row,
+              approvalStatus: Auth.isAdmin ? '已上架' : '待确认',
+              submittedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || ''
+            }));
             imported++;
           } catch (err) {
             console.warn('导入失败:', row, err);
@@ -4591,6 +5025,7 @@ const UI = {
           <button type="button" class="btn btn-sm btn-primary" onclick="UI._loadDailyClosing()">刷新</button>
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="daily-close-status"></span>
         </div>
+        <div id="daily-closing-month-list" style="margin-bottom:16px"></div>
         <div id="daily-closing-body"><div class="loading-state" style="padding:40px"><div class="spinner"></div><span>加载日结数据...</span></div></div>
       </div>
     `);
@@ -4620,6 +5055,192 @@ const UI = {
     await this._loadDailyClosing();
   },
 
+  async _openDailyClosingDate(date) {
+    if (!date) return;
+    this._dailyClosingDate = date;
+    const input = document.getElementById('daily-close-date');
+    if (input) input.value = date;
+    await this._loadDailyClosing();
+  },
+
+  _monthRangeFromDate(date) {
+    const ym = (date || todayStr()).slice(0, 7);
+    const [year, month] = ym.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).getDate();
+    return { ym, start: `${ym}-01`, end: `${ym}-${String(lastDay).padStart(2, '0')}` };
+  },
+
+  _monthLedgerDates(ym) {
+    const today = todayStr();
+    const currentYm = today.slice(0, 7);
+    const [year, month] = ym.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).getDate();
+    const endDay = ym === currentYm ? Number(today.slice(8, 10)) : (ym < currentYm ? lastDay : 0);
+    const dates = [];
+    for (let day = endDay; day >= 1; day--) {
+      dates.push(`${ym}-${String(day).padStart(2, '0')}`);
+    }
+    return dates;
+  },
+
+  _summaryInline(obj, labelMap = {}) {
+    const entries = Object.entries(obj || {})
+      .filter(([, value]) => Math.abs(+value || 0) > 0.0001)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (!entries.length) return '<span style="color:var(--gray-500)">-</span>';
+    return entries.map(([label, value]) => `
+      <div style="white-space:nowrap">${this._esc(labelMap[label] || label)} <strong>¥${this._fmt(value)}</strong></div>
+    `).join('');
+  },
+
+  _renderDailyClosingMonthList(closings, selectedDate, ym, facts = []) {
+    const closingsByDate = new Map((closings || []).map(c => [c.date, c]));
+    const factsByDate = (facts || []).reduce((acc, row) => {
+      if (!row.date) return acc;
+      if (!acc.has(row.date)) acc.set(row.date, []);
+      acc.get(row.date).push(row);
+      return acc;
+    }, new Map());
+    const dates = [...new Set([
+      ...this._monthLedgerDates(ym),
+      ...factsByDate.keys(),
+      ...closingsByDate.keys()
+    ])]
+      .filter(d => String(d || '').startsWith(ym))
+      .sort((a, b) => String(b || '').localeCompare(String(a || '')));
+    const statusClass = (status) => status === '已复核' ? 'tag-success' : status === '已确认' ? 'tag-info' : status === '未结存' ? 'tag-danger' : 'tag-warning';
+    const diffColor = (value) => (+value || 0) === 0 ? 'var(--gray-700)' : (+value || 0) > 0 ? 'var(--green-700)' : 'var(--red)';
+    const tableRows = dates.length ? dates.map(date => {
+      const c = closingsByDate.get(date) || null;
+      const dayFacts = factsByDate.get(date) || [];
+      const byCategory = dayFacts.length
+        ? this._sumBy(dayFacts, 'category')
+        : (c?.revenueSummary?.byCategory || c?.revenue_summary?.byCategory || {});
+      const byPayment = dayFacts.length
+        ? this._sumBy(dayFacts.filter(r => (+r.netAmount || 0) > 0), 'paymentMethod')
+        : (c?.paymentSummary || c?.payment_summary || {});
+      const systemNet = dayFacts.length
+        ? dayFacts.reduce((s, r) => s + (+r.netAmount || 0), 0)
+        : +(c?.systemNetAmount ?? c?.system_net_amount ?? 0);
+      const confirmed = c ? +(c.confirmedAmount ?? c.confirmed_amount ?? 0) : null;
+      const diff = c ? +(c.differenceAmount ?? c.difference_amount ?? ((confirmed || 0) - systemNet)) : null;
+      const active = date === selectedDate ? ' style="background:var(--green-50)"' : '';
+      const status = c ? (c.status || '草稿') : '未结存';
+      const canQuickClose = Auth.can('create', 'daily-closing') && status !== '已确认' && status !== '已复核';
+      const quickCloseBtn = canQuickClose
+        ? `<button type="button" class="btn btn-sm btn-primary" onclick="UI._quickArchiveDailyClosing('${this._esc(date)}', this)">快速结存</button>`
+        : '';
+      return `
+        <tr${active}>
+          <td><strong>${this._esc(date)}</strong></td>
+          <td><span class="tag ${statusClass(status)}">${this._esc(status)}</span></td>
+          <td><strong>¥${this._fmt(systemNet)}</strong><div style="font-size:12px;color:var(--gray-500)">${dayFacts.length} 条收入事实</div></td>
+          <td>${c ? `<strong>¥${this._fmt(confirmed)}</strong>` : '<span style="color:var(--gray-500)">待结存</span>'}</td>
+          <td>${c ? `<strong style="color:${diffColor(diff)}">¥${this._fmt(diff)}</strong>` : '<span style="color:var(--gray-500)">-</span>'}</td>
+          <td>${this._summaryInline(byCategory)}</td>
+          <td>${this._summaryInline(byPayment)}</td>
+          <td>${this._esc(c?.closerName || c?.closer_name || '-')}</td>
+          <td><div class="row-actions">${quickCloseBtn}<button type="button" class="btn btn-sm btn-secondary" onclick="UI._openDailyClosingDate('${this._esc(date)}')">查看</button></div></td>
+        </tr>
+      `;
+    }).join('') : '<tr><td colspan="9" style="color:var(--gray-500)">本月暂无收入事实或日结记录</td></tr>';
+
+    return `
+      <div class="card">
+        <div class="card-title">${ym} 日结台账</div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>日期</th><th>结存状态</th><th>系统净收入</th><th>实收确认</th><th>差异</th><th>品类收入</th><th>收款方式</th><th>结账人</th><th>操作</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async _quickArchiveDailyClosing(date, btn) {
+    if (!Auth.can('create', 'daily-closing')) {
+      this.toast('当前账号无权限结存日结', 'error');
+      return;
+    }
+    if (!date) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '结存中...';
+    }
+    try {
+      const [facts, expenses, adjustments, cashMovements, closings] = await Promise.all([
+        Store.getByDateRange('revenueFacts', date, date),
+        Store.getByDateRange('expense', date, date),
+        Store.getAll('transactionAdjustments'),
+        Store.getAll('cashMovements'),
+        Store.getByDateRange('dailyClosings', date, date)
+      ]);
+      const dayFacts = (facts || []).filter(r => r.date === date);
+      const dayExpenses = (expenses || []).filter(r => r.date === date);
+      const dayAdjustments = (adjustments || []).filter(a => UI._fmtBeijingTime(a.createdAt || a.created_at).slice(0, 10) === date);
+      const dayCashMovements = (cashMovements || []).filter(m => m.date === date);
+      const closing = (closings || []).find(c => c.date === date) || null;
+      if (closing?.status === '已复核') {
+        this.toast('该日期已复核，无需快速结存');
+        await this._openDailyClosingDate(date);
+        return;
+      }
+      const systemNet = dayFacts.reduce((s, r) => s + (+r.netAmount || 0), 0);
+      const grossPositive = dayFacts.filter(r => (+r.netAmount || 0) > 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
+      const refundTotal = dayFacts.filter(r => (+r.netAmount || 0) < 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
+      const operationalDayExpenses = dayExpenses.filter(isOperationalExpenseRecord);
+      const bySource = this._sumBy(dayFacts, 'source');
+      const byCategory = this._sumBy(dayFacts, 'category');
+      const byPayment = this._sumBy(dayFacts.filter(r => (+r.netAmount || 0) > 0), 'paymentMethod');
+      const cashOpening = this._sumCashMovements(cashMovements, m => m.date < date);
+      const cashIn = this._sumCashMovements(dayCashMovements, m => (+m.amount || 0) > 0);
+      const cashDeposit = -this._sumCashMovements(dayCashMovements, m => m.type === 'cash_deposit');
+      const cashOut = -this._sumCashMovements(dayCashMovements, m => (+m.amount || 0) < 0 && m.type !== 'cash_deposit');
+      const cashClosing = cashOpening + this._sumCashMovements(dayCashMovements);
+      const adjustmentSummary = dayAdjustments.reduce((acc, a) => {
+        const key = a.action || 'adjustment';
+        acc[key] = (acc[key] || 0) + (+a.amount || 0);
+        return acc;
+      }, {});
+      const record = createDailyClosing({
+        id: closing?.id || undefined,
+        date,
+        systemNetAmount: systemNet,
+        confirmedAmount: systemNet,
+        differenceAmount: 0,
+        revenueSummary: { bySource, byCategory, facts: dayFacts.length, grossPositive, refundTotal },
+        paymentSummary: byPayment,
+        expenseSummary: {
+          expenseOut: operationalDayExpenses.reduce((s, r) => s + (+r.amount || 0), 0),
+          pendingReceipt: operationalDayExpenses.filter(r => r.receiptStatus === '待补' || r.invoiceStatus === '待补').length,
+          count: operationalDayExpenses.length
+        },
+        adjustmentSummary,
+        cashSummary: { cashOpening, cashIn, cashDeposit, cashOut, cashClosing, count: dayCashMovements.length },
+        closerId: Auth.currentUser?.id || '',
+        closerName: Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+        reviewerName: closing?.reviewerName || closing?.reviewer_name || '',
+        status: '已确认',
+        notes: closing?.notes || ''
+      });
+      record.updatedAt = new Date().toISOString();
+      if (closing?.id) {
+        await Store.update('dailyClosings', closing.id, record);
+      } else {
+        await Store.add('dailyClosings', record);
+      }
+      this.toast(`${date} 已快速结存`);
+      await this._openDailyClosingDate(date);
+    } catch (e) {
+      this.toast('快速结存失败：' + (e.message || e), 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '快速结存';
+      }
+    }
+  },
+
   async _loadDailyClosing() {
     const body = $('#daily-closing-body');
     if (!body) return;
@@ -4627,20 +5248,25 @@ const UI = {
     this._dailyClosingDate = date;
     const statusEl = $('#daily-close-status');
     if (statusEl) statusEl.textContent = '加载中...';
+    const monthListEl = $('#daily-closing-month-list');
+    const monthRange = this._monthRangeFromDate(date);
+    if (monthListEl) monthListEl.innerHTML = '<div class="card"><div class="loading-state" style="padding:24px"><div class="spinner"></div><span>加载本月日结列表...</span></div></div>';
 
-    const [facts, expenses, adjustments, cashMovements, closings] = await Promise.all([
-      Store.getByDateRange('revenueFacts', date, date),
-      Store.getByDateRange('expense', date, date),
-      Store.getAll('transactionAdjustments'),
-      Store.getAll('cashMovements'),
-      Store.getByDateRange('dailyClosings', date, date)
+    const canEditDaily = Auth.can('create', 'daily-closing');
+    const [monthFacts, expenses, adjustments, cashMovements, monthClosings] = await Promise.all([
+      Store.getByDateRange('revenueFacts', monthRange.start, monthRange.end),
+      canEditDaily ? Store.getByDateRange('expense', date, date) : Promise.resolve([]),
+      canEditDaily ? Store.getAll('transactionAdjustments') : Promise.resolve([]),
+      canEditDaily ? Store.getAll('cashMovements') : Promise.resolve([]),
+      Store.getByDateRange('dailyClosings', monthRange.start, monthRange.end)
     ]);
+    if (monthListEl) monthListEl.innerHTML = this._renderDailyClosingMonthList(monthClosings, date, monthRange.ym, monthFacts);
 
-    const dayFacts = (facts || []).filter(r => r.date === date);
+    const dayFacts = (monthFacts || []).filter(r => r.date === date);
     const dayExpenses = (expenses || []).filter(r => r.date === date);
     const dayAdjustments = (adjustments || []).filter(a => UI._fmtBeijingTime(a.createdAt || a.created_at).slice(0, 10) === date);
     const dayCashMovements = (cashMovements || []).filter(m => m.date === date);
-    const closing = (closings || []).find(c => c.date === date) || null;
+    const closing = (monthClosings || []).find(c => c.date === date) || null;
 
     const systemNet = dayFacts.reduce((s, r) => s + (+r.netAmount || 0), 0);
     const grossPositive = dayFacts.filter(r => (+r.netAmount || 0) > 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
@@ -4720,7 +5346,7 @@ const UI = {
         </div>
       </div>
 
-      <div class="card">
+      ${Auth.can('create', 'daily-closing') ? `<div class="card">
         <div class="card-title">日结确认</div>
         <div class="form-grid">
           <div class="form-group"><label>系统净收入</label><input type="number" id="daily-system-net" value="${systemNet.toFixed(2)}" readonly></div>
@@ -4736,7 +5362,7 @@ const UI = {
         <div class="form-actions full">
           <button type="button" class="btn btn-primary" onclick="UI._saveDailyClosing()">保存日结</button>
         </div>
-      </div>
+      </div>` : ''}
     `);
 
     this._dailyClosingSnapshot = {

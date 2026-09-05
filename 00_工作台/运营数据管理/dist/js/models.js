@@ -12,8 +12,8 @@ const MODELS = {
     expense: 'aiwei_expense',
     space: 'aiwei_space'
   },
-  PROJECT_TYPES: ['运营','耗材','展览','团建','工坊','画廊','其他'],
-  EXPENSE_CATEGORIES: ['材料','茶歇','设备','人工','交通','通信','打印','运费','保洁','其他'],
+  PROJECT_TYPES: ['运营'],
+  EXPENSE_CATEGORIES: ['人员劳务','场地物业','办公行政','市场推广','活动展览成本','商品采购','物料耗材','设备资产','交通差旅','税费手续费','维修保洁','其他支出'],
   SPACES: ['1号厅','2号厅','美学空间','多功能厅','六楼综合空间','走廊画廊','户外露台'],
   SPACE_TYPES: ['展览','企业团建','沙龙','会议活动','品牌快闪','长期经营','场地租赁'],
   SPACE_STATUSES: ['筹备中','已确认','进行中','已完成','已取消','空闲'],
@@ -30,6 +30,16 @@ const MODELS = {
     { name: '拓印体验', price: 38 }
   ]
 };
+
+const EXPENSE_RECORD_TYPES = {
+  operational: '运营支出',
+  legacyExpense: '备用金支出',
+  legacyBorrow: '备用金借入'
+};
+
+function isOperationalExpenseRecord(record = {}) {
+  return (record.type || EXPENSE_RECORD_TYPES.operational) !== EXPENSE_RECORD_TYPES.legacyBorrow;
+}
 
 function createId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -50,8 +60,8 @@ function createRevenue(data = {}) {
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
-    ticketQty: hasTicketItems ? ticketItems.reduce((s, i) => s + (+i.qty || 0), 0) : (+data.ticketQty || 0),
-    ticketAmount: hasTicketItems ? ticketItems.reduce((s, i) => s + i.amount, 0) : (+data.ticketQty * MODELS.TICKET_PRICE || 0),
+    ticketQty: hasTicketItems ? ticketItems.filter(i => i.name !== '套票').reduce((s, i) => s + (+i.qty || 0), 0) : (+data.ticketQty || 0),
+    ticketAmount: hasTicketItems ? ticketItems.filter(i => i.name !== '套票').reduce((s, i) => s + i.amount, 0) : (+data.ticketQty * MODELS.TICKET_PRICE || 0),
     ticketItems: data.ticketItems || [],
     comboQty: +data.comboQty || 0,
     comboAmount: +data.comboAmount || 0,
@@ -72,6 +82,11 @@ function createRevenue(data = {}) {
     projectName: data.projectName || '',
     handler: data.handler || '',
     notes: data.notes || '',
+    status: data.status || '正常',
+    refundAmount: +data.refundAmount || +data.refund_amount || 0,
+    adjustedAt: data.adjustedAt || data.adjusted_at || null,
+    adjustedBy: data.adjustedBy || data.adjusted_by || '',
+    adjustmentReason: data.adjustmentReason || data.adjustment_reason || '',
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
@@ -104,20 +119,35 @@ function createExpense(data = {}) {
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
-    type: data.type || '备用金支出',
+    type: isOperationalExpenseRecord(data) ? EXPENSE_RECORD_TYPES.operational : EXPENSE_RECORD_TYPES.legacyBorrow,
     project: data.project || '运营',
-    category: data.category || '材料',
+    category: data.category || '其他支出',
     amount: +data.amount || 0,
     description: data.description || '',
     handler: data.handler || '',
     invoiceStatus: data.invoiceStatus || '待补',
     receiptStatus: data.receiptStatus || '待补',
+    reimbursementStatus: data.reimbursementStatus || '未报销',
     relatedActivity: data.relatedActivity || '',
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
 
-// 空间使用记录
+function createExpenseAttachment(data = {}) {
+  return {
+    id: data.id || createId(),
+    expenseId: data.expenseId || data.expense_id || '',
+    attachmentType: data.attachmentType || data.attachment_type || 'invoice',
+    fileUrl: data.fileUrl || data.file_url || '',
+    originalName: data.originalName || data.original_name || '',
+    fileSize: +data.fileSize || +data.file_size || 0,
+    mimeType: data.mimeType || data.mime_type || '',
+    uploadedBy: data.uploadedBy || data.uploaded_by || Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
+  };
+}
+
+// 空间使用记录（重构 2026-07-10：删除 receivedAmount，由子表聚合；新增 expectedPaymentDate）
 function createSpaceUsage(data = {}) {
   return {
     id: data.id || createId(),
@@ -130,9 +160,22 @@ function createSpaceUsage(data = {}) {
     status: data.status || '筹备中',
     rentalType: data.rentalType || '付费',
     receivableAmount: +data.receivableAmount || 0,
-    receivedAmount: +data.receivedAmount || 0,
+    expectedPaymentDate: data.expectedPaymentDate || '',
     notes: data.notes || '',
     createdAt: data.createdAt || new Date().toISOString()
+  };
+}
+
+// 空间使用付款明细（子表记录）
+function createSpacePayment(data = {}) {
+  return {
+    id: data.id || createId(),
+    spaceUsageId: data.spaceUsageId || data.space_usage_id || '',
+    paymentDate: data.paymentDate || data.payment_date || todayStr(),
+    amount: +data.amount || 0,
+    paymentMethod: data.paymentMethod || data.payment_method || '转账',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
   };
 }
 
@@ -165,6 +208,7 @@ function createGallerySale(data = {}) {
   return {
     id: data.id || createId(),
     date: data.date || todayStr(),
+    artworkNo: data.artworkNo || data.artwork_no || '',
     artworkName: data.artworkName || '',
     artist: data.artist || '',
     price: +data.price || 0,
@@ -175,6 +219,11 @@ function createGallerySale(data = {}) {
     status: data.status || '已售出',
     handler: data.handler || '',
     notes: data.notes || '',
+    saleQuantity: +data.saleQuantity || +data.sale_quantity || 1,
+    refundAmount: +data.refundAmount || +data.refund_amount || 0,
+    adjustedAt: data.adjustedAt || data.adjusted_at || null,
+    adjustedBy: data.adjustedBy || data.adjusted_by || '',
+    adjustmentReason: data.adjustmentReason || data.adjustment_reason || '',
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
@@ -183,17 +232,130 @@ function calcGalleryNet(price, commission) {
   return (+price || 0) - (+commission || 0);
 }
 
-// 文创产品
-function createCreativeProduct(data = {}) {
+function createTransactionAdjustment(data = {}) {
   return {
     id: data.id || createId(),
-    name: data.name || '',
+    targetType: data.targetType || data.target_type || '',
+    targetId: data.targetId || data.target_id || '',
+    action: data.action || '',
+    amount: +data.amount || 0,
+    reason: data.reason || '',
+    operatorId: data.operatorId || data.operator_id || Auth.currentUser?.id || '',
+    operatorName: data.operatorName || data.operator_name || Auth.currentUser?.displayName || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
+  };
+}
+
+function createCashMovement(data = {}) {
+  return {
+    id: data.id || createId(),
+    date: data.date || todayStr(),
+    type: data.type || '',
+    amount: +data.amount || 0,
+    sourceType: data.sourceType || data.source_type || '',
+    sourceId: data.sourceId || data.source_id || '',
+    accountChannel: data.accountChannel || data.account_channel || '',
+    operatorId: data.operatorId || data.operator_id || Auth.currentUser?.id || '',
+    operatorName: data.operatorName || data.operator_name || Auth.currentUser?.displayName || '',
+    reason: data.reason || '',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString()
+  };
+}
+
+function createDailyClosing(data = {}) {
+  const systemNetAmount = +data.systemNetAmount || +data.system_net_amount || 0;
+  const confirmedAmount = +data.confirmedAmount || +data.confirmed_amount || 0;
+  const differenceAmount = data.differenceAmount !== undefined
+    ? +data.differenceAmount
+    : data.difference_amount !== undefined
+      ? +data.difference_amount
+      : confirmedAmount - systemNetAmount;
+  return {
+    id: data.id || createId(),
+    date: data.date || todayStr(),
+    systemNetAmount,
+    confirmedAmount,
+    differenceAmount,
+    revenueSummary: data.revenueSummary || data.revenue_summary || {},
+    paymentSummary: data.paymentSummary || data.payment_summary || {},
+    expenseSummary: data.expenseSummary || data.expense_summary || {},
+    adjustmentSummary: data.adjustmentSummary || data.adjustment_summary || {},
+    cashSummary: data.cashSummary || data.cash_summary || {},
+    closerId: data.closerId || data.closer_id || Auth.currentUser?.id || '',
+    closerName: data.closerName || data.closer_name || Auth.currentUser?.displayName || '',
+    reviewerName: data.reviewerName || data.reviewer_name || '',
+    status: data.status || '草稿',
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+    updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()
+  };
+}
+
+// 文创产品
+function createCreativeProduct(data = {}) {
+  const bool = (value, fallback = false) => {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', '是', '是的', '饮料', '启用'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', '否', '不是', '停用'].includes(normalized)) return false;
+    return fallback;
+  };
+  const name = data.name || '';
+  const isBeverage = bool(data.isBeverage ?? data.is_beverage, false);
+  const businessTypeCode = data.businessTypeCode || data.business_type_code || (isBeverage ? 'beverage_retail' : 'creative_retail');
+  return {
+    id: data.id || createId(),
+    name,
+    standardName: data.standardName || data.standard_name || name,
+    businessTypeCode,
+    packageSpec: data.packageSpec || data.package_spec || '',
+    barcode: data.barcode || '',
+    isBeverage,
+    isCountableStock: bool(data.isCountableStock ?? data.is_countable_stock, true),
+    isActive: bool(data.isActive ?? data.is_active, true),
     sku: data.sku || '',
     supplier: data.supplier || '',
     costPrice: +data.costPrice || +data.cost_price || 0,
     retailPrice: +data.retailPrice || +data.retail_price || 0,
     stock: +data.stock || 0,
     unit: data.unit || '个',
+    approvalStatus: data.approvalStatus || data.approval_status || '已上架',
+    submittedBy: data.submittedBy || data.submitted_by || '',
+    approvedBy: data.approvedBy || data.approved_by || '',
+    approvedAt: data.approvedAt || data.approved_at || null,
+    notes: data.notes || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+    updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()
+  };
+}
+
+// 画廊作品档案（2026-07-10：imageUrl；2026-07-11：settlementPrice/retailPrice；2026-07-12：artworkNo + totalQty + soldQty）
+function createArtwork(data = {}) {
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  return {
+    id: data.id || createId(),
+    artworkNo: data.artworkNo || data.artwork_no || '',
+    title: data.title || '',
+    artist: data.artist || '',
+    year: data.year || '',
+    medium: data.medium || '',
+    dimensions: data.dimensions || '',
+    location: data.location || '',
+    status: data.status || '在库',
+    imageUrl: data.imageUrl || data.image_url || '',
+    settlementPrice: num(data.settlementPrice ?? data.settlement_price),
+    retailPrice: num(data.retailPrice ?? data.retail_price),
+    totalQty: num(data.totalQty ?? data.total_qty) || 1,
+    soldQty: num(data.soldQty ?? data.sold_qty),
+    approvalStatus: data.approvalStatus || data.approval_status || '已上架',
+    submittedBy: data.submittedBy || data.submitted_by || '',
+    approvedBy: data.approvedBy || data.approved_by || '',
+    approvedAt: data.approvedAt || data.approved_at || null,
     notes: data.notes || '',
     createdAt: data.createdAt || data.created_at || new Date().toISOString(),
     updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()

@@ -22,19 +22,23 @@ const EXPENSE_PDF_RETENTION_DAYS = parseInt(process.env.EXPENSE_PDF_RETENTION_DA
 const RETENTION_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const DB_HOST = process.env.DB_HOST || '127.0.0.1';
+const DB_PORT = parseInt(process.env.DB_PORT || '5432', 10);
+const DB_NAME = process.env.DB_NAME || 'postgres';
 const DB_PASS = process.env.DB_PASS || process.env.DB_PASSWORD;
 if (!DB_PASS) {
   throw new Error('DB_PASS or DB_PASSWORD environment variable is required');
 }
+const AUTH_SECRET = process.env.AUTH_SECRET || DB_PASS;
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 const STATIC_DIR = process.env.STATIC_DIR || '/var/www/aiwei';
 
 const pool = new Pool({
   host: DB_HOST,
-  port: 5432,
+  port: DB_PORT,
   user: 'postgres',
   password: DB_PASS,
-  database: 'postgres',
+  database: DB_NAME,
   max: 10
 });
 
@@ -59,7 +63,9 @@ const TABLE_COLS = {
   // 空间使用重构 2026-07-10：去掉 received_amount（由子表聚合）
   space_usage: new Set([
     'id','date','end_date','space','project_name','type','client','status',
-    'rental_type','receivable_amount','expected_payment_date','notes','created_at'
+    'rental_type','receivable_amount','expected_payment_date','notes','created_at',
+    'business_layer_code','business_type_code','cooperation_mode','project_owner',
+    'contract_no','business_status'
   ]),
   space_payments: new Set([
     'id','space_usage_id','payment_date','amount','payment_method','notes','created_at'
@@ -68,6 +74,7 @@ const TABLE_COLS = {
   artworks: new Set([
     'id','artwork_no','title','artist','year','medium','dimensions','location','status',
     'image_url','settlement_price','retail_price','total_qty','sold_qty',
+    'approval_status','submitted_by','approved_by','approved_at',
     'notes','created_at','updated_at'
   ]),
   // ===== 2026-07-11 补全：以下表之前无白名单导致字段被静默丢弃 =====
@@ -85,7 +92,9 @@ const TABLE_COLS = {
   gallery_sales: new Set([
     'id','date','artwork_no','artwork_name','artist','price','commission','buyer_name',
     'payment_method','related_exhibition','status','handler','notes','sale_quantity',
-    'refund_amount','adjusted_at','adjusted_by','adjustment_reason','created_at'
+    'refund_amount','adjusted_at','adjusted_by','adjustment_reason','created_at',
+    'artwork_id','settlement_price_snapshot','retail_price_snapshot',
+    'gross_amount_snapshot','net_amount_snapshot','gallery_channel','business_type_code'
   ]),
   transaction_adjustments: new Set([
     'id','target_type','target_id','action','amount','reason',
@@ -117,7 +126,29 @@ const TABLE_COLS = {
   ]),
   creative_products: new Set([
     'id','name','sku','supplier','cost_price','retail_price','stock','unit',
-    'notes','created_at','updated_at'
+    'approval_status','submitted_by','approved_by','approved_at',
+    'notes','created_at','updated_at','standard_name','business_type_code',
+    'package_spec','barcode','is_beverage','is_countable_stock','is_active'
+  ]),
+  business_dimensions: new Set([
+    'id','dimension_type','code','name','parent_code','sort_order',
+    'is_active','notes','created_at','updated_at'
+  ]),
+  business_mapping_rules: new Set([
+    'id','source_table','source_field','match_type','match_value',
+    'business_layer_code','business_type_code','cost_type_code','capability_axis_code',
+    'priority','confidence','is_active','notes','created_at','updated_at'
+  ]),
+  record_business_links: new Set([
+    'id','source_table','source_id','source_line_key',
+    'business_layer_code','business_type_code','cost_type_code','capability_axis_code',
+    'product_id','product_alias_id','mapping_rule_id','override_reason',
+    'created_by','created_at','updated_at'
+  ]),
+  product_aliases: new Set([
+    'id','alias_name','standard_product_id','standard_name','business_type_code',
+    'package_spec','unit_price','cost_price_snapshot','is_beverage',
+    'confidence','is_active','notes','created_at','updated_at'
   ]),
   // users / app_config 不需要白名单：
   // - users 走独立路由（handleLogin / handleChangePassword）
@@ -125,7 +156,13 @@ const TABLE_COLS = {
 };
 
 // 只读视图/表（POST/PATCH/DELETE 拒绝）
-const READ_ONLY_TABLES = new Set(['space_usage_with_payments', 'revenue_facts']);
+const READ_ONLY_TABLES = new Set([
+  'space_usage_with_payments',
+  'revenue_facts',
+  'business_revenue_facts_v2',
+  'business_cost_facts_v2',
+  'business_profit_facts_v2'
+]);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
 function toCamel(row) {
@@ -135,7 +172,10 @@ function toCamel(row) {
     'creative_amount','venue_amount','other_amount','cash_amount','account_amount',
     'retail_amount','price','commission','receivable_amount','received_amount',
     'amount','net_amount','refund_amount','system_net_amount','confirmed_amount','difference_amount',
-    'file_size','pdf_size','total_amount'
+    'file_size','pdf_size','total_amount','settlement_price_snapshot','retail_price_snapshot',
+    'gross_amount_snapshot','net_amount_snapshot','unit_price','quantity','unit_cost',
+    'gross_amount','cost_price_snapshot','confidence','cost_amount','revenue_amount',
+    'gross_profit','gross_margin'
   ]);
   const o = {};
   for (let k of Object.keys(row)) {
@@ -259,6 +299,126 @@ function sha256(s) {
   return crypto.createHash('sha256').update(s).digest('hex');
 }
 
+function base64url(input) {
+  return Buffer.from(input).toString('base64url');
+}
+
+function signPayload(payload) {
+  return crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+}
+
+function createAuthToken(user) {
+  const payload = base64url(JSON.stringify({
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
+  }));
+  return payload + '.' + signPayload(payload);
+}
+
+async function getRequester(req) {
+  const header = req.headers.authorization || '';
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  if (!m) return null;
+  const [payload, sig] = m[1].split('.');
+  if (!payload || !sig || signPayload(payload) !== sig) return null;
+  let data;
+  try {
+    data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!data.exp || data.exp < Math.floor(Date.now() / 1000)) return null;
+  const r = await pool.query('SELECT id, username, display_name, role, is_active FROM users WHERE id = $1', [data.id]);
+  const user = r.rows[0];
+  if (!user || !user.is_active) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.display_name || user.username,
+    role: user.role
+  };
+}
+
+function isAdmin(user) {
+  return user?.role === 'admin';
+}
+
+function isEditor(user) {
+  return user?.role === 'editor';
+}
+
+function isViewer(user) {
+  return user?.role === 'viewer';
+}
+
+function ensureRole(res, user, roles) {
+  if (!user) {
+    sendError(res, 401, '未登录或登录已过期');
+    return false;
+  }
+  if (!roles.includes(user.role)) {
+    sendError(res, 403, '无权限执行此操作');
+    return false;
+  }
+  return true;
+}
+
+function canAccessTable(user, table, method) {
+  if (!user) return false;
+  if (isAdmin(user)) return true;
+  const readTables = {
+    editor: new Set([
+      'revenue','expense','space_usage','space_payments','space_usage_with_payments',
+      'gallery_sales','daily_closings','project_registry','artworks','creative_products',
+      'cash_movements','expense_attachments','expense_reimbursements','revenue_facts','app_config',
+      'business_dimensions','business_mapping_rules','record_business_links','product_aliases',
+      'business_revenue_facts_v2','business_cost_facts_v2','business_profit_facts_v2'
+    ]),
+    viewer: new Set([
+      'revenue','space_usage','space_payments','space_usage_with_payments',
+      'gallery_sales','daily_closings','project_registry','artworks','revenue_facts','app_config',
+      'business_dimensions'
+    ])
+  };
+  const writeTables = {
+    editor: new Set([
+      'revenue','expense','space_usage','space_payments','gallery_sales',
+      'daily_closings','project_registry','artworks','creative_products',
+      'cash_movements','expense_attachments','expense_reimbursements',
+      'record_business_links','product_aliases'
+    ])
+  };
+  if (method === 'GET') return !!readTables[user.role]?.has(table);
+  if (method === 'POST' || method === 'PATCH') return !!writeTables[user.role]?.has(table);
+  return false;
+}
+
+function guardEditorWrite(user, table, method, data) {
+  if (!isEditor(user)) return { ok: true };
+  if (method === 'DELETE') return { ok: false, message: '编辑者不能删除数据' };
+  if (table === 'revenue' || table === 'gallery_sales') {
+    const status = data?.status;
+    if (['已作废', '已退款', '部分退款'].includes(status)) {
+      return { ok: false, message: '编辑者不能退款或作废记录' };
+    }
+  }
+  if (table === 'daily_closings' && data?.status === '已复核') {
+    return { ok: false, message: '编辑者不能复核日结' };
+  }
+  if (table === 'artworks' || table === 'creative_products') {
+    if (data?.approval_status === '已上架' || data?.approval_status === '已下架') {
+      return { ok: false, message: '编辑者不能确认上架或下架' };
+    }
+    data.approval_status = data.approval_status || '待确认';
+    data.submitted_by = data.submitted_by || user.displayName || user.username;
+    delete data.approved_by;
+    delete data.approved_at;
+  }
+  return { ok: true };
+}
+
 function parsePath(reqUrl) {
   let p = url.parse(reqUrl, true);
   let pathname = p.pathname.replace(/\/+$/, '');
@@ -309,7 +469,8 @@ async function handleLogin(req, res) {
       sendJSON(res, 200, {
         id: user.id, username: user.username,
         displayName: user.display_name || user.username,
-        role: user.role, needPasswordChange: needChange
+        role: user.role, needPasswordChange: needChange,
+        token: createAuthToken(user)
       });
     } catch (e) { sendError(res, 400, e.message); }
   });
@@ -324,6 +485,10 @@ async function handleChangePassword(req, res) {
       const { userId, newPassword, oldPassword } = JSON.parse(body);
       if (!userId || !newPassword) return sendError(res, 400, '参数不完整');
       if (newPassword.length < 6) return sendError(res, 400, '密码长度至少 6 位');
+      const requester = await getRequester(req);
+      if (!requester || (requester.id !== userId && !isAdmin(requester))) {
+        return sendError(res, 403, '无权限修改该用户密码');
+      }
       if (oldPassword !== undefined && oldPassword !== null && oldPassword !== '') {
         const r = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
         if (r.rows.length === 0) return sendError(res, 404, '用户不存在');
@@ -344,6 +509,8 @@ async function handleCreateUser(req, res) {
   req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
+      const requester = await getRequester(req);
+      if (!ensureRole(res, requester, ['admin'])) return;
       const { username, displayName, role, password } = JSON.parse(body);
       if (!username) return sendError(res, 400, '请输入用户名');
       const pwd = password || '88888888';
@@ -369,6 +536,8 @@ async function handleResetPassword(req, res) {
   req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
+      const requester = await getRequester(req);
+      if (!ensureRole(res, requester, ['admin'])) return;
       const { userId, password } = JSON.parse(body);
       if (!userId) return sendError(res, 400, '缺少 userId');
       const pwd = password || '88888888';
@@ -385,7 +554,9 @@ async function handleResetPassword(req, res) {
 
 // --- POST /rest/v1/artworks/upload --- 作品图片上传（multipart/form-data）
 // 返回 { url: '/uploads/artworks/xxx.jpg' }
-function handleArtworkUpload(req, res) {
+async function handleArtworkUpload(req, res) {
+  const requester = await getRequester(req);
+  if (!ensureRole(res, requester, ['admin', 'editor'])) return;
   const contentType = req.headers['content-type'] || '';
   const boundaryValue = getMultipartBoundary(contentType);
   if (!/^multipart\/form-data/i.test(contentType) || !boundaryValue) {
@@ -437,7 +608,9 @@ function handleArtworkUpload(req, res) {
 
 // --- POST /rest/v1/expense_attachments/upload --- 支出票据图片上传
 // 返回 { url: '/uploads/expense/invoice/xxx.jpg', filename, size, mimeType, originalName }
-function handleExpenseAttachmentUpload(req, res, query) {
+async function handleExpenseAttachmentUpload(req, res, query) {
+  const requester = await getRequester(req);
+  if (!ensureRole(res, requester, ['admin', 'editor'])) return;
   const type = query.type === 'payment' ? 'payment' : 'invoice';
   const contentType = req.headers['content-type'] || '';
   const boundaryValue = getMultipartBoundary(contentType);
@@ -548,6 +721,8 @@ async function handleSpaceConflict(req, res) {
   req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
+      const requester = await getRequester(req);
+      if (!ensureRole(res, requester, ['admin', 'editor'])) return;
       const { space, date, endDate, excludeId } = JSON.parse(body);
       if (!space || !date) return sendError(res, 400, '缺少 space 或 date');
 
@@ -592,6 +767,8 @@ async function handleExpensePdfGenerate(req, res) {
   collectJSON(req, async (err, body) => {
     if (err) return sendError(res, 400, 'JSON 格式不正确');
     try {
+      const requester = await getRequester(req);
+      if (!ensureRole(res, requester, ['admin', 'editor'])) return;
       const expenseIds = Array.isArray(body.expenseIds)
         ? [...new Set(body.expenseIds.map(String).filter(Boolean))]
         : [];
@@ -938,12 +1115,23 @@ async function handleREST(req, res, urlInfo) {
     'users': 'users', 'operation_logs': 'operation_logs',
     'project_registry': 'project_registry', 'inventory': 'inventory',
     'artworks': 'artworks', 'partners': 'partners', 'content_posts': 'content_posts',
-    'creative_products': 'creative_products'
+    'creative_products': 'creative_products',
+    'business_dimensions': 'business_dimensions',
+    'business_mapping_rules': 'business_mapping_rules',
+    'record_business_links': 'record_business_links',
+    'product_aliases': 'product_aliases',
+    'business_revenue_facts_v2': 'business_revenue_facts_v2',
+    'business_cost_facts_v2': 'business_cost_facts_v2',
+    'business_profit_facts_v2': 'business_profit_facts_v2'
   };
   const dbTable = tableMap[table];
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);
 
   const method = req.method.toUpperCase();
+  const requester = await getRequester(req);
+  if (!canAccessTable(requester, dbTable, method)) {
+    return sendError(res, requester ? 403 : 401, requester ? '无权限访问该数据' : '未登录或登录已过期');
+  }
 
   // 只读视图/表拒绝写
   if (READ_ONLY_TABLES.has(dbTable) && method !== 'GET' && method !== 'OPTIONS') {
@@ -981,6 +1169,10 @@ async function handleREST(req, res, urlInfo) {
             params.push(v.slice(6));
           }
         }
+      }
+      if (isViewer(requester) && dbTable === 'daily_closings') {
+        conditions.push(`"status" = $${paramIdx++}`);
+        params.push('已复核');
       }
 
       if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
@@ -1028,6 +1220,8 @@ async function handleREST(req, res, urlInfo) {
           data = toSnake(data);
           if (!data.created_at) data.created_at = new Date().toISOString();
           data = normalizeTimestamps(data);
+          const guard = guardEditorWrite(requester, dbTable, method, data);
+          if (!guard.ok) return sendError(res, 403, guard.message);
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -1070,6 +1264,8 @@ async function handleREST(req, res, urlInfo) {
           let data = JSON.parse(body);
           data = toSnake(data);
           data = normalizeTimestamps(data);
+          const guard = guardEditorWrite(requester, dbTable, method, data);
+          if (!guard.ok) return sendError(res, 403, guard.message);
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -1090,6 +1286,7 @@ async function handleREST(req, res, urlInfo) {
 
     // --- DELETE /rest/v1/table?id=eq.xxx ---
     else if (method === 'DELETE') {
+      if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可删除数据');
       let idVal;
       if (query.id && query.id.startsWith('eq.')) {
         idVal = query.id.slice(3);
@@ -1192,7 +1389,7 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('AIWEI API server running on port ' + PORT);
+server.listen(PORT, HOST, () => {
+  console.log(`AIWEI API server running on ${HOST}:${PORT}`);
   scheduleExpenseArtifactRetention();
 });

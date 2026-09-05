@@ -12,8 +12,8 @@ const MODELS = {
     expense: 'aiwei_expense',
     space: 'aiwei_space'
   },
-  PROJECT_TYPES: ['运营','耗材','展览','团建','工坊','画廊','其他'],
-  EXPENSE_CATEGORIES: ['材料','茶歇','设备','人工','交通','通信','打印','运费','保洁','其他'],
+  PROJECT_TYPES: ['运营'],
+  EXPENSE_CATEGORIES: ['人员劳务','场地物业','办公行政','市场推广','活动展览成本','商品采购','物料耗材','设备资产','交通差旅','税费手续费','维修保洁','其他支出'],
   SPACES: ['1号厅','2号厅','美学空间','多功能厅','六楼综合空间','走廊画廊','户外露台'],
   SPACE_TYPES: ['展览','企业团建','沙龙','会议活动','品牌快闪','长期经营','场地租赁'],
   SPACE_STATUSES: ['筹备中','已确认','进行中','已完成','已取消','空闲'],
@@ -121,7 +121,7 @@ function createExpense(data = {}) {
     date: data.date || todayStr(),
     type: isOperationalExpenseRecord(data) ? EXPENSE_RECORD_TYPES.operational : EXPENSE_RECORD_TYPES.legacyBorrow,
     project: data.project || '运营',
-    category: data.category || '材料',
+    category: data.category || '其他支出',
     amount: +data.amount || 0,
     description: data.description || '',
     handler: data.handler || '',
@@ -294,15 +294,37 @@ function createDailyClosing(data = {}) {
 
 // 文创产品
 function createCreativeProduct(data = {}) {
+  const bool = (value, fallback = false) => {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', '是', '是的', '饮料', '启用'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', '否', '不是', '停用'].includes(normalized)) return false;
+    return fallback;
+  };
+  const name = data.name || '';
+  const isBeverage = bool(data.isBeverage ?? data.is_beverage, false);
+  const businessTypeCode = data.businessTypeCode || data.business_type_code || (isBeverage ? 'beverage_retail' : 'creative_retail');
   return {
     id: data.id || createId(),
-    name: data.name || '',
+    name,
+    standardName: data.standardName || data.standard_name || name,
+    businessTypeCode,
+    packageSpec: data.packageSpec || data.package_spec || '',
+    barcode: data.barcode || '',
+    isBeverage,
+    isCountableStock: bool(data.isCountableStock ?? data.is_countable_stock, true),
+    isActive: bool(data.isActive ?? data.is_active, true),
     sku: data.sku || '',
     supplier: data.supplier || '',
     costPrice: +data.costPrice || +data.cost_price || 0,
     retailPrice: +data.retailPrice || +data.retail_price || 0,
     stock: +data.stock || 0,
     unit: data.unit || '个',
+    approvalStatus: data.approvalStatus || data.approval_status || '已上架',
+    submittedBy: data.submittedBy || data.submitted_by || '',
+    approvedBy: data.approvedBy || data.approved_by || '',
+    approvedAt: data.approvedAt || data.approved_at || null,
     notes: data.notes || '',
     createdAt: data.createdAt || data.created_at || new Date().toISOString(),
     updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()
@@ -330,6 +352,10 @@ function createArtwork(data = {}) {
     retailPrice: num(data.retailPrice ?? data.retail_price),
     totalQty: num(data.totalQty ?? data.total_qty) || 1,
     soldQty: num(data.soldQty ?? data.sold_qty),
+    approvalStatus: data.approvalStatus || data.approval_status || '已上架',
+    submittedBy: data.submittedBy || data.submitted_by || '',
+    approvedBy: data.approvedBy || data.approved_by || '',
+    approvedAt: data.approvedAt || data.approved_at || null,
     notes: data.notes || '',
     createdAt: data.createdAt || data.created_at || new Date().toISOString(),
     updatedAt: data.updatedAt || data.updated_at || new Date().toISOString()

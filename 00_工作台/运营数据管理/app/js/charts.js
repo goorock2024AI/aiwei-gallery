@@ -24,6 +24,7 @@ var Charts = {
   _expCatPeriod: 'month',    // 支出分类卡片期间维度：'month' 月度 / 'year' 年度
   _revOverviewPeriod: 'day', // 收入总览卡片期间维度：'day' 本日 / 'month' 本月 / 'year' 本年 / 'custom' 选定日（默认当日）
   _revOverviewCustomDate: null, // 选定日期模式下的目标日期（YYYY-MM-DD），首次进入时取 todayStr()
+  _revenueCompareCategories: ['总收入', '门票', '咖啡套票', '咖啡', '工坊', '文创', '场地', '画廊', '其他'],
 
   _destroy(id) {
     if (this._charts[id]) { this._charts[id].destroy(); delete this._charts[id]; }
@@ -73,10 +74,195 @@ var Charts = {
     `;
   },
 
+  _renderInsightList(targetId, items) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const validItems = (items || []).filter(Boolean);
+    if (!validItems.length) {
+      target.innerHTML = '';
+      return;
+    }
+    target.innerHTML = `
+      <div class="chart-insights">
+        ${validItems.map(item => `
+          <div class="chart-insight">
+            <span>${this._escapeHtml(item.label)}</span>
+            <strong>${this._escapeHtml(item.value)}</strong>
+            <em>${this._escapeHtml(item.note || '')}</em>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  },
+
+  _rankEntries(labels, data) {
+    return labels
+      .map((label, i) => ({ label, value: +data[i] || 0 }))
+      .filter(item => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+  },
+
   _getYM() {
     const year = document.getElementById('rpt-year')?.value || '2026';
     const month = document.getElementById('rpt-month')?.value || '';
     return { year, month };
+  },
+
+  _escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    })[ch]);
+  },
+
+  _formatDeltaPct(current, previous) {
+    if (!previous) return current ? '新增' : '-';
+    const pct = (current - previous) / Math.abs(previous) * 100;
+    const sign = pct > 0 ? '+' : '';
+    return sign + pct.toFixed(1) + '%';
+  },
+
+  _getRevenueCompareSelection() {
+    const controls = document.getElementById('revenue-compare-categories');
+    if (controls) {
+      return Array.from(controls.querySelectorAll('input:checked')).map(input => input.value);
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem('aiwei_revenue_compare_categories') || '[]');
+      if (Array.isArray(saved) && saved.length) return saved.filter(c => this._revenueCompareCategories.includes(c));
+    } catch {}
+    return ['总收入', '门票', '咖啡', '工坊', '文创', '场地', '画廊'];
+  },
+
+  _factAmount(row) {
+    return Number(row?.netAmount ?? row?.net_amount ?? row?.amount ?? 0) || 0;
+  },
+
+  _factCategory(row) {
+    const category = row?.category || '其他';
+    return category === '场地旧口径' ? '场地' : category;
+  },
+
+  async _loadRevenueFactsForYear(year) {
+    let facts = await Store.getByYear('revenueFacts', year);
+    if (facts.length) return facts;
+
+    const [legacyRevenues, legacyGallery, legacySpace] = await Promise.all([
+      Store.getByYear('revenue', year),
+      Store.getByYear('gallery', year),
+      Store.getAll('space')
+    ]);
+    const pushFact = (arr, date, category, amount, projectName) => {
+      if ((+amount || 0) !== 0) arr.push({ date, category, amount, netAmount: amount, projectName });
+    };
+    facts = [];
+    legacyRevenues.forEach(r => {
+      pushFact(facts, r.date, '门票', r.ticketAmount, r.projectName);
+      pushFact(facts, r.date, '咖啡套票', r.comboAmount, r.projectName);
+      pushFact(facts, r.date, '咖啡', r.coffeeAmount, r.projectName);
+      pushFact(facts, r.date, '工坊', r.workshopAmount, r.projectName);
+      pushFact(facts, r.date, '文创', (+r.retailAmount || 0) + (+r.creativeAmount || 0), r.projectName);
+      pushFact(facts, r.date, '场地', r.venueAmount, r.projectName);
+      pushFact(facts, r.date, '其他', r.otherAmount, r.projectName || r.otherDesc);
+    });
+    legacyGallery.forEach(r => {
+      pushFact(facts, r.date, '画廊', (+r.price || 0) - (+r.commission || 0), r.artworkName || r.artwork_name);
+    });
+    legacySpace.forEach(s => {
+      if (s.rentalType !== '付费') return;
+      (s.payments || []).forEach(p => {
+        if ((p.paymentDate || '').startsWith(year)) pushFact(facts, p.paymentDate, '场地', +p.amount || 0, s.projectName || s.project_name);
+      });
+    });
+    return facts;
+  },
+
+  _aggregateRevenueMonthly(facts, categories, year) {
+    const byCategory = {};
+    const totals = Array(12).fill(0);
+    const monthDetails = Array.from({ length: 12 }, () => ({}));
+    categories.forEach(category => { byCategory[category] = Array(12).fill(0); });
+
+    facts.forEach(row => {
+      const date = String(row.date || '').slice(0, 10);
+      if (!date.startsWith(year + '-')) return;
+      const category = this._factCategory(row);
+      if (!categories.includes(category)) return;
+      const monthIndex = Number(date.slice(5, 7)) - 1;
+      if (monthIndex < 0 || monthIndex > 11) return;
+      const amount = this._factAmount(row);
+      byCategory[category][monthIndex] += amount;
+      totals[monthIndex] += amount;
+      const key = row.projectName || row.project_name || row.sourceName || row.source_name || category;
+      monthDetails[monthIndex][key] = (monthDetails[monthIndex][key] || 0) + amount;
+    });
+
+    return { byCategory, totals, monthDetails };
+  },
+
+  _buildRevenueComparisonDatasets(year, categories, current, previous, colorByCategory, options) {
+    options = options || {};
+    const datasets = [];
+    if (options.includeGrandTotal && options.grandCurrent) {
+      datasets.push({
+        label: `${year}年总收入`,
+        data: options.grandCurrent.totals,
+        borderColor: this._chartColors.revenue.total,
+        backgroundColor: this._chartColors.revenue.total,
+        borderWidth: 3,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        tension: 0.28,
+        fill: false,
+        order: 0,
+        _compareRole: 'grand-total'
+      });
+    }
+    if (categories.length) datasets.push({
+      label: `${year}年筛选合计`,
+      data: current.totals,
+      borderColor: this._chartColors.revenue.total,
+      backgroundColor: this._chartColors.revenue.total,
+      borderWidth: 3,
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      tension: 0.28,
+      fill: false,
+      order: 0,
+      _compareRole: 'current-total'
+    });
+    datasets.push(...categories.map(category => ({
+      label: category,
+      data: current.byCategory[category] || Array(12).fill(0),
+      borderColor: colorByCategory[category] || '#64748b',
+      backgroundColor: colorByCategory[category] || '#64748b',
+      borderWidth: 2,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      tension: 0.28,
+      fill: false,
+      order: 1,
+      _compareRole: 'category'
+    })));
+    const previousData = categories.length ? previous.totals : (options.grandPrevious?.totals || previous.totals);
+    const previousDataset = {
+      label: `${+year - 1}年同口径合计`,
+      data: previousData,
+      borderColor: '#8a8578',
+      backgroundColor: '#8a8578',
+      borderWidth: 2,
+      borderDash: [6, 5],
+      pointRadius: 0,
+      tension: 0.2,
+      fill: false,
+      order: 2,
+      _compareRole: 'previous-total'
+    };
+    datasets.push(previousDataset);
+    return datasets;
   },
 
   _onFilterChange() {
@@ -94,7 +280,49 @@ var Charts = {
     const container = document.getElementById('report-charts');
     html(container, `
       <div class="chart-grid">
-        <div class="chart-box full"><div class="chart-title">月度收入趋势</div><canvas id="chart-revenue-trend"></canvas></div>
+        <div class="report-section-title">
+          <span>趋势变化</span>
+          <em>先看当月日变化，再看全年月度变化。</em>
+        </div>
+        <div class="chart-box full rpt-daily-trend">
+          <div class="chart-title-row">
+            <div>
+              <div class="chart-title">当月日收入趋势</div>
+              <div class="chart-subtitle">识别本月收入峰值、低谷和经营基准线关系</div>
+            </div>
+          </div>
+          <canvas id="chart-daily-revenue"></canvas>
+          <div id="chart-daily-revenue-insights"></div>
+        </div>
+        <div class="chart-box full">
+          <div class="chart-title">月度收入趋势</div>
+          <div class="chart-subtitle">全年总收入和各分类贡献的月度走势</div>
+          <canvas id="chart-revenue-trend"></canvas>
+          <div id="chart-revenue-trend-insights"></div>
+        </div>
+        <div class="report-section-title">
+          <span>结构归因</span>
+          <em>解释收入变化来自哪些分类，并保留同口径对比。</em>
+        </div>
+        <div class="chart-box full revenue-compare-box">
+          <div class="chart-title-row">
+            <div>
+              <div class="chart-title">收入对比与归因</div>
+              <div class="chart-subtitle">筛选收入分类，查看今年合计、分类贡献和去年同口径趋势</div>
+            </div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="Charts.renderRevenueComparison()">更新对比</button>
+          </div>
+          <div class="revenue-compare-controls" id="revenue-compare-categories">
+            ${this._revenueCompareCategories.map(category => `
+              <label class="compare-check">
+                <input type="checkbox" value="${category}" ${this._getRevenueCompareSelection().includes(category) ? 'checked' : ''}>
+                <span>${category}</span>
+              </label>
+            `).join('')}
+          </div>
+          <div class="revenue-compare-summary" id="revenue-compare-summary"></div>
+          <canvas id="chart-revenue-comparison"></canvas>
+        </div>
         <div class="chart-box">
           <div class="chart-title-row">
             <div class="chart-title" id="rev-struct-title">收入结构</div>
@@ -106,7 +334,6 @@ var Charts = {
           <canvas id="chart-revenue-structure"></canvas>
           <div id="chart-revenue-structure-summary" class="chart-summary"></div>
         </div>
-        <div class="chart-box"><div class="chart-title">工坊项目销量排名</div><canvas id="chart-workshop-rank"></canvas></div>
         <div class="chart-box">
           <div class="chart-title-row">
             <div class="chart-title" id="exp-cat-title">支出分类汇总</div>
@@ -118,29 +345,158 @@ var Charts = {
           <canvas id="chart-expense-category"></canvas>
           <div id="chart-expense-category-summary" class="chart-summary"></div>
         </div>
-        <div class="chart-box"><div class="chart-title">月度支出趋势</div><canvas id="chart-expense-trend"></canvas></div>
+        <div class="chart-box"><div class="chart-title">月度支出趋势</div><canvas id="chart-expense-trend"></canvas><div id="chart-expense-trend-insights"></div></div>
+        <div class="chart-box"><div class="chart-title">工坊项目销量排名</div><canvas id="chart-workshop-rank"></canvas></div>
       </div>
     `);
-    // 当月日收入趋势放在收入总览下方
-    const oldDaily = page.querySelector('.rpt-daily-trend');
-    if (oldDaily) oldDaily.remove();
-    const overview = page.querySelector('.rpt-overview');
-    if (overview) {
-      const dailyDiv = document.createElement('div');
-      dailyDiv.className = 'chart-box full rpt-daily-trend';
-      dailyDiv.innerHTML = '<div class="chart-title">当月日收入趋势</div><canvas id="chart-daily-revenue"></canvas>';
-      overview.insertAdjacentElement('afterend', dailyDiv);
-    }
     // 延迟一帧让 canvas 元素创建完毕
     await new Promise(r => setTimeout(r, 100));
-    await this.renderRevenueTrend(year);
     await this.renderDailyRevenueTrend();
+    await this.renderRevenueTrend(year);
+    await this.renderRevenueComparison();
     await this.renderRevenueStructure();
     this._bindRevStructToggle();
-    await this.renderWorkshopRank();
     await this.renderExpenseCategory();
     this._bindExpCatToggle();
     await this.renderExpenseTrend(year);
+    await this.renderWorkshopRank();
+  },
+
+  async renderRevenueComparison() {
+    const canvas = document.getElementById('chart-revenue-comparison');
+    if (!canvas) return;
+    this._destroy('revenue-comparison');
+
+    const { year } = this._getYM();
+    const selected = this._getRevenueCompareSelection();
+    const allCategories = this._revenueCompareCategories.filter(category => category !== '总收入');
+    const includeGrandTotal = selected.includes('总收入');
+    const categories = selected.filter(category => category !== '总收入');
+    const compareCategories = categories.length ? categories : (includeGrandTotal ? [] : allCategories);
+    const storedSelection = selected.length ? selected : ['总收入', ...allCategories];
+    try {
+      localStorage.setItem('aiwei_revenue_compare_categories', JSON.stringify(storedSelection));
+    } catch {}
+
+    const [facts, prevFacts] = await Promise.all([
+      this._loadRevenueFactsForYear(year),
+      this._loadRevenueFactsForYear(String(+year - 1))
+    ]);
+    const current = this._aggregateRevenueMonthly(facts, compareCategories, year);
+    const previous = this._aggregateRevenueMonthly(prevFacts, compareCategories, String(+year - 1));
+    const grandCurrent = this._aggregateRevenueMonthly(facts, allCategories, year);
+    const grandPrevious = this._aggregateRevenueMonthly(prevFacts, allCategories, String(+year - 1));
+    const labels = Array.from({ length: 12 }, (_, i) => (i + 1) + '月');
+    const focusTotals = compareCategories.length ? current.totals : grandCurrent.totals;
+    const prevFocusTotals = compareCategories.length ? previous.totals : grandPrevious.totals;
+    const total = focusTotals.reduce((s, v) => s + v, 0);
+    const prevTotal = prevFocusTotals.reduce((s, v) => s + v, 0);
+    const bestMonthIndex = focusTotals.reduce((best, value, i) => value > focusTotals[best] ? i : best, 0);
+    const latestMonthIndex = Math.max(0, Math.min(11, (year === todayStr().slice(0, 4) ? Number(todayStr().slice(5, 7)) : 12) - 1));
+    const prevMonthIndex = Math.max(0, latestMonthIndex - 1);
+    const mom = this._formatDeltaPct(focusTotals[latestMonthIndex], focusTotals[prevMonthIndex]);
+    const yoy = this._formatDeltaPct(total, prevTotal);
+    const fmt = n => this._formatMoney(n);
+
+    const summary = document.getElementById('revenue-compare-summary');
+    if (summary) {
+      summary.innerHTML = `
+        <div class="compare-metric"><span>${compareCategories.length ? '筛选合计' : '总收入'}</span><strong>${fmt(total)}</strong><em>${compareCategories.length ? `${year} 年已选分类` : `${year} 年全分类`}</em></div>
+        <div class="compare-metric"><span>同比</span><strong class="${total >= prevTotal ? 'up' : 'down'}">${yoy}</strong><em>对比 ${+year - 1} 年</em></div>
+        <div class="compare-metric"><span>环比增长率</span><strong class="${focusTotals[latestMonthIndex] >= focusTotals[prevMonthIndex] ? 'up' : 'down'}">${mom}</strong><em>${latestMonthIndex + 1}月 vs ${prevMonthIndex + 1}月</em></div>
+        <div class="compare-metric"><span>峰值月份</span><strong>${bestMonthIndex + 1}月</strong><em>${fmt(focusTotals[bestMonthIndex])}</em></div>
+      `;
+    }
+
+    const colorByCategory = {
+      '门票': this._chartColors.revenue.ticket,
+      '咖啡套票': this._chartColors.revenue.combo,
+      '咖啡': this._chartColors.revenue.coffee,
+      '工坊': this._chartColors.revenue.workshop,
+      '文创': this._chartColors.revenue.creative,
+      '场地': this._chartColors.revenue.venue,
+      '画廊': this._chartColors.revenue.gallery,
+      '其他': this._chartColors.revenue.other
+    };
+    const datasets = this._buildRevenueComparisonDatasets(year, compareCategories, current, previous, colorByCategory, {
+      includeGrandTotal,
+      grandCurrent,
+      grandPrevious
+    });
+
+    this._charts['revenue-comparison'] = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: {
+            callbacks: {
+              afterBody: (context) => {
+                const idx = context[0].dataIndex;
+                return [
+                  `${year}年当前口径: ${fmt(focusTotals[idx])}`,
+                  `${+year - 1}年同口径: ${fmt(prevFocusTotals[idx])}`,
+                  `环比: ${this._formatDeltaPct(focusTotals[idx], focusTotals[Math.max(0, idx - 1)])}`
+                ];
+              }
+            }
+          }
+        },
+        scales: {
+          y: { beginAtZero: true, ticks: { callback: v => '¥' + v } }
+        }
+      }
+    });
+
+    const controls = document.getElementById('revenue-compare-categories');
+    if (controls && !controls._bound) {
+      controls._bound = true;
+      controls.addEventListener('change', () => this.renderRevenueComparison());
+    }
+  },
+
+  _renderRevenueComparisonTable(year, current, previous, categories) {
+    const target = document.getElementById('revenue-compare-table');
+    if (!target) return;
+    const rows = Array.from({ length: 12 }, (_, i) => {
+      const detailEntries = Object.entries(current.monthDetails[i] || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([name, amount]) => `${this._escapeHtml(name)} ${this._formatMoney(amount)}`)
+        .join(' · ');
+      return {
+        month: i + 1,
+        total: current.totals[i],
+        prev: previous.totals[i],
+        topCategory: categories
+          .map(category => ({ category, value: current.byCategory[category]?.[i] || 0 }))
+          .sort((a, b) => b.value - a.value)[0],
+        detail: detailEntries || '暂无明细'
+      };
+    });
+    target.innerHTML = `
+      <div class="table-wrap compare-table-wrap">
+        <table class="data-table">
+          <thead><tr><th>月份</th><th>${year}年收入</th><th>${+year - 1}年同月</th><th>同比</th><th>贡献最高分类</th><th>主要项目/来源</th></tr></thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td>${row.month}月</td>
+                <td><strong>${this._formatMoney(row.total)}</strong></td>
+                <td>${this._formatMoney(row.prev)}</td>
+                <td><span class="${row.total >= row.prev ? 'compare-up' : 'compare-down'}">${this._formatDeltaPct(row.total, row.prev)}</span></td>
+                <td>${this._escapeHtml(row.topCategory.category)} ${this._formatMoney(row.topCategory.value)}</td>
+                <td>${row.detail}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
   },
 
   async _renderRevenueOverview(period) {
@@ -253,6 +609,20 @@ var Charts = {
     const venueTotal = spaceRentIncome;
     const galleryTotal = monthGal.reduce((s, r) => s + (r.price||0) - (r.commission||0), 0);
     const otherTotal = monthRev.reduce((s, r) => s + (r.otherAmount||0), 0);
+    const categoryTotals = [
+      { label: '门票', value: ticketTotal },
+      { label: '咖啡套票', value: comboTotal },
+      { label: '咖啡', value: coffeeTotal },
+      { label: '工坊', value: workshopTotal },
+      { label: '文创/零售', value: creativeTotal },
+      { label: '场地', value: venueTotal },
+      { label: '画廊', value: galleryTotal },
+      { label: '其他', value: otherTotal }
+    ];
+    const rankedCategories = categoryTotals.filter(item => item.value > 0).sort((a, b) => b.value - a.value);
+    const topCategory = rankedCategories[0];
+    const activeCategoryCount = rankedCategories.length;
+    const concentration = topCategory && totalRevenue > 0 ? (topCategory.value / totalRevenue * 100).toFixed(1) + '%' : '-';
 
     const _fmt = n => Number(n || 0).toFixed(2);
 
@@ -272,16 +642,39 @@ var Charts = {
             <input type="date" id="rev-overview-date" class="rev-overview-date-input ${period === 'custom' ? 'active' : ''}" value="${customDate}" max="${today}" title="选择任意历史日期查看当日收入总览" />
           </div>
         </div>
-        <div class="stats-grid" style="margin-top:12px">
-          <div class="stat-card"><div class="stat-label">总收入（${periodLabel}）</div><div class="stat-value" style="font-size:22px">¥${_fmt(totalRevenue)}</div></div>
-          <div class="stat-card"><div class="stat-label">门票</div><div class="stat-value">¥${_fmt(ticketTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">咖啡套票</div><div class="stat-value">¥${_fmt(comboTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">咖啡</div><div class="stat-value">¥${_fmt(coffeeTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">工坊</div><div class="stat-value">¥${_fmt(workshopTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">文创/零售</div><div class="stat-value">¥${_fmt(creativeTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">场地</div><div class="stat-value">¥${_fmt(venueTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">画廊</div><div class="stat-value">¥${_fmt(galleryTotal)}</div></div>
-          <div class="stat-card"><div class="stat-label">其他</div><div class="stat-value">¥${_fmt(otherTotal)}</div></div>
+        <div class="overview-decision-grid">
+          <div class="overview-primary-card">
+            <span>经营收入</span>
+            <strong>¥${_fmt(totalRevenue)}</strong>
+            <em>${periodLabel}</em>
+          </div>
+          <div class="overview-primary-card">
+            <span>主要来源</span>
+            <strong>${topCategory ? topCategory.label : '暂无收入'}</strong>
+            <em>${topCategory ? `贡献 ¥${_fmt(topCategory.value)}` : '当前期间无收入记录'}</em>
+          </div>
+          <div class="overview-primary-card">
+            <span>结构集中度</span>
+            <strong>${concentration}</strong>
+            <em>${topCategory ? `${topCategory.label} 占总收入` : '暂无可计算结构'}</em>
+          </div>
+        </div>
+        <div class="overview-diagnostic-grid">
+          <div class="diagnostic-card"><span>活跃分类</span><strong>${activeCategoryCount}</strong><em>${activeCategoryCount ? '个分类有收入' : '暂无收入分类'}</em></div>
+          <div class="diagnostic-card"><span>次要来源</span><strong>${rankedCategories[1] ? rankedCategories[1].label : '-'}</strong><em>${rankedCategories[1] ? `贡献 ¥${_fmt(rankedCategories[1].value)}` : '暂无第二收入来源'}</em></div>
+          <div class="diagnostic-card"><span>追溯线索</span><strong>${rankedCategories.length ? rankedCategories.slice(0, 3).map(item => item.label).join(' / ') : '-'}</strong><em>优先查看这些分类的明细</em></div>
+        </div>
+        <div class="overview-category-strip">
+          ${categoryTotals.map(item => {
+            const pct = totalRevenue > 0 ? Math.max(0, item.value / totalRevenue * 100) : 0;
+            return `
+              <div class="overview-category-row">
+                <span>${item.label}</span>
+                <div><i style="width:${pct}%"></i></div>
+                <strong>¥${_fmt(item.value)}</strong>
+              </div>
+            `;
+          }).join('')}
         </div>
       </div>
     `;
@@ -426,6 +819,20 @@ var Charts = {
 
     // 每月合计金额
     const totalData = labels.map((_, i) => ticketData[i] + comboData[i] + coffeeData[i] + workshopData[i] + creativeData[i] + venueData[i] + galleryData[i] + otherData[i]);
+    const bestMonthIndex = totalData.reduce((best, value, i) => value > totalData[best] ? i : best, 0);
+    const categoryTotals = this._rankEntries(
+      ['门票', '咖啡套票', '咖啡', '工坊', '文创', '场地', '画廊', '其他'],
+      [
+        ticketData.reduce((s, v) => s + v, 0),
+        comboData.reduce((s, v) => s + v, 0),
+        coffeeData.reduce((s, v) => s + v, 0),
+        workshopData.reduce((s, v) => s + v, 0),
+        creativeData.reduce((s, v) => s + v, 0),
+        venueData.reduce((s, v) => s + v, 0),
+        galleryData.reduce((s, v) => s + v, 0),
+        otherData.reduce((s, v) => s + v, 0)
+      ]
+    );
 
     const ctx = canvas.getContext('2d');
     this._charts['revenue-trend'] = new Chart(ctx, {
@@ -464,6 +871,18 @@ var Charts = {
         }
       }
     });
+    this._renderInsightList('chart-revenue-trend-insights', [
+      {
+        label: '全年峰值',
+        value: totalData[bestMonthIndex] > 0 ? `${bestMonthIndex + 1}月 ${this._formatMoney(totalData[bestMonthIndex])}` : '暂无收入',
+        note: '先定位峰值月份，再看结构归因'
+      },
+      {
+        label: '年度主来源',
+        value: categoryTotals[0] ? `${categoryTotals[0].label} ${this._formatMoney(categoryTotals[0].value)}` : '暂无收入',
+        note: categoryTotals[1] ? `第二来源：${categoryTotals[1].label}` : '暂无第二收入来源'
+      }
+    ]);
   },
 
   async renderDailyRevenueTrend() {
@@ -531,6 +950,9 @@ var Charts = {
     );
     const dailyRevenueFloor = 900;
     const dailyRevenueFloorData = labels.map(() => dailyRevenueFloor);
+    const bestDayIndex = totalData.reduce((best, value, i) => value > totalData[best] ? i : best, 0);
+    const activeDays = totalData.filter(value => value > 0).length;
+    const monthTotal = totalData.reduce((sum, value) => sum + value, 0);
 
     const ctx = canvas.getContext('2d');
     this._charts['daily-revenue'] = new Chart(ctx, {
@@ -538,8 +960,8 @@ var Charts = {
       data: {
         labels,
         datasets: [
-          { label: '合计', data: totalData, borderColor: this._chartColors.revenue.total, backgroundColor: this._chartColors.revenue.total, borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 5, tension: 0.3, fill: false, order: 0 },
-          { label: '日均收入红线 900', data: dailyRevenueFloorData, borderColor: this._chartColors.revenue.floor, backgroundColor: this._chartColors.revenue.floor, borderWidth: 2, borderDash: [6, 6], pointRadius: 0, pointHoverRadius: 0, tension: 0, fill: false, order: 1 },
+          { label: '合计', data: totalData, borderColor: this._chartColors.revenue.total, backgroundColor: this._chartColors.revenue.total, borderWidth: 2, pointRadius: 2, pointHoverRadius: 5, tension: 0.3, fill: false, order: 0 },
+          { label: '经营基准线 900', data: dailyRevenueFloorData, borderColor: this._chartColors.revenue.floor, backgroundColor: this._chartColors.revenue.floor, borderWidth: 1.25, borderDash: [6, 6], pointRadius: 0, pointHoverRadius: 0, tension: 0, fill: false, order: 1 },
           { label: '门票', data: ticketData, borderColor: this._chartColors.revenue.ticket, backgroundColor: this._chartColors.revenue.ticket, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
           { label: '咖啡套票', data: comboData, borderColor: this._chartColors.revenue.combo, backgroundColor: this._chartColors.revenue.combo, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
           { label: '咖啡', data: coffeeData, borderColor: this._chartColors.revenue.coffee, backgroundColor: this._chartColors.revenue.coffee, borderWidth: 2, pointRadius: 2, pointHoverRadius: 4, tension: 0.3, fill: false, hidden: true },
@@ -561,7 +983,7 @@ var Charts = {
               afterBody: function(context) {
                 const idx = context[0].dataIndex;
                 const total = totalData[idx];
-                return ['合计: ¥' + (total || 0).toFixed(2), '日均收入红线: ¥' + dailyRevenueFloor.toFixed(2)];
+                return ['合计: ¥' + (total || 0).toFixed(2), '经营基准线: ¥' + dailyRevenueFloor.toFixed(2)];
               }
             }
           }
@@ -572,6 +994,23 @@ var Charts = {
         }
       }
     });
+    this._renderInsightList('chart-daily-revenue-insights', [
+      {
+        label: '本月累计',
+        value: this._formatMoney(monthTotal),
+        note: `${activeDays} 天有收入记录`
+      },
+      {
+        label: '日峰值',
+        value: totalData[bestDayIndex] > 0 ? `${bestDayIndex + 1}日 ${this._formatMoney(totalData[bestDayIndex])}` : '暂无收入',
+        note: '优先追溯峰值日的收入来源'
+      },
+      {
+        label: '基准线',
+        value: this._formatMoney(dailyRevenueFloor),
+        note: '作为经营参照，降低视觉权重保留'
+      }
+    ]);
   },
 
   _bindRevStructToggle() {
@@ -651,25 +1090,33 @@ var Charts = {
       this._chartColors.revenue.gallery,
       this._chartColors.revenue.other
     ];
+    const sortedRevenue = revenueLabels
+      .map((label, i) => ({ label, value: revenueData[i], color: revenueColors[i] }))
+      .sort((a, b) => (+b.value || 0) - (+a.value || 0));
+    const sortedRevenueLabels = sortedRevenue.map(item => item.label);
+    const sortedRevenueData = sortedRevenue.map(item => item.value);
+    const sortedRevenueColors = sortedRevenue.map(item => item.color);
     this._renderBreakdownSummary(
       'chart-revenue-structure-summary',
-      revenueLabels,
-      revenueData,
-      revenueColors,
+      sortedRevenueLabels,
+      sortedRevenueData,
+      sortedRevenueColors,
       '当前期间暂无收入结构数据'
     );
     const isNarrow = this._isNarrowChart();
+    const nonZeroCount = sortedRevenueData.filter(value => (+value || 0) > 0).length;
+    const useBar = isNarrow || nonZeroCount <= 2 || nonZeroCount > 5;
     this._charts['revenue-structure'] = new Chart(ctx, {
-      type: isNarrow ? 'bar' : 'doughnut',
+      type: useBar ? 'bar' : 'doughnut',
       data: {
-        labels: revenueLabels,
+        labels: sortedRevenueLabels,
         datasets: [{
-          data: revenueData,
-          backgroundColor: revenueColors,
-          borderRadius: isNarrow ? 4 : 0
+          data: sortedRevenueData,
+          backgroundColor: sortedRevenueColors,
+          borderRadius: useBar ? 4 : 0
         }]
       },
-      options: isNarrow ? {
+      options: useBar ? {
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
@@ -694,7 +1141,7 @@ var Charts = {
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: {
-            position: 'right',
+            display: false,
             labels: {
               boxWidth: 12,
               padding: 8,
@@ -821,21 +1268,30 @@ var Charts = {
     }
 
     const colors = this._chartColors.expense.palette;
+    const colorByLabel = {};
+    labels.forEach((label, i) => { colorByLabel[label] = colors[i % colors.length]; });
+    const sortedExpense = labels
+      .map((label, i) => ({ label, value: data[i], color: colorByLabel[label] }))
+      .sort((a, b) => (+b.value || 0) - (+a.value || 0));
+    const sortedExpenseLabels = sortedExpense.map(item => item.label);
+    const sortedExpenseData = sortedExpense.map(item => item.value);
+    const sortedExpenseColors = sortedExpense.map(item => item.color);
     this._renderBreakdownSummary(
       'chart-expense-category-summary',
-      labels,
-      data,
-      colors,
+      sortedExpenseLabels,
+      sortedExpenseData,
+      sortedExpenseColors,
       '当前期间暂无运营支出数据'
     );
     if (!labels.length) return;
 
     const isNarrow = this._isNarrowChart();
+    const useBar = isNarrow || sortedExpenseLabels.length <= 2 || sortedExpenseLabels.length > 5;
     const ctx = canvas.getContext('2d');
     this._charts['expense-category'] = new Chart(ctx, {
-      type: isNarrow ? 'bar' : 'pie',
-      data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, labels.length), borderRadius: isNarrow ? 4 : 0 }] },
-      options: isNarrow ? {
+      type: useBar ? 'bar' : 'doughnut',
+      data: { labels: sortedExpenseLabels, datasets: [{ data: sortedExpenseData, backgroundColor: sortedExpenseColors, borderRadius: useBar ? 4 : 0 }] },
+      options: useBar ? {
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
@@ -860,7 +1316,7 @@ var Charts = {
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: {
-            position: 'right',
+            display: false,
             labels: {
               boxWidth: 12,
               padding: 8,
@@ -918,6 +1374,9 @@ var Charts = {
       });
       expenseData.push(exp);
     }
+    const maxMonthIndex = expenseData.reduce((best, value, i) => value > expenseData[best] ? i : best, 0);
+    const annualExpense = expenseData.reduce((sum, value) => sum + value, 0);
+    const activeMonths = expenseData.filter(value => value > 0).length;
 
     const ctx = canvas.getContext('2d');
     this._charts['expense-trend'] = new Chart(ctx, {
@@ -934,5 +1393,17 @@ var Charts = {
         scales: { x: { stacked: true }, y: { stacked: false, beginAtZero: true, ticks: { callback: v => '¥' + v } } }
       }
     });
+    this._renderInsightList('chart-expense-trend-insights', [
+      {
+        label: '年度支出',
+        value: this._formatMoney(annualExpense),
+        note: `${activeMonths} 个月有运营支出`
+      },
+      {
+        label: '支出高点',
+        value: expenseData[maxMonthIndex] > 0 ? `${maxMonthIndex + 1}月 ${this._formatMoney(expenseData[maxMonthIndex])}` : '暂无支出',
+        note: '与收入峰值月份对照看经营压力'
+      }
+    ]);
   }
 };

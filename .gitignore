@@ -83,6 +83,7 @@ supabase/.temp/
 00_工作台/运营数据管理/local-backups/
 00_工作台/运营数据管理/backups/
 00_工作台/运营数据管理/鏈湴澶囦唤/
+00_工作台/运营数据管理/tmp/
 00_工作台/运营数据管理/**/*.dump
 
 # wrangler files
@@ -90,3 +91,16 @@ supabase/.temp/
 .dev.vars*
 !.dev.vars.example
 !.env.example
+
+# Local development state and credentials
+/tmp/
+/00_工作台/运营数据管理/tmp/
+.env.*
+*.env
+*.pem
+*.key
+!.env.example
+
+# Reproducible operations dependencies
+!/00_工作台/运营数据管理/package.json
+!/00_工作台/运营数据管理/package-lock.json

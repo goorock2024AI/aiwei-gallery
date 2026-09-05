@@ -5,14 +5,20 @@ const Auth = {
   init() {
     try {
       const saved = sessionStorage.getItem('aiwei_user');
-      if (saved) this._currentUser = JSON.parse(saved);
+      if (saved) {
+        this._currentUser = JSON.parse(saved);
+        if (!this._currentUser?.token) {
+          sessionStorage.removeItem('aiwei_user');
+          this._currentUser = null;
+        }
+      }
     } catch { this._currentUser = null; }
     return this._currentUser;
   },
 
   async _fetch(method, path, body) {
     const base = await Store._ensureClient();
-    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    const opts = { method, headers: { 'Content-Type': 'application/json', ...this.authHeaders() } };
     if (body !== undefined) opts.body = JSON.stringify(body);
     const res = await fetch(base + path, opts);
     if (!res.ok) {
@@ -42,7 +48,8 @@ const Auth = {
       username: data.username,
       displayName: data.displayName || data.username,
       role: data.role,
-      needPasswordChange: data.needPasswordChange
+      needPasswordChange: data.needPasswordChange,
+      token: data.token || ''
     };
     sessionStorage.setItem('aiwei_user', JSON.stringify(this._currentUser));
     return this._currentUser;
@@ -55,7 +62,7 @@ const Auth = {
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/change-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({ userId: user.id, newPassword: newPwd })
     });
     if (!res.ok) {
@@ -73,7 +80,7 @@ const Auth = {
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/users/create', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({
         username: data.username,
         displayName: data.displayName || data.username,
@@ -129,7 +136,7 @@ const Auth = {
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/change-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({ userId: user.id, oldPassword: oldPwd, newPassword: newPwd })
     });
     if (!res.ok) {
@@ -146,7 +153,7 @@ const Auth = {
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/users/reset-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({ userId: id, password: '88888888' })
     });
     if (!res.ok) {
@@ -172,18 +179,53 @@ const Auth = {
   },
   get currentUser() { return this._currentUser; },
 
+  authHeaders() {
+    const token = this._currentUser?.token;
+    return token ? { Authorization: 'Bearer ' + token } : {};
+  },
+
+  can(action, scope = '') {
+    if (!this._currentUser) return false;
+    const role = this._currentUser.role;
+    if (role === 'admin') return true;
+    const matrix = {
+      editor: {
+        view: ['revenue','expense','gallery','space','daily-closing','project-list','reports','products','creative-products','artworks'],
+        create: ['revenue','expense','gallery','space','daily-closing','project-list','creative-products','artworks'],
+        edit: ['revenue','expense','gallery','space','daily-closing','project-list','creative-products','artworks'],
+        approve: [],
+        delete: [],
+        export: [],
+        adjust: [],
+        review: []
+      },
+      viewer: {
+        view: ['revenue','gallery','space','daily-closing','project-list','reports'],
+        create: [],
+        edit: [],
+        approve: [],
+        delete: [],
+        export: [],
+        adjust: [],
+        review: []
+      }
+    };
+    return (matrix[role]?.[action] || []).includes(scope);
+  },
+
   hasModuleAccess(moduleKey) {
     if (!this._currentUser) return false;
     const role = this._currentUser.role;
     const accessMap = {
-      revenue:  ['admin', 'editor'],
+      revenue:  ['admin', 'editor', 'viewer'],
       expense:  ['admin', 'editor'],
-      gallery:  ['admin', 'editor'],
-      space:    ['admin', 'editor'],
-      'project-list': ['admin', 'editor'],
+      gallery:  ['admin', 'editor', 'viewer'],
+      space:    ['admin', 'editor', 'viewer'],
+      'daily-closing': ['admin', 'editor', 'viewer'],
+      'project-list': ['admin', 'editor', 'viewer'],
       reports:  ['admin', 'editor', 'viewer'],
       manage:   ['admin'],
-      products: ['admin'],
+      products: ['admin', 'editor'],
       users:    ['admin'],
       logs:     ['admin'],
     };

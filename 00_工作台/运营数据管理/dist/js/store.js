@@ -16,7 +16,11 @@ const Store = {
     const url = base + path;
     const opts = {
       method,
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...(typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {})
+      }
     };
     if (body !== undefined) opts.body = JSON.stringify(body);
     const res = await fetch(url, opts);
@@ -49,7 +53,11 @@ const Store = {
   async getAll(type) {
     try {
       const table = this._table(type);
-      return await this._request('GET', `/rest/v1/${table}?order=created_at.desc&limit=5000`) || [];
+      // 空间使用读视图（带 payments 子表聚合 + receivedTotal）
+      const path = type === 'space'
+        ? `/rest/v1/space_usage_with_payments?order=date.desc&limit=5000`
+        : `/rest/v1/${table}?order=created_at.desc&limit=5000`;
+      return await this._request('GET', path) || [];
     } catch (e) {
       this._handleError(e, '查询');
       return [];
@@ -59,8 +67,12 @@ const Store = {
   async getById(type, id) {
     try {
       const table = this._table(type);
-      const row = await this._request('GET', `/rest/v1/${table}?id=eq.${id}`);
-      return row || null;
+      const path = type === 'space'
+        ? `/rest/v1/space_usage_with_payments?id=eq.${id}`
+        : `/rest/v1/${table}?id=eq.${id}`;
+      const row = await this._request('GET', path);
+      // 视图查询返回数组，单条取 [0]；普通表也是数组
+      return (Array.isArray(row) ? row[0] : row) || null;
     } catch (e) {
       this._handleError(e, '查询');
       return null;
@@ -145,6 +157,46 @@ const Store = {
     }
   },
 
+  async getExpenseAttachments(expenseId) {
+    try {
+      const table = this._table('expenseAttachments');
+      return await this._request('GET', `/rest/v1/${table}?expense_id=eq.${encodeURIComponent(expenseId)}&order=created_at.desc`) || [];
+    } catch (e) {
+      this._handleError(e, '查询附件');
+      return [];
+    }
+  },
+
+  async uploadExpenseAttachmentFile(file, attachmentType) {
+    const base = await this._ensureClient();
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`${base}/rest/v1/expense_attachments/upload?type=${encodeURIComponent(attachmentType || 'invoice')}`, {
+      method: 'POST',
+      headers: typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {},
+      body: fd
+    });
+    if (!res.ok) {
+      let msg = '上传失败';
+      try { const e = await res.json(); msg = e.message || e.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    return await res.json();
+  },
+
+  async generateExpensePdf(expenseIds, title = '') {
+    try {
+      return await this._request('POST', '/rest/v1/expense_reimbursements/generate', {
+        expenseIds,
+        title,
+        generatedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || ''
+      });
+    } catch (e) {
+      this._handleError(e, '生成报销 PDF');
+      throw e;
+    }
+  },
+
   async getMonthlySummary(type, year) {
     const all = await this.getByYear(type, year);
     const months = {};
@@ -172,8 +224,14 @@ const Store = {
   async healthCheck() {
     try {
       const base = await this._ensureClient();
-      const res = await fetch(base + '/rest/v1/revenue?limit=1');
+      const headers = {
+        'Accept': 'application/json',
+        ...(typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {})
+      };
+      if (!headers.Authorization) return { ok: false, message: '登录已过期，请重新登录' };
+      const res = await fetch(base + '/rest/v1/revenue?limit=1', { headers });
       if (res.ok) return { ok: true, message: '数据库连接正常' };
+      if (res.status === 401) return { ok: false, message: '登录已过期，请重新登录' };
       return { ok: false, message: '数据库连接失败：状态码 ' + res.status };
     } catch (e) {
       return { ok: false, message: '数据库连接失败：' + (e.message || e) };
