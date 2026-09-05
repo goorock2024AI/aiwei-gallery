@@ -1658,6 +1658,94 @@ const UI = {
     }
   },
 
+  _expensePendingOnly: false,
+  _expenseClassFields: {
+    costTypeCode: ['cost_type', '成本类型'], businessLayerCode: ['business_layer', '业务层'],
+    businessTypeCode: ['business_type', '业务类型'], capabilityAxisCode: ['capability_axis', '能力轴']
+  },
+
+  _expenseClassificationHTML(prefix) {
+    return `<div class="form-group full"><label for="${prefix}-class-mode">成本归属</label>
+      <select id="${prefix}-class-mode" onchange="UI._setExpenseClassMode('${prefix}')"><option value="suggested">采用默认映射建议</option><option value="manual">手动确认归属</option><option value="pending">暂不能判断，标为待归类</option></select>
+      <p id="${prefix}-class-hint" role="status">正在加载归属选项…</p>
+      <p style="font-size:12px;color:var(--gray-500)">这里记录期间支出与能力投入；采购支出不会再次扣入商品销售毛利。</p></div>
+      ${Object.entries(this._expenseClassFields).map(([key, [, label]]) => `<div class="form-group"><label for="${prefix}-${key}">${label}</label><select id="${prefix}-${key}" ${key === 'businessLayerCode' ? `onchange="UI._filterExpenseTypes('${prefix}')"` : ''}></select></div>`).join('')}
+      <div class="form-group full"><label for="${prefix}-class-reason">归属说明（可选）</label><input id="${prefix}-class-reason" maxlength="500" placeholder="补充判断依据"></div>`;
+  },
+
+  async _loadExpenseClassification(prefix, id = '', initial = false) {
+    const mode = document.getElementById(prefix + '-class-mode');
+    if (!mode) return;
+    const form = mode.closest('form');
+    const token = (form._classToken || 0) + 1;
+    form._classToken = token;
+    form._classReady = false;
+    const submit = form.querySelector('[type=submit]');
+    submit.disabled = true;
+    const params = new URLSearchParams();
+    if (id || form._expenseId) params.set('id', id || form._expenseId);
+    for (const [key, suffix] of Object.entries({ project: 'project', category: 'category', description: 'desc', related_activity: 'activity' })) {
+      params.set(key, document.getElementById(prefix + '-' + suffix)?.value || '');
+    }
+    try {
+      const context = await Store._request('GET', '/rest/v1/expense-entry?' + params);
+      if (!form.isConnected || form._classToken !== token) return;
+      form._expenseId = id || form._expenseId || '';
+      form._classContext = context;
+      if (initial || !form._classInitialized) {
+        for (const [key, [type]] of Object.entries(this._expenseClassFields)) {
+          const select = document.getElementById(prefix + '-' + key);
+          select.innerHTML = (key === 'costTypeCode' ? '' : '<option value="">' + (key === 'businessLayerCode' ? '共享运营 / 暂不指定' : '暂不指定') + '</option>') + context.dimensions.filter(d => d.dimensionType === type).map(d => `<option value="${this._escHtml(d.code)}">${this._escHtml(d.name)}</option>`).join('');
+        }
+        if (context.classification) {
+          mode.value = 'manual';
+          for (const key of Object.keys(this._expenseClassFields)) document.getElementById(prefix + '-' + key).value = context.classification[key] || (key === 'costTypeCode' ? 'uncategorized_cost' : '');
+          document.getElementById(prefix + '-class-reason').value = context.classification.overrideReason || '';
+        }
+        form._classInitialized = true;
+      }
+      form._classReady = true;
+      this._setExpenseClassMode(prefix);
+      submit.disabled = false;
+    } catch (error) {
+      if (form._classToken !== token) return;
+      document.getElementById(prefix + '-class-hint').textContent = '归属信息加载失败，请重新进入页面或修改类别重试：' + error.message;
+    }
+  },
+
+  _filterExpenseTypes(prefix) {
+    const layer = document.getElementById(prefix + '-businessLayerCode').value;
+    const select = document.getElementById(prefix + '-businessTypeCode');
+    const context = select.closest('form')._classContext;
+    for (const option of select.options) {
+      const match = context?.dimensions.find(d => d.dimensionType === 'business_type' && d.code === option.value);
+      option.disabled = !!option.value && match?.parentCode !== layer;
+    }
+    if (select.selectedOptions[0]?.disabled) select.value = '';
+  },
+
+  _setExpenseClassMode(prefix) {
+    const mode = document.getElementById(prefix + '-class-mode');
+    const context = mode.closest('form')._classContext;
+    if (!context) return;
+    if (mode.value !== 'manual') {
+      const values = mode.value === 'suggested' ? context.suggestion || {} : {};
+      for (const key of Object.keys(this._expenseClassFields)) document.getElementById(prefix + '-' + key).value = values[key] || (key === 'costTypeCode' ? 'uncategorized_cost' : '');
+    }
+    for (const key of Object.keys(this._expenseClassFields)) document.getElementById(prefix + '-' + key).disabled = mode.value !== 'manual';
+    this._filterExpenseTypes(prefix);
+    const name = context.dimensions.find(d => d.dimensionType === 'cost_type' && d.code === context.suggestion?.costTypeCode)?.name;
+    document.getElementById(prefix + '-class-hint').textContent = mode.value === 'pending' ? '将保存为待归类，后续可在列表中补充。' : mode.value === 'manual' ? '按当前选择保存；共享运营可不指定业务层，能力轴可留空。' : name ? '默认建议：' + name + '。如不符合本笔用途，请切换手动确认。' : '未找到可靠默认映射，将保存为待归类。';
+  },
+
+  _readExpenseClassification(prefix) {
+    const mode = document.getElementById(prefix + '-class-mode');
+    if (!mode.closest('form')._classReady) throw new Error('请先加载成本归属选项');
+    const result = { mode: mode.value, overrideReason: document.getElementById(prefix + '-class-reason').value.trim() };
+    for (const key of Object.keys(this._expenseClassFields)) result[key] = document.getElementById(prefix + '-' + key).value;
+    return result;
+  },
+
   // === 支出录入 ===
   async renderExpensePage() {
     const page = $('#page-expense');
@@ -1671,15 +1759,17 @@ const UI = {
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="exp-date" value="${todayStr()}" style="flex:1">${this._todayBtn('exp-date')}</div>
           </div>
-          <div class="form-group"><label>支出类别</label><select id="exp-category">${this._expenseCategoryOptions()}</select></div>
+          <div class="form-group"><label>支出类别</label><select id="exp-category" onchange="UI._loadExpenseClassification('exp')">${this._expenseCategoryOptions()}</select></div>
+          <div class="form-group"><label for="exp-project">归属项目</label><input id="exp-project" value="运营" placeholder="项目/展览/活动名称" onchange="UI._loadExpenseClassification('exp')"></div>
           <div class="form-group"><label>金额</label><input type="number" id="exp-amount" min="0" step="0.01" placeholder="0.00" required></div>
-          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-desc" placeholder="支出具体内容"></div>
+          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-desc" onchange="UI._loadExpenseClassification('exp')" placeholder="支出具体内容"></div>
           <div class="form-group"><label>经手人</label><input type="text" id="exp-handler" placeholder="经手人姓名"></div>
           <div class="form-group"><label>发票</label><select id="exp-invoice">${MODELS.INVOICE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>付款凭证</label><select id="exp-receipt">${MODELS.RECEIPT_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
-          <div class="form-group"><label>关联活动</label><input type="text" id="exp-activity" placeholder="关联展览/活动名称"></div>
+          <div class="form-group"><label>关联活动</label><input type="text" id="exp-activity" onchange="UI._loadExpenseClassification('exp')" placeholder="关联展览/活动名称"></div>
+          ${this._expenseClassificationHTML('exp')}
           <div class="form-actions full">
-            <button type="submit" class="btn btn-primary">保存记录</button>
+            <button type="submit" class="btn btn-primary" disabled>保存记录</button>
           </div>
         </form>
       </div>
@@ -1692,11 +1782,13 @@ const UI = {
           <button type="button" class="btn btn-sm btn-primary" onclick="UI._generateSelectedExpensePdf()">生成所选 PDF</button>
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="exp-count"></span>
         </div>
+        <div class="filter-bar"><label><input id="exp-pending-only" type="checkbox" ${this._expensePendingOnly ? 'checked' : ''} onchange="UI._expensePendingOnly=this.checked; UI._renderExpenseList()"> 只看待归类支出</label><span id="exp-class-count"></span></div>
         <div id="expense-list"><div class="loading-state"><div class="spinner"></div></div></div>
         <div id="expense-pdf-list" style="margin-top:16px"></div>
       </div>
     `);
 
+    await this._loadExpenseClassification('exp');
     document.getElementById('exp-filter-month').value = this._expenseFilterMonth || todayStr().slice(0, 7);
     await this._renderExpenseList();
     await this._renderExpensePdfList();
@@ -1719,7 +1811,17 @@ const UI = {
     const el = $('#expense-list');
     if (!el) return;
 
-    const records = (await Store.getByMonth('expense', filter)).filter(isOperationalExpenseRecord);
+    const allRecords = (await Store.getByMonth('expense', filter)).filter(isOperationalExpenseRecord);
+    let facts;
+    try {
+      facts = await Store._request('GET', '/rest/v1/business_cost_facts_v2?source_table=eq.expense&business_date=gte.' + encodeURIComponent(filter + '-01') + '&business_date=lte.' + encodeURIComponent(filter + '-31') + '&limit=5000');
+    } catch (error) { html(el, '<p>成本归属加载失败，无法判断待归类状态。请稍后重试。</p>'); return; }
+    const byId = new Map(facts.map(f => [f.sourceId, f]));
+    const pending = r => !byId.has(r.id) || byId.get(r.id).costTypeCode === 'uncategorized_cost';
+    const pendingCount = allRecords.filter(pending).length;
+    const classCount = document.getElementById('exp-class-count');
+    if (classCount) classCount.textContent = '本月待归类 ' + pendingCount + ' 笔 / ' + allRecords.length + ' 笔';
+    const records = this._expensePendingOnly ? allRecords.filter(pending) : allRecords;
     const attachmentsByExpense = this._groupExpenseAttachments(await Store.getAll('expenseAttachments'));
     const countEl = $('#exp-count');
     if (countEl) countEl.textContent = `${records.length} 条记录`;
@@ -1729,14 +1831,14 @@ const UI = {
     const pendingReimbursementTotal = Math.max(0, expenseTotal - reimbursedTotal);
     const summaryHtml = `
       <div class="stats-grid" style="margin-bottom:16px">
-        <div class="stat-card"><div class="stat-label">支出合计</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(expenseTotal)}</div><div class="stat-sub">${filter}</div></div>
+        <div class="stat-card"><div class="stat-label">${this._expensePendingOnly ? '待归类支出合计' : '支出合计'}</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(expenseTotal)}</div><div class="stat-sub">${filter}</div></div>
         <div class="stat-card"><div class="stat-label">已报销</div><div class="stat-value">¥${this._fmt(reimbursedTotal)}</div><div class="stat-sub">运营支出</div></div>
         <div class="stat-card"><div class="stat-label">待报销</div><div class="stat-value">¥${this._fmt(pendingReimbursementTotal)}</div><div class="stat-sub">运营支出</div></div>
       </div>`;
 
     if (!records.length) { html(el, summaryHtml + '<div class="empty-state"><div class="icon">🧾</div>暂无支出记录</div>'); return; }
 
-    let h = summaryHtml + '<div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onchange="UI._toggleAllExpenseSelection(this.checked)"></th><th>日期</th><th>项目</th><th>类别</th><th>金额</th><th>内容</th><th>经手人</th><th>票据</th><th>报销</th><th>操作</th></tr></thead><tbody>';
+    let h = summaryHtml + '<div class="table-wrap"><table class="data-table" style="min-width:1000px"><thead><tr><th><input type="checkbox" onchange="UI._toggleAllExpenseSelection(this.checked)"></th><th>日期</th><th>项目</th><th>类别</th><th>成本归属</th><th>金额</th><th>内容</th><th>经手人</th><th>票据</th><th>报销</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       const isReimbursed = r.reimbursementStatus === '已报销';
       const reimbursementTag = isReimbursed ? 'tag-success' : 'tag-info';
@@ -1746,8 +1848,9 @@ const UI = {
       h += `<tr>
         <td><input type="checkbox" class="exp-select" value="${r.id}"${checked} onchange="UI._toggleExpenseSelection('${r.id}', this.checked)"></td>
         <td>${r.date}</td>
-        <td>${r.project}</td>
-        <td>${r.category}</td>
+        <td>${this._escHtml(r.project)}</td>
+        <td>${this._escHtml(r.category)}</td>
+        <td><span class="tag ${pending(r) ? 'tag-info' : 'tag-success'}">${pending(r) ? '待归类' : this._escHtml(byId.get(r.id).costTypeName)}</span><br>${this._escHtml(byId.get(r.id)?.businessLayerName || '共享运营 / 暂不指定')}<br>${this._escHtml(byId.get(r.id)?.capabilityAxisName || '')}</td>
         <td><strong>${this._fmt(r.amount)}</strong></td>
         <td>${r.description || '-'}</td>
         <td>${r.handler || '-'}</td>
@@ -1775,7 +1878,7 @@ const UI = {
 
     const data = {
       date: $('#exp-date').value,
-      project: '运营',
+      project: $('#exp-project').value || '运营',
       category: $('#exp-category').value,
       amount: +($('#exp-amount').value || 0),
       description: $('#exp-desc').value,
@@ -1787,11 +1890,16 @@ const UI = {
     const errs = validateExpense(data);
     if (errs.length) { this.toast(errs[0], 'error'); if (btn) { btn.disabled = false; btn.textContent = '保存记录'; } return; }
 
-    const created = await Store.add('expense', createExpense(data));
-    const shouldUpload = confirm('支出记录已保存。是否现在上传发票或支付凭证？');
-    this.toast('支出记录已保存');
-    await this.renderExpensePage();
-    if (shouldUpload && created?.id) await this._showExpenseAttachmentModal(created.id);
+    try {
+      const result = await Store._request('POST', '/rest/v1/expense-entry', { expense: createExpense(data), classification: this._readExpenseClassification('exp') });
+      const shouldUpload = confirm('支出与成本归属已保存。是否现在上传发票或支付凭证？');
+      this.toast('支出与成本归属已保存');
+      await this.renderExpensePage();
+      if (shouldUpload && result.expense?.id) await this._showExpenseAttachmentModal(result.expense.id);
+    } catch (error) {
+      this.toast('保存失败：' + error.message, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = '保存记录'; }
+    }
   },
 
   async _editExpense(id) {
@@ -1806,18 +1914,19 @@ const UI = {
       <div class="modal-card modal-card-wide" onclick="event.stopPropagation()">
         <div class="modal-title">编辑支出记录</div>
         <form id="expense-edit-form" class="form-grid" onsubmit="event.preventDefault(); UI._saveExpenseEdit('${safeId}')">
-          <input type="hidden" id="exp-edit-project" value="${this._escAttr(r.project || '运营')}">
+          <div class="form-group"><label for="exp-edit-project">归属项目</label><input id="exp-edit-project" value="${this._escAttr(r.project || '运营')}" onchange="UI._loadExpenseClassification('exp-edit')"></div>
           <div class="form-group">
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="exp-edit-date" value="${this._escHtml(r.date || todayStr())}" style="flex:1">${this._todayBtn('exp-edit-date')}</div>
           </div>
-          <div class="form-group"><label>支出类别</label><select id="exp-edit-category">${this._expenseCategoryOptions(r.category || '')}</select></div>
+          <div class="form-group"><label>支出类别</label><select id="exp-edit-category" onchange="UI._loadExpenseClassification('exp-edit')">${this._expenseCategoryOptions(r.category || '')}</select></div>
           <div class="form-group"><label>金额</label><input type="number" id="exp-edit-amount" min="0" step="0.01" placeholder="0.00" value="${this._escHtml(r.amount ?? '')}" required></div>
-          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-edit-desc" placeholder="支出具体内容" value="${this._escHtml(r.description || '')}"></div>
+          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-edit-desc" onchange="UI._loadExpenseClassification('exp-edit')" placeholder="支出具体内容" value="${this._escHtml(r.description || '')}"></div>
           <div class="form-group"><label>经手人</label><input type="text" id="exp-edit-handler" placeholder="经手人姓名" value="${this._escHtml(r.handler || '')}"></div>
           <div class="form-group"><label>发票</label><select id="exp-edit-invoice">${MODELS.INVOICE_STATUSES.map(s => `<option value="${this._escHtml(s)}"${s === r.invoiceStatus ? ' selected' : ''}>${this._escHtml(s)}</option>`).join('')}</select></div>
           <div class="form-group"><label>付款凭证</label><select id="exp-edit-receipt">${MODELS.RECEIPT_STATUSES.map(s => `<option value="${this._escHtml(s)}"${s === r.receiptStatus ? ' selected' : ''}>${this._escHtml(s)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>关联活动</label><input type="text" id="exp-edit-activity" placeholder="关联展览/活动名称" value="${this._escHtml(r.relatedActivity || '')}"></div>
+          <div class="form-group"><label>关联活动</label><input type="text" id="exp-edit-activity" onchange="UI._loadExpenseClassification('exp-edit')" placeholder="关联展览/活动名称" value="${this._escHtml(r.relatedActivity || '')}"></div>
+          ${this._expenseClassificationHTML('exp-edit')}
           <div class="modal-actions full">
             <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
             <button type="submit" class="btn btn-primary">保存修改</button>
@@ -1826,6 +1935,7 @@ const UI = {
       </div>`;
     overlay.addEventListener('click', () => overlay.remove());
     document.body.appendChild(overlay);
+    await this._loadExpenseClassification('exp-edit', id, true);
     document.getElementById('exp-edit-amount')?.focus();
   },
 
@@ -1851,7 +1961,7 @@ const UI = {
       return;
     }
     try {
-      await Store.update('expense', id, data);
+      await Store._request('PATCH', '/rest/v1/expense-entry?id=' + encodeURIComponent(id), { expense: data, classification: this._readExpenseClassification('exp-edit') });
       this.toast('支出记录已更新');
       document.getElementById('expense-edit-modal')?.remove();
       await this._renderExpenseList();
@@ -2190,6 +2300,7 @@ const UI = {
           <div class="form-group" id="sp-rental-amount-group"><label>应收金额</label><input type="number" id="sp-receivable" min="0" step="0.01" placeholder="0.00" value="0"></div>
           <div class="form-group"><label>预计到账日</label><input type="date" id="sp-expected-payment"></div>
           <div class="form-group full"><label>备注</label><textarea id="sp-notes" rows="2"></textarea></div>
+          ${this._expenseClassificationHTML('exp-edit')}
           <div class="form-actions full">
             <button type="button" class="btn btn-primary" onclick="UI._saveSpace()">${editing ? '保存修改' : '保存记录'}</button>
             ${editing ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditSpace()">取消编辑</button>' : ''}

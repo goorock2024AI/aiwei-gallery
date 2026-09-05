@@ -6,7 +6,7 @@ COPY package.json ./
 RUN npm install --production && \
     npm cache clean --force
 
-COPY server.js ./
+COPY server.js expense-entry.js ./
 COPY fonts ./fonts
 
 EXPOSE 3000

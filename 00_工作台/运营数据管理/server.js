@@ -1378,6 +1378,8 @@ function serveStatic(req, res, pathname) {
   }
 }
 
+const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+
 // --- Main request handler ---
 const server = http.createServer((req, res) => {
   const urlInfo = parsePath(req.url);
@@ -1395,7 +1397,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (parts[0] === 'rest' && parts[1] === 'v1') {
-    if (parts[2] === 'login' && req.method === 'POST') {
+    if (parts[2] === 'expense-entry') {
+      handleExpenseEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'login' && req.method === 'POST') {
       handleLogin(req, res);
     } else if (parts[2] === 'change-password' && req.method === 'POST') {
       handleChangePassword(req, res);

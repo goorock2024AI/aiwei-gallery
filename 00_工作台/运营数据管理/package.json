@@ -9,7 +9,9 @@
     "m3:preflight": "powershell -ExecutionPolicy Bypass -File scripts/m3-03-preflight-check.ps1",
     "m3:rehearsal": "node scripts/m3-03-node-migration-rehearsal.js",
     "deploy:static-hotfix": "powershell -ExecutionPolicy Bypass -File scripts/deploy-static-hotfix.ps1",
-    "check:retail-snapshot": "node scripts/check-retail-snapshot.js"
+    "check:retail-snapshot": "node scripts/check-retail-snapshot.js",
+    "check:expense-entry": "node scripts/check-expense-entry-integration.js",
+    "check:expense-migration": "node scripts/check-expense-entry-migration.js"
   },
   "dependencies": {
     "pdfkit": "^0.17.2",
