@@ -266,7 +266,8 @@ var Charts = {
   },
 
   _onFilterChange() {
-    this.renderAll();
+    clearTimeout(this._filterTimer);
+    this._filterTimer = setTimeout(() => this.renderAll(), 120);
   },
 
   async renderAll() {

@@ -5657,22 +5657,73 @@ const UI = {
     const ym = todayStr().slice(0, 7);
     html(page, `
       <div class="filter-bar">
-        <div class="form-group"><label>年份</label><select id="rpt-year" onchange="Charts._onFilterChange()">${this._yearOptions()}</select></div>
-        <div class="form-group"><label>月份</label><select id="rpt-month" onchange="Charts._onFilterChange()">
+        <div class="form-group"><label>年份</label><select id="rpt-year" disabled onchange="UI._renderV2ManagementSummary();Charts._onFilterChange()">${this._yearOptions()}</select></div>
+        <div class="form-group"><label>月份</label><select id="rpt-month" disabled onchange="UI._renderV2ManagementSummary();Charts._onFilterChange()">
           <option value="">全部</option>
           ${[1,2,3,4,5,6,7,8,9,10,11,12].map(m => {
             const ms = String(m).padStart(2, '0');
             return `<option value="${ms}"${ms === ym.slice(5) ? ' selected' : ''}>${m}月</option>`;
           }).join('')}
         </select></div>
-        <button type="button" class="btn btn-sm btn-secondary" onclick="Charts.renderAll()">刷新图表</button>
+        <button type="button" id="rpt-refresh" disabled class="btn btn-sm btn-secondary" onclick="UI._renderV2ManagementSummary();Charts.renderAll()">刷新图表</button>
       </div>
+      <div id="v2-management-summary"><div class="loading-state"><div class="spinner"></div>加载 2.0 经营汇总…</div></div>
       <div id="report-charts"><div class="loading-state" style="text-align:center;padding:80px"><div class="spinner"></div><span style="margin-left:10px">加载报表数据中...</span></div></div>
     `);
     // 加载图表需要时间，延迟一帧让 loading 先显示
     setTimeout(async () => {
       await Charts.renderAll();
+      await this._renderV2ManagementSummary();
+      ['rpt-year','rpt-month','rpt-refresh'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
     }, 50);
+  },
+
+  async _renderV2ManagementSummary() {
+    const target = $('#v2-management-summary');
+    if (!target) return;
+    const year = $('#rpt-year')?.value || todayStr().slice(0,4);
+    const month = $('#rpt-month')?.value || '';
+    const prefix = month ? `${year}-${month}` : year;
+    try {
+      const [allSummary, allIssues, legacyFacts] = await Promise.all([
+        Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
+        Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
+        Store.getByYear('revenueFacts', year)
+      ]);
+      const layerDefs = [
+        ['visit','到馆参观'],['onsite_consumption','现场消费'],['experience_activity','体验活动'],['art_transaction_cooperation','艺术交易与合作']
+      ];
+      const selected = (allSummary || []).filter(r => String(r.periodMonth || '').startsWith(prefix));
+      const rows = layerDefs.map(([code,name]) => selected.filter(r => r.businessLayerCode === code).reduce((a,r) => ({
+        code,name,revenue:a.revenue+(+r.revenueAmount||0),salesCost:a.salesCost+(+r.salesCostAmount||0),periodCost:a.periodCost+(+r.periodCostAmount||0),gross:a.gross+(+r.grossProfit||0),contribution:a.contribution+(+r.operatingContribution||0)
+      }), {code,name,revenue:0,salesCost:0,periodCost:0,gross:0,contribution:0}));
+      const totals = rows.reduce((a,r) => ({ revenue:a.revenue+r.revenue,salesCost:a.salesCost+r.salesCost,periodCost:a.periodCost+r.periodCost,gross:a.gross+r.gross,contribution:a.contribution+r.contribution }), {revenue:0,salesCost:0,periodCost:0,gross:0,contribution:0});
+      const legacy = (legacyFacts || []).filter(r => String(r.date || '').startsWith(prefix)).reduce((s,r) => s + Number(r.netAmount ?? r.amount ?? 0), 0);
+      const diff = totals.revenue - legacy;
+      const issues = (allIssues || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      const issueCount = key => issues.filter(r => r.issueType === key).length;
+      const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
+      target.innerHTML = `
+        <div class="card">
+          <div class="card-title">2.0 业务层经营汇总 <span class="tag tag-info">只读并行口径</span></div>
+          <div class="stat-card-grid" style="margin-bottom:16px">
+            <div class="stat-card"><div class="stat-label">2.0 净收入</div><div class="stat-value">¥${this._fmt(totals.revenue)}</div><div class="stat-sub">${prefix} · 四业务层</div></div>
+            <div class="stat-card"><div class="stat-label">销售成本</div><div class="stat-value">¥${this._fmt(totals.salesCost)}</div><div class="stat-sub">商品销售成本 + 作品结算</div></div>
+            <div class="stat-card"><div class="stat-label">销售毛利</div><div class="stat-value">¥${this._fmt(totals.gross)}</div><div class="stat-sub">净收入 - 销售成本</div></div>
+            <div class="stat-card"><div class="stat-label">经营贡献</div><div class="stat-value">¥${this._fmt(totals.contribution)}</div><div class="stat-sub">再扣期间成本 ¥${this._fmt(totals.periodCost)}</div></div>
+          </div>
+          <div class="table-wrap"><table class="data-table"><thead><tr><th>业务层</th><th>净收入</th><th>销售成本</th><th>期间成本</th><th>销售毛利</th><th>毛利率</th><th>经营贡献</th></tr></thead><tbody>${rows.map(r => `<tr><td><strong>${r.name}</strong></td><td>¥${this._fmt(r.revenue)}</td><td>¥${this._fmt(r.salesCost)}</td><td>¥${this._fmt(r.periodCost)}</td><td>¥${this._fmt(r.gross)}</td><td>${r.revenue ? (r.gross/r.revenue*100).toFixed(1)+'%' : '-'}</td><td>¥${this._fmt(r.contribution)}</td></tr>`).join('')}</tbody></table></div>
+          <p class="form-hint">1.0 净收入 ¥${this._fmt(legacy)}；2.0 四层净收入 ¥${this._fmt(totals.revenue)}；差异 ${diff >= 0 ? '+' : ''}¥${this._fmt(diff)}。2.0 按业务明细和实际到账日归属；待归类收入留在治理清单、不计入四层总计。原 1.0 图表保留在下方用于对照。</p>
+        </div>
+        <div class="card">
+          <div class="card-title">数据治理缺口</div>
+          <div class="stat-card-grid" style="margin-bottom:16px"><div class="stat-card"><div class="stat-label">待归类收入</div><div class="stat-value">${issueCount('unclassified_revenue')}</div></div><div class="stat-card"><div class="stat-label">待归类成本</div><div class="stat-value">${issueCount('unclassified_cost')}</div></div><div class="stat-card"><div class="stat-label">缺成本商品/作品</div><div class="stat-value">${issueCount('missing_product_cost')}</div></div></div>
+          ${issues.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>问题</th><th>项目/商品</th><th>金额</th><th>来源</th></tr></thead><tbody>${issues.slice(0,50).map(r => `<tr><td>${this._escHtml(r.businessDate)}</td><td><span class="tag tag-info">${labels[r.issueType] || r.issueType}</span></td><td>${this._escHtml(r.itemName)}</td><td>¥${this._fmt(r.amount)}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">当前期间未发现待归类或缺成本问题</div>'}
+          ${issues.length > 50 ? '<p class="form-hint">仅显示最近 50 条，请按来源记录继续治理。</p>' : ''}
+        </div>`;
+    } catch (error) {
+      target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
+    }
   },
 
   // === 数据管理 ===

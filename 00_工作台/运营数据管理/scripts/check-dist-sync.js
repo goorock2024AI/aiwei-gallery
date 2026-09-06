@@ -8,6 +8,7 @@ const pairs = [
   ['app/index.html', 'dist/index.html'],
   ['app/css/style.css', 'dist/css/style.css'],
   ['app/js/app.js', 'dist/js/app.js'],
+  ['app/js/charts.js', 'dist/js/charts.js'],
   ['app/js/models.js', 'dist/js/models.js'],
   ['app/js/auth.js', 'dist/js/auth.js'],
   ['app/js/ui.js', 'dist/js/ui.js'],

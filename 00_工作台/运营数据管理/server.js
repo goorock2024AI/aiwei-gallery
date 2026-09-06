@@ -164,7 +164,9 @@ const READ_ONLY_TABLES = new Set([
   'business_profit_facts_v2',
   'workshop_project_performance_v2',
   'gallery_transaction_performance_v2',
-  'space_project_performance_v2'
+  'space_project_performance_v2',
+  'business_layer_summary_v2',
+  'data_governance_issues_v2'
 ]);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
@@ -180,7 +182,8 @@ function toCamel(row) {
     'gross_amount','cost_price_snapshot','confidence','cost_amount','revenue_amount',
     'gross_profit','gross_margin','participant_count','direct_cost_amount',
     'contribution_amount','contribution_margin','settlement_cost','realized_net_amount',
-    'outstanding_amount','payment_count'
+    'outstanding_amount','payment_count','sales_cost_amount','period_cost_amount',
+    'total_cost_amount','operating_contribution'
   ]);
   const o = {};
   for (let k of Object.keys(row)) {
@@ -380,7 +383,8 @@ function canAccessTable(user, table, method) {
       'cash_movements','expense_attachments','expense_reimbursements','revenue_facts','app_config',
       'business_dimensions','business_mapping_rules','record_business_links','product_aliases',
       'business_revenue_facts_v2','business_cost_facts_v2','business_profit_facts_v2',
-      'workshop_project_performance_v2','gallery_transaction_performance_v2','space_project_performance_v2'
+      'workshop_project_performance_v2','gallery_transaction_performance_v2','space_project_performance_v2',
+      'business_layer_summary_v2','data_governance_issues_v2'
     ]),
     viewer: new Set([
       'revenue','space_usage','space_payments','space_usage_with_payments',
@@ -1131,7 +1135,9 @@ async function handleREST(req, res, urlInfo) {
     'business_profit_facts_v2': 'business_profit_facts_v2',
     'workshop_project_performance_v2': 'workshop_project_performance_v2',
     'gallery_transaction_performance_v2': 'gallery_transaction_performance_v2',
-    'space_project_performance_v2': 'space_project_performance_v2'
+    'space_project_performance_v2': 'space_project_performance_v2',
+    'business_layer_summary_v2': 'business_layer_summary_v2',
+    'data_governance_issues_v2': 'data_governance_issues_v2'
   };
   const dbTable = tableMap[table];
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);
