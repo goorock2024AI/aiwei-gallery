@@ -1554,7 +1554,7 @@ const UI = {
       const pct = recv > 0 ? Math.round((got / recv) * 100) : 100;
       const isPending = gap > 0;
       const paymentsN = Array.isArray(r.payments) ? r.payments.length : 0;
-      const no = this._genSpaceContractNo(r);
+      const no = r.contractNo || this._genSpaceContractNo(r);
       return `
         <tr>
           <td><span style="font-family:monospace;background:var(--cream);padding:2px 6px;border-radius:4px;font-size:12px">${no}</span></td>
@@ -1578,7 +1578,7 @@ const UI = {
             </div>
             ${paymentsN > 0 ? `<div style="font-size:12px;color:var(--gray-500);margin-top:2px">${paymentsN} 笔到账</div>` : ''}
           </td>
-          <td><span class="tag tag-info">${this._escHtml(r.status || '筹备中')}</span></td>
+          <td><span class="tag tag-info">${this._escHtml(r.businessStatus || '待确认')}</span><div style="font-size:12px;color:var(--gray-500);margin-top:2px">执行：${this._escHtml(r.status || '筹备中')}</div></td>
           <td class="row-actions" style="white-space:nowrap">
             ${Auth.can('create', 'space') && isPending ? `<button class="btn btn-primary btn-sm" onclick="UI._openQuickCollectModal('${r.id}')">💰 收款</button> ` : ''}
             ${Auth.can('edit', 'space') ? `<button class="btn btn-secondary btn-sm" onclick="UI._editSpace('${r.id}')">详情</button>` : ''}
@@ -1672,11 +1672,9 @@ const UI = {
       this.toast(`金额超过待收 ¥${this._fmt(gap)}`, 'error'); return;
     }
     try {
-      await Store.add('spacePayment', createSpacePayment({
-        spaceUsageId: spaceId,
-        paymentDate: date,
-        amount, paymentMethod: method, notes
-      }));
+      await Store._request('POST', `/rest/v1/space-entry?id=${encodeURIComponent(spaceId)}&action=payment`, { payment: createSpacePayment({
+        spaceUsageId: spaceId, paymentDate: date, amount, paymentMethod: method, notes
+      }) });
       this.toast(`已录入到账 ¥${this._fmt(amount)}`);
       document.getElementById('quick-collect-modal').remove();
       // 刷新页面与顶部 4 卡片
@@ -2323,9 +2321,9 @@ const UI = {
           <div class="form-group"><label>结束日期</label><input type="date" id="sp-end-date" value="" onchange="UI._autoSetExpectedPayment()"></div>
           <div class="form-group"><label>空间</label><select id="sp-space">${MODELS.SPACES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>项目/活动名称</label><input type="text" id="sp-project" placeholder="请输入项目名称" required></div>
-          <div class="form-group"><label>类型</label><select id="sp-type">${MODELS.SPACE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
+          <div class="form-group"><label>执行类型</label><select id="sp-type" onchange="UI._suggestSpaceBusiness()">${MODELS.SPACE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
           <div class="form-group"><label>客户/合作方</label><input type="text" id="sp-client" placeholder="客户或合作方名称"></div>
-          <div class="form-group"><label>状态</label><select id="sp-status">${MODELS.SPACE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
+          <div class="form-group"><label>执行状态</label><select id="sp-status" onchange="UI._suggestSpaceBusiness()">${MODELS.SPACE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>租金类型</label>
             <select id="sp-rental-type" onchange="UI._toggleRentalType()">
               ${MODELS.RENTAL_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
@@ -2333,8 +2331,12 @@ const UI = {
           </div>
           <div class="form-group" id="sp-rental-amount-group"><label>应收金额</label><input type="number" id="sp-receivable" min="0" step="0.01" placeholder="0.00" value="0"></div>
           <div class="form-group"><label>预计到账日</label><input type="date" id="sp-expected-payment"></div>
+          <div class="form-group"><label>业务类型<span class="required-mark">*</span></label><select id="sp-business-type" onchange="UI._markSpaceClassificationManual()"><option value="space_rental">空间租赁/合作</option><option value="brand_event">品牌活动/企业合作</option><option value="uncategorized_revenue">待确认项目</option></select><div class="form-hint" id="sp-business-hint">根据执行类型提供默认建议，可人工确认</div></div>
+          <div class="form-group"><label>合作方式<span class="required-mark">*</span></label><select id="sp-cooperation-mode"><option value="">请选择</option><option value="租赁">租赁</option><option value="联办">联办</option><option value="赞助">赞助</option><option value="置换">置换</option><option value="自营">自营</option><option value="其他">其他</option></select></div>
+          <div class="form-group"><label>经营状态<span class="required-mark">*</span></label><select id="sp-business-status"><option value="线索">线索</option><option value="洽谈">洽谈</option><option value="已签约">已签约</option><option value="执行中">执行中</option><option value="已完成">已完成</option><option value="已取消">已取消</option><option value="待确认">待确认</option></select></div>
+          <div class="form-group"><label>合同/合作编号</label><input type="text" id="sp-contract-no" maxlength="100" placeholder="付费签约项目必填"></div>
+          <div class="form-group"><label>项目负责人</label><input type="text" id="sp-project-owner" maxlength="100" placeholder="内部负责人或对接人"></div>
           <div class="form-group full"><label>备注</label><textarea id="sp-notes" rows="2"></textarea></div>
-          ${this._expenseClassificationHTML('exp-edit')}
           <div class="form-actions full">
             <button type="button" class="btn btn-primary" onclick="UI._saveSpace()">${editing ? '保存修改' : '保存记录'}</button>
             ${editing ? '<button type="button" class="btn btn-secondary" onclick="UI._cancelEditSpace()">取消编辑</button>' : ''}
@@ -2358,6 +2360,7 @@ const UI = {
     // 初始化租金类型 + 自动算预计到账日
     this._toggleRentalType();
     this._autoSetExpectedPayment();
+    await this._suggestSpaceBusiness(true);
 
     if (editing) {
       const r = await Store.getById('space', editing);
@@ -2558,7 +2561,7 @@ const UI = {
         <td>¥${this._fmt(p.amount)}</td>
         <td>${p.paymentMethod || '转账'}</td>
         <td>${this._escHtml(p.notes || '')}</td>
-        <td class="row-actions"><button class="btn btn-sm btn-danger" onclick="UI._deletePayment('${p.id}','${spaceId}')">删除</button></td>
+        <td><span class="tag tag-success">已入账</span></td>
       </tr>
     `).join('');
 
@@ -2566,7 +2569,7 @@ const UI = {
       <div class="card-title">💰 到账明细（已收 ¥${this._fmt(total)} / 应收 ¥${this._fmt(req)}${unpaid > 0 ? ' · 待收 ¥' + this._fmt(unpaid) : ' · 已结清'}）<span style="font-size:12px;color:var(--gray-500);margin-left:8px">录入请到「📋 项目清单」</span></div>
       ${payments.length === 0 ? '<div class="empty-state">暂无到账记录</div>' : `
         <div class="table-wrap"><table class="data-table">
-          <thead><tr><th>日期</th><th>金额</th><th>方式</th><th>备注</th><th>操作</th></tr></thead>
+          <thead><tr><th>日期</th><th>金额</th><th>方式</th><th>备注</th><th>状态</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`}
     `;
@@ -2606,6 +2609,28 @@ const UI = {
     }
   },
 
+  _markSpaceClassificationManual() {
+    this._spaceClassificationSource = 'manual';
+    const hint = $('#sp-business-hint');
+    if (hint) hint.textContent = '已人工确认业务类型';
+  },
+
+  async _suggestSpaceBusiness(initial = false) {
+    const type = $('#sp-type')?.value || '';
+    const status = $('#sp-status')?.value || '';
+    if (!type) return;
+    try {
+      const suggestion = await Store._request('GET', `/rest/v1/space-entry?type=${encodeURIComponent(type)}&status=${encodeURIComponent(status)}`);
+      if (initial || this._spaceClassificationSource !== 'manual') {
+        if ($('#sp-business-type')) $('#sp-business-type').value = suggestion.businessTypeCode;
+        if ($('#sp-business-status')) $('#sp-business-status').value = suggestion.businessStatus;
+        this._spaceClassificationSource = 'suggested';
+      }
+      const hint = $('#sp-business-hint');
+      if (hint) hint.textContent = suggestion.requiresConfirmation ? '该场景存在混合用途，请人工确认业务类型' : '已按执行类型给出默认建议，可人工修改';
+    } catch (e) { console.warn('[space] 业务类型建议加载失败', e); }
+  },
+
   _escHtml(s) {
     return String(s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
   },
@@ -2641,6 +2666,12 @@ const UI = {
     $('#sp-rental-type').value = r.rentalType || '付费';
     $('#sp-receivable').value = r.receivableAmount || 0;
     $('#sp-expected-payment').value = r.expectedPaymentDate || this._calcExpectedPaymentDate(r.date, r.endDate);
+    $('#sp-business-type').value = r.businessTypeCode || 'uncategorized_revenue';
+    $('#sp-cooperation-mode').value = r.cooperationMode || '';
+    $('#sp-business-status').value = r.businessStatus || '待确认';
+    $('#sp-contract-no').value = r.contractNo || '';
+    $('#sp-project-owner').value = r.projectOwner || '';
+    this._spaceClassificationSource = r.businessTypeCode ? 'manual' : 'suggested';
     $('#sp-notes').value = r.notes || '';
     this._toggleRentalType();
   },
@@ -2656,25 +2687,22 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">📋</div>暂无记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>结束日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>租金类型</th><th>状态</th><th>应收</th><th>已收</th><th>预计到账</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>空间</th><th>项目名称</th><th>业务类型</th><th>合作方式</th><th>合同编号</th><th>负责人</th><th>经营状态</th><th>应收/已收</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       const statusTagClass = r.status === '已完成' ? 'tag-success' : r.status === '已取消' || r.status === '空闲' ? 'tag-danger' : 'tag-info';
       const expected = r.expectedPaymentDate || this._calcExpectedPaymentDate(r.date, r.endDate);
       h += `<tr>
         <td>${r.date}</td>
-        <td>${r.endDate || '—'}</td>
         <td>${this._escHtml(r.space)}</td>
         <td>${this._escHtml(r.projectName)}</td>
-        <td>${this._escHtml(r.type)}</td>
-        <td>${this._escHtml(r.client || '-')}</td>
-        <td><span class="tag ${r.rentalType === '免费' ? 'tag-free' : 'tag-info'}">${r.rentalType || '付费'}</span></td>
-        <td><span class="tag ${statusTagClass}">${r.status}</span></td>
-        <td>${r.rentalType === '免费' ? '免费' : '¥' + this._fmt(r.receivableAmount)}</td>
-        <td>${r.rentalType === '免费' ? '—' : '¥' + this._fmt(r.receivedAmount || 0)}</td>
-        <td>${expected || '—'}</td>
+        <td><span class="tag ${(r.businessTypeCode || '') === 'uncategorized_revenue' ? 'tag-danger' : 'tag-info'}">${({space_rental:'空间租赁/合作',brand_event:'品牌活动/企业合作',uncategorized_revenue:'待确认项目'})[r.businessTypeCode] || '待确认项目'}</span><div class="form-hint">${this._escHtml(r.type)}</div></td>
+        <td>${this._escHtml(r.cooperationMode || '-')}</td>
+        <td>${this._escHtml(r.contractNo || '-')}</td>
+        <td>${this._escHtml(r.projectOwner || '-')}</td>
+        <td><span class="tag ${statusTagClass}">${this._escHtml(r.businessStatus || r.status)}</span></td>
+        <td>${r.rentalType === '免费' ? '免费' : `¥${this._fmt(r.receivableAmount)} / ¥${this._fmt(r.receivedAmount || 0)}`}<div class="form-hint">预计 ${expected || '—'}</div></td>
         <td class="row-actions">
           ${Auth.can('edit', 'space') ? `<button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>` : ''}
-          ${Auth.can('delete', 'space') ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteSpace('${r.id}')">删除</button>` : ''}
         </td>
       </tr>`;
     });
@@ -2695,6 +2723,11 @@ const UI = {
       rentalType: rentalType,
       receivableAmount: rentalType === '免费' ? 0 : +($('#sp-receivable').value || 0),
       expectedPaymentDate: $('#sp-expected-payment').value || '',
+      businessTypeCode: $('#sp-business-type').value,
+      cooperationMode: $('#sp-cooperation-mode').value,
+      businessStatus: $('#sp-business-status').value,
+      contractNo: $('#sp-contract-no').value.trim(),
+      projectOwner: $('#sp-project-owner').value.trim(),
       notes: $('#sp-notes').value
     };
 
@@ -2731,11 +2764,11 @@ const UI = {
 
     try {
       if (this._editingSpaceId) {
-        await Store.update('space', this._editingSpaceId, data);
+        await Store._request('PATCH', `/rest/v1/space-entry?id=${encodeURIComponent(this._editingSpaceId)}`, { project: data, classificationSource: this._spaceClassificationSource || 'manual' });
         this.toast('空间使用记录已更新');
         this._editingSpaceId = null;
       } else {
-        await Store.add('space', createSpaceUsage(data));
+        await Store._request('POST', '/rest/v1/space-entry', { project: createSpaceUsage(data), classificationSource: this._spaceClassificationSource || 'manual' });
         this.toast('空间使用记录已保存');
       }
       await this.renderSpacePage();

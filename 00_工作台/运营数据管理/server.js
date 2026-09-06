@@ -163,7 +163,8 @@ const READ_ONLY_TABLES = new Set([
   'business_cost_facts_v2',
   'business_profit_facts_v2',
   'workshop_project_performance_v2',
-  'gallery_transaction_performance_v2'
+  'gallery_transaction_performance_v2',
+  'space_project_performance_v2'
 ]);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
@@ -178,7 +179,8 @@ function toCamel(row) {
     'gross_amount_snapshot','net_amount_snapshot','unit_price','quantity','unit_cost',
     'gross_amount','cost_price_snapshot','confidence','cost_amount','revenue_amount',
     'gross_profit','gross_margin','participant_count','direct_cost_amount',
-    'contribution_amount','contribution_margin','settlement_cost','realized_net_amount'
+    'contribution_amount','contribution_margin','settlement_cost','realized_net_amount',
+    'outstanding_amount','payment_count'
   ]);
   const o = {};
   for (let k of Object.keys(row)) {
@@ -378,7 +380,7 @@ function canAccessTable(user, table, method) {
       'cash_movements','expense_attachments','expense_reimbursements','revenue_facts','app_config',
       'business_dimensions','business_mapping_rules','record_business_links','product_aliases',
       'business_revenue_facts_v2','business_cost_facts_v2','business_profit_facts_v2',
-      'workshop_project_performance_v2','gallery_transaction_performance_v2'
+      'workshop_project_performance_v2','gallery_transaction_performance_v2','space_project_performance_v2'
     ]),
     viewer: new Set([
       'revenue','space_usage','space_payments','space_usage_with_payments',
@@ -1128,7 +1130,8 @@ async function handleREST(req, res, urlInfo) {
     'business_cost_facts_v2': 'business_cost_facts_v2',
     'business_profit_facts_v2': 'business_profit_facts_v2',
     'workshop_project_performance_v2': 'workshop_project_performance_v2',
-    'gallery_transaction_performance_v2': 'gallery_transaction_performance_v2'
+    'gallery_transaction_performance_v2': 'gallery_transaction_performance_v2',
+    'space_project_performance_v2': 'space_project_performance_v2'
   };
   const dbTable = tableMap[table];
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);
@@ -1386,6 +1389,7 @@ function serveStatic(req, res, pathname) {
 
 const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 
 // --- Main request handler ---
 const server = http.createServer((req, res) => {
@@ -1408,6 +1412,8 @@ const server = http.createServer((req, res) => {
       handleExpenseEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'gallery-entry') {
       handleGalleryEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'space-entry') {
+      handleSpaceEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'login' && req.method === 'POST') {
       handleLogin(req, res);
     } else if (parts[2] === 'change-password' && req.method === 'POST') {

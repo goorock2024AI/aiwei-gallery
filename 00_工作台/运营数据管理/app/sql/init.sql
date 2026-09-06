@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS space_usage (
   rental_type TEXT DEFAULT '付费',
   receivable_amount NUMERIC(12,2) DEFAULT 0,
   expected_payment_date TEXT DEFAULT '',
+  business_layer_code TEXT DEFAULT 'art_transaction_cooperation',
+  business_type_code TEXT DEFAULT '',
+  cooperation_mode TEXT DEFAULT '',
+  project_owner TEXT DEFAULT '',
+  contract_no TEXT DEFAULT '',
+  business_status TEXT DEFAULT '',
   notes TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -143,7 +149,9 @@ SELECT
   COALESCE(
     (SELECT SUM(amount) FROM space_payments p WHERE p.space_usage_id = s.id),
     0
-  ) AS received_amount
+  ) AS received_amount,
+  s.business_layer_code, s.business_type_code, s.cooperation_mode,
+  s.project_owner, s.contract_no, s.business_status
 FROM space_usage s;
 
 -- 4. 画廊销售表

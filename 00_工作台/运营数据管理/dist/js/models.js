@@ -223,6 +223,12 @@ function createSpaceUsage(data = {}) {
     rentalType: data.rentalType || '付费',
     receivableAmount: +data.receivableAmount || 0,
     expectedPaymentDate: data.expectedPaymentDate || '',
+    businessLayerCode: data.businessLayerCode || data.business_layer_code || 'art_transaction_cooperation',
+    businessTypeCode: data.businessTypeCode || data.business_type_code || '',
+    cooperationMode: data.cooperationMode || data.cooperation_mode || '',
+    projectOwner: data.projectOwner || data.project_owner || '',
+    contractNo: data.contractNo || data.contract_no || '',
+    businessStatus: data.businessStatus || data.business_status || '',
     notes: data.notes || '',
     createdAt: data.createdAt || new Date().toISOString()
   };
