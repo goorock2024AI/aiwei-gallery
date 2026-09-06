@@ -2857,6 +2857,9 @@ const UI = {
     const priceEl = $('#gal-price');
     const qtyEl = $('#gal-quantity');
     const hintEl = $('#gal-max-qty-hint');
+    const idEl = $('#gal-artwork-id');
+    const settlementEl = $('#gal-settlement-hint');
+    if (idEl) idEl.value = a.id;
     if (artworkEl) artworkEl.value = a.title || '';
     if (noEl) noEl.value = a.artworkNo || a.artwork_no || '';
     if (artistEl) artistEl.value = a.artist || '';
@@ -2868,6 +2871,7 @@ const UI = {
     if (qtyEl) qtyEl.value = 1;
     if (qtyEl) qtyEl.max = avail;
     if (hintEl) hintEl.textContent = `(库存 ${avail}/${totalQty})`;
+    if (settlementEl) settlementEl.textContent = `结算价快照：¥${this._fmt(a.settlementPrice ?? a.settlement_price)} · 零售价快照：¥${this._fmt(retail)}`;
     this._updateGalleryNet();
     document.querySelector('.modal-overlay')?.remove();
     this.toast(`已选择：${a.artworkNo ? '['+a.artworkNo+'] ' : ''}${a.title}`);
@@ -2919,7 +2923,6 @@ const UI = {
               <select id="gal-status">
                 <option value="已售出">已售出</option>
                 <option value="已预定">已预定</option>
-                <option value="已退款">已退款</option>
               </select>
             </div>
           </div>
@@ -2929,10 +2932,11 @@ const UI = {
             <div class="form-group full">
               <label>作品名称<span class="required-mark">*</span></label>
               <div style="display:flex;gap:6px">
-                <input type="text" id="gal-artwork" placeholder="请输入或从作品库选择" required style="flex:1">
+                <input type="hidden" id="gal-artwork-id">
+                <input type="text" id="gal-artwork" placeholder="请从作品库选择" readonly required style="flex:1;background:var(--cream)">
                 <button type="button" class="btn btn-secondary" onclick="UI._pickGalleryArtwork()" title="从产品库-画廊的作品档案中选择">📋 选作品</button>
               </div>
-              <div class="form-hint">从作品库选择可自动填充编号与艺术家</div>
+              <div class="form-hint" id="gal-settlement-hint">必须明确关联已上架作品，保存时锁定价格快照</div>
             </div>
             <div class="form-group"><label>作品编号</label>
               <input type="text" id="gal-artwork-no" placeholder="选品后自动填充" readonly style="background:var(--cream);font-family:monospace">
@@ -2986,6 +2990,9 @@ const UI = {
                 <option value="对公转账">对公转账</option>
               </select>
             </div>
+            <div class="form-group"><label>销售渠道</label>
+              <select id="gal-channel"><option value="馆内画廊">馆内画廊</option><option value="展览现场">展览现场</option><option value="线上咨询">线上咨询</option><option value="其他">其他</option></select>
+            </div>
             <div class="form-group"><label>经手人</label>
               <input type="text" id="gal-handler" placeholder="经手人姓名">
             </div>
@@ -3038,16 +3045,22 @@ const UI = {
     $('#gal-date').value = r.date;
     $('#gal-artwork').value = r.artworkName || '';
     $('#gal-artwork-no').value = r.artworkNo || r.artwork_no || '';
+    $('#gal-artwork-id').value = r.artworkId || r.artwork_id || '';
     $('#gal-artist').value = r.artist || '';
     $('#gal-quantity').value = r.saleQuantity || r.sale_quantity || 1;
     $('#gal-price').value = r.price || 0;
     $('#gal-commission').value = r.commission || 0;
     $('#gal-buyer').value = r.buyerName || '';
     $('#gal-payment').value = r.paymentMethod || '扫码支付';
-    $('#gal-status').value = r.status || '已售出';
+    $('#gal-channel').value = r.galleryChannel || '馆内画廊';
+    $('#gal-status').value = ['已售出', '已预定'].includes(r.status) ? r.status : '已售出';
     $('#gal-exhibition').value = r.relatedExhibition || '';
     $('#gal-handler').value = r.handler || '';
     $('#gal-notes').value = r.notes || '';
+    const hint = $('#gal-settlement-hint');
+    if (hint) hint.textContent = (r.artworkId || r.artwork_id)
+      ? `当前快照：结算价 ¥${this._fmt(r.settlementPriceSnapshot)} · 零售价 ¥${this._fmt(r.retailPriceSnapshot)}`
+      : '旧记录未明确关联作品，保存前必须重新选作品';
     this._updateGalleryNet();
   },
 
@@ -3068,27 +3081,25 @@ const UI = {
       notes: $('#gal-notes').value.trim()
     };
 
+    const artworkId = $('#gal-artwork-id')?.value || '';
+    data.galleryChannel = $('#gal-channel')?.value || '馆内画廊';
+    if (!artworkId) { this.toast('请从作品库明确选择作品', 'error'); return; }
+
     const errs = validateGallerySale(data);
     if (errs.length) { this.toast(errs[0], 'error'); return; }
 
     const btn = document.querySelector('#page-gallery .btn-primary');
     if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
 
-    let prevRecord = null;
     try {
       if (this._editingGalleryId) {
-        prevRecord = await Store.getById('gallery', this._editingGalleryId);
-        const updated = await Store.update('gallery', this._editingGalleryId, data);
-        await this._recordGalleryCashDelta(prevRecord, updated || { ...prevRecord, ...data, id: this._editingGalleryId }, '画廊现金收款编辑差额');
+        await Store._request('PATCH', `/rest/v1/gallery-entry?id=${encodeURIComponent(this._editingGalleryId)}`, { sale: data, artworkId });
         this.toast('画廊记录已更新');
         this._editingGalleryId = null;
       } else {
-        const saved = await Store.add('gallery', createGallerySale(data));
-        await this._recordGalleryCashSale(saved);
+        await Store._request('POST', '/rest/v1/gallery-entry', { sale: createGallerySale(data), artworkId });
         this.toast('画廊销售记录已保存');
       }
-      // 联动艺术品库状态（按 artwork_no 优先，title+artist 兜底）
-      await this._syncArtworkStatusBySale(data, prevRecord);
     } catch (e) {
       this.toast('保存失败：' + (e.message || e), 'error');
       if (btn) { btn.disabled = false; btn.textContent = '保存记录'; }
@@ -3163,19 +3174,23 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">🖼️</div>暂无画廊销售记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>作品名称</th><th>艺术家</th><th>成交价</th><th>佣金</th><th>净收入</th><th>买家</th><th>状态</th><th>收款方式</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>作品名称</th><th>作品关联</th><th>成交总额</th><th>结算成本</th><th>贡献</th><th>买家</th><th>状态</th><th>收款方式</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       const net = Math.max(0, this._getGallerySaleNet(r) - (r.refundAmount || 0));
       const statusClass = r.status === '已售出' ? 'tag-success' : (r.status === '已预定' || r.status === '部分退款') ? 'tag-info' : 'tag-danger';
       const statusText = (r.refundAmount || 0) > 0 ? `${r.status || '已售出'} ¥${this._fmt(r.refundAmount)}` : (r.status || '已售出');
       const canAdjust = Auth.isAdmin && this._canAdjustRecord(r);
+      const qty = +(r.saleQuantity || 1);
+      const gross = +(r.grossAmountSnapshot ?? (r.price * qty));
+      const cost = +(r.settlementPriceSnapshot || 0) * qty;
+      const contribution = Math.max(0, net - cost);
       h += `<tr>
         <td>${r.date}</td>
         <td>${r.artworkName || '-'}</td>
-        <td>${r.artist || '-'}</td>
-        <td><strong>¥${this._fmt(r.price)}</strong></td>
-        <td>¥${this._fmt(r.commission)}</td>
-        <td>¥${this._fmt(net)}</td>
+        <td>${r.artworkId ? `<span class="tag tag-success">${r.artworkNo || '已关联'}</span>` : '<span class="tag tag-danger">待关联</span>'}</td>
+        <td><strong>¥${this._fmt(gross)}</strong><div class="form-hint">${qty} 件</div></td>
+        <td>¥${this._fmt(cost)}</td>
+        <td><strong>¥${this._fmt(contribution)}</strong><div class="form-hint">扣佣金/退款后</div></td>
         <td>${r.buyerName || '-'}</td>
         <td><span class="tag ${statusClass}">${statusText}</span></td>
         <td>${r.paymentMethod || '-'}</td>
@@ -3183,7 +3198,6 @@ const UI = {
           ${Auth.can('edit', 'gallery') && this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>` : ''}
           ${canAdjust ? `<button class="btn btn-sm btn-secondary" onclick="UI._refundGallery('${r.id}')">退款</button>` : ''}
           ${canAdjust ? `<button class="btn btn-sm btn-danger" onclick="UI._voidGallery('${r.id}')">作废</button>` : ''}
-          ${Auth.isAdmin ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteGallery('${r.id}')">删除</button>` : ''}
         </td>
       </tr>`;
     });
@@ -3279,36 +3293,7 @@ const UI = {
     }
     const reason = (prompt('请输入作废原因') || '').trim();
     if (!reason) { this.toast('已取消作废'); return; }
-    const total = this._getGallerySaleNet(record);
-    const now = new Date().toISOString();
-    await Store.update('gallery', id, {
-      status: '已作废',
-      adjustedAt: now,
-      adjustedBy: Auth.currentUser?.displayName || '',
-      adjustmentReason: reason
-    });
-    await this._recordTransactionAdjustment('gallery', id, 'void', total, reason);
-    const cashToVoid = this._getGalleryCashAmount(record);
-    if (cashToVoid > 0) {
-      await this._recordCashMovement({
-        id: 'cash_void_gallery_' + id,
-        date: record.date || todayStr(),
-        type: 'cash_void',
-        amount: -cashToVoid,
-        sourceType: 'gallery',
-        sourceId: id,
-        reason,
-        notes: '画廊现金销售作废'
-      });
-    }
-    if ((record.status || '已售出') === '已售出') {
-      const qty = +(record.saleQuantity || record.sale_quantity || 1);
-      await this._syncArtworkStatusBySale(
-        { artworkNo: record.artworkNo, artworkName: record.artworkName, artist: record.artist },
-        null,
-        -qty
-      );
-    }
+    await Store._request('POST', `/rest/v1/gallery-entry?id=${encodeURIComponent(id)}&action=void`, { reason });
     this.toast('画廊销售记录已作废');
     await this._renderGalleryList();
     await this._renderGallerySalesStats();
@@ -3337,39 +3322,9 @@ const UI = {
     }
     const reason = (prompt('请输入退款原因') || '').trim();
     if (!reason) { this.toast('已取消退款'); return; }
-    const payoutMethod = '现金';
-    const newRefund = refunded + amount;
-    const status = newRefund >= total ? '已退款' : '部分退款';
-    const now = new Date().toISOString();
-    const adjustmentReason = `${reason}；实际退款方式：${payoutMethod}`;
-    await Store.update('gallery', id, {
-      status,
-      refundAmount: newRefund,
-      adjustedAt: now,
-      adjustedBy: Auth.currentUser?.displayName || '',
-      adjustmentReason
-    });
-    await this._recordTransactionAdjustment('gallery', id, status === '已退款' ? 'refund' : 'partial_refund', amount, adjustmentReason);
-    if (payoutMethod === '现金') {
-      await this._recordCashMovement({
-        id: 'cash_refund_gallery_' + id + '_' + Date.now().toString(36),
-        date: record.date || todayStr(),
-        type: 'cash_refund',
-        amount: -amount,
-        sourceType: 'gallery',
-        sourceId: id,
-        reason,
-        notes: `画廊退款实际支付现金；原收款方式：${record.paymentMethod || '未知'}`
-      });
-    }
-    if (status === '已退款' && (record.status || '已售出') === '已售出') {
-      const qty = +(record.saleQuantity || record.sale_quantity || 1);
-      await this._syncArtworkStatusBySale(
-        { artworkNo: record.artworkNo, artworkName: record.artworkName, artist: record.artist },
-        null,
-        -qty
-      );
-    }
+    const payoutMethod = (prompt('请输入实际退款方式：现金 / 原路退回 / 对公转账', record.paymentMethod === '现金' ? '现金' : '原路退回') || '').trim();
+    if (!['现金', '原路退回', '对公转账'].includes(payoutMethod)) { this.toast('请选择有效退款方式', 'error'); return; }
+    await Store._request('POST', `/rest/v1/gallery-entry?id=${encodeURIComponent(id)}&action=refund`, { amount, reason, payoutMethod });
     this.toast('画廊退款已记录');
     await this._renderGalleryList();
     await this._renderGallerySalesStats();

@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS revenue (
   adjusted_at TIMESTAMPTZ,
   adjusted_by TEXT DEFAULT '',
   adjustment_reason TEXT DEFAULT '',
+  artwork_id TEXT,
+  settlement_price_snapshot NUMERIC(12,2) DEFAULT 0,
+  retail_price_snapshot NUMERIC(12,2) DEFAULT 0,
+  gross_amount_snapshot NUMERIC(12,2) DEFAULT 0,
+  net_amount_snapshot NUMERIC(12,2) DEFAULT 0,
+  gallery_channel TEXT DEFAULT '馆内画廊',
+  business_type_code TEXT DEFAULT 'gallery_sale',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_date ON revenue(date);
@@ -163,6 +170,7 @@ CREATE TABLE IF NOT EXISTS gallery_sales (
 );
 CREATE INDEX IF NOT EXISTS idx_gallery_sales_date ON gallery_sales(date);
 CREATE INDEX IF NOT EXISTS idx_gallery_sales_artwork_no ON gallery_sales(artwork_no) WHERE artwork_no <> '';
+CREATE INDEX IF NOT EXISTS idx_gallery_sales_artwork_id ON gallery_sales(artwork_id) WHERE artwork_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS transaction_adjustments (
   id TEXT PRIMARY KEY,

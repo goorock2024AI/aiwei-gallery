@@ -87,6 +87,13 @@ function createRevenue(data = {}) {
     adjustedAt: data.adjustedAt || data.adjusted_at || null,
     adjustedBy: data.adjustedBy || data.adjusted_by || '',
     adjustmentReason: data.adjustmentReason || data.adjustment_reason || '',
+    artworkId: data.artworkId || data.artwork_id || '',
+    settlementPriceSnapshot: +data.settlementPriceSnapshot || +data.settlement_price_snapshot || 0,
+    retailPriceSnapshot: +data.retailPriceSnapshot || +data.retail_price_snapshot || 0,
+    grossAmountSnapshot: +data.grossAmountSnapshot || +data.gross_amount_snapshot || 0,
+    netAmountSnapshot: +data.netAmountSnapshot || +data.net_amount_snapshot || 0,
+    galleryChannel: data.galleryChannel || data.gallery_channel || '馆内画廊',
+    businessTypeCode: data.businessTypeCode || data.business_type_code || 'gallery_sale',
     createdAt: data.createdAt || new Date().toISOString()
   };
 }
