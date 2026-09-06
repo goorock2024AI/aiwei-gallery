@@ -303,7 +303,9 @@ const UI = {
                           ${MODELS.WORKSHOP_PRODUCTS.map(p => `<option value="${p.name}:${p.price}">${p.name} ¥${p.price}</option>`).join('')}
                         </select>
                       </div>
-                      <div class="form-group"><label>次数</label><input type="number" id="ws-qty" min="1" value="1" style="width:60px"></div>
+                      <div class="form-group"><label>活动项目</label><input id="ws-project" placeholder="必填，如：周六亲子木刻" style="width:150px"></div>
+                      <div class="form-group"><label>活动类型</label><select id="ws-type"><option value="workshop">工坊/体验</option><option value="course_study">课程/研学</option></select></div>
+                      <div class="form-group"><label>参与人数</label><input type="number" id="ws-qty" min="1" step="1" value="1" style="width:72px"></div>
                       <div class="form-group"><label>优惠额</label><input type="number" id="ws-discount" min="0" value="0" step="0.01" style="width:80px"></div>
                       <button type="button" class="btn btn-sm btn-primary" onclick="UI._addWorkshopItem()" style="margin-bottom:1px">+ 添加</button>
                     </div>
@@ -325,6 +327,8 @@ const UI = {
               <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="rev-count"></span>
             </div>
             <div id="revenue-list"><div class="loading-state"><div class="spinner"></div></div></div>
+            <div class="card-title" style="margin-top:24px">本月工坊项目经营</div>
+            <div id="workshop-project-list"><div class="loading-state"><div class="spinner"></div></div></div>
           </div>
         </div>
 
@@ -369,6 +373,7 @@ const UI = {
     this._loadTodayStats();
     this._loadCounterCashPanel();
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
   },
 
   // —— 票务按钮辅助渲染 ——
@@ -414,13 +419,16 @@ const UI = {
     const qtyInput = document.getElementById('ws-qty');
     const discInput = document.getElementById('ws-discount');
     if (!sel || !sel.value) { this.toast('请选择工坊项目', 'error'); return; }
+    const projectName = document.getElementById('ws-project')?.value.trim() || '';
+    if (!projectName) { this.toast('请输入活动项目名称', 'error'); return; }
     const [name, priceStr] = sel.value.split(':');
     const price = +priceStr;
-    const qty = +qtyInput.value || 1;
+    const qty = Number(qtyInput.value);
     const discount = +discInput.value || 0;
-    const amount = Math.max(0, qty * price - discount);
+    if (!Number.isInteger(qty) || qty <= 0) { this.toast('参与人数必须为正整数', 'error'); return; }
+    if (discount < 0 || discount > qty * price) { this.toast('优惠额不能超过原价', 'error'); return; }
 
-    this._workshopItems.push({ name, qty, unitPrice: price, discount, amount });
+    this._workshopItems.push(createWorkshopSaleItem({ name, price }, projectName, document.getElementById('ws-type')?.value, qty, discount));
     this._renderWorkshopList();
     qtyInput.value = 1;
     discInput.value = 0;
@@ -435,11 +443,11 @@ const UI = {
     if (!this._workshopItems.length) { el.innerHTML = ''; document.getElementById('ws-total').textContent = '工坊小计: ¥0.00'; return; }
     let h = '';
     let total = 0;
-    this._workshopItems.forEach((item, idx) => {
+    this._workshopItems.map(normalizeWorkshopSaleItem).forEach((item, idx) => {
       total += item.amount;
       const discText = item.discount > 0 ? ` (优惠¥${item.discount})` : '';
       h += `<div class="pos-item-row">
-        <span class="pos-item-name">${item.name} × ${item.qty}${discText}</span>
+        <span class="pos-item-name">${this._escHtml(item.productName)} · ${this._escHtml(item.projectName || '未填写项目')} · ${item.qty}人${discText}</span>
         <span class="pos-item-amount">¥${item.amount.toFixed(2)}</span>
         <button type="button" class="pos-item-del" onclick="UI._removeWorkshopItem(${idx})">✕</button>
       </div>`;
@@ -782,7 +790,7 @@ const UI = {
           coffeeItems: cItems,
           coffeeQty: cItems.reduce((s, i) => s + i.qty, 0),
           coffeeAmount: cItems.reduce((s, i) => s + i.amount, 0),
-          workshopItems: this._workshopItems.map(i => ({ ...i })),
+          workshopItems: this._workshopItems.map(normalizeWorkshopSaleItem),
           workshopAmount: this._workshopItems.reduce((s, i) => s + i.amount, 0),
           retailItems: this._retailItems.map(i => ({ ...i })),
           retailAmount: this._retailItems.reduce((s, i) => s + i.amount, 0),
@@ -805,7 +813,8 @@ const UI = {
         for (const item of this._workshopItems) {
           const saved = await Store.add('revenue', createRevenue({
             ...baseRecord,
-            workshopItems: [{ ...item }],
+            projectName: normalizeWorkshopSaleItem(item).projectName,
+            workshopItems: [normalizeWorkshopSaleItem(item)],
             workshopAmount: item.amount,
             cashAmount: isCash ? item.amount : 0,
             accountAmount: isCash ? 0 : item.amount,
@@ -835,6 +844,7 @@ const UI = {
     this._submittingPayment = false;
     this._resetPOS();
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },
@@ -872,6 +882,10 @@ const UI = {
     document.getElementById('rev-other-desc').value = '';
     document.getElementById('rev-notes').value = '';
     this._workshopItems = [];
+    const workshopProject = document.getElementById('ws-project');
+    if (workshopProject) workshopProject.value = '';
+    const workshopType = document.getElementById('ws-type');
+    if (workshopType) workshopType.value = 'workshop';
     this._retailItems = [];
     this._selectedRetailProduct = null;
     this._renderWorkshopList();
@@ -909,7 +923,7 @@ const UI = {
     });
 
     // 工坊
-    this._workshopItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(i => ({ ...i }));
+    this._workshopItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(normalizeWorkshopSaleItem);
     this._renderWorkshopList();
 
     // 文创
@@ -946,6 +960,22 @@ const UI = {
       + (r.retailAmount || r.creativeAmount || 0)
       + (r.venueAmount || 0)
       + (r.otherAmount || 0);
+  },
+
+  async _renderWorkshopProjects() {
+    const el = document.getElementById('workshop-project-list');
+    if (!el) return;
+    const month = (document.getElementById('rev-filter-date')?.value || todayStr()).slice(0, 7);
+    try {
+      const rows = await Store._request('GET', '/rest/v1/workshop_project_performance_v2?activity_month=eq.' + encodeURIComponent(month) + '&order=last_activity_date.desc');
+      if (!rows.length) { el.innerHTML = '<div class="empty-state"><div class="icon">🔧</div>本月暂无已命名的工坊项目</div>'; return; }
+      el.innerHTML = '<div class="table-wrap"><table class="data-table" style="min-width:850px"><thead><tr><th>活动项目</th><th>类型/日期</th><th>参与人数</th><th>收入</th><th>直接成本</th><th>贡献额</th><th>数据状态</th></tr></thead><tbody>' + rows.map(r => {
+        const costState = r.missingDirectCost ? '<span class="tag tag-info">待补直接成本</span>' : r.pendingCostCount > 0 ? '<span class="tag tag-info">有待归类成本</span>' : '<span class="tag tag-success">已关联成本</span>';
+        return `<tr><td><strong>${this._escHtml(r.projectName)}</strong></td><td>${this._escHtml(r.activityTypes || '工坊/体验')}<br>${r.firstActivityDate}${r.firstActivityDate === r.lastActivityDate ? '' : ' 至 ' + r.lastActivityDate}</td><td>${this._fmt(r.participantCount)} 人</td><td>¥${this._fmt(r.revenueAmount)}</td><td>¥${this._fmt(r.directCostAmount)}</td><td><strong>¥${this._fmt(r.contributionAmount)}</strong></td><td>${costState}</td></tr>`;
+      }).join('') + '</tbody></table></div><p class="form-hint">直接成本只汇总 M3-05 中明确归属到同名项目和体验活动层的期间支出；未录入成本时不估算。</p>';
+    } catch (error) {
+      el.innerHTML = '<p>工坊项目经营数据加载失败：' + this._escHtml(error.message || error) + '</p>';
+    }
   },
 
   _canAdjustRecord(record) {
@@ -1103,8 +1133,8 @@ const UI = {
       const cItems = Array.isArray(r.coffeeItems) ? r.coffeeItems : [];
       cItems.forEach(i => lines.push(fmtItem('☕', i.qty || 0, itemName(i) || '咖啡', itemPrice(i))));
       // 工坊明细
-      const wItems = Array.isArray(r.workshopItems) ? r.workshopItems : [];
-      wItems.forEach(i => lines.push(fmtItem('🔧', i.qty || 0, itemName(i) || '工坊', itemPrice(i))));
+      const wItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(normalizeWorkshopSaleItem);
+      wItems.forEach(i => lines.push(`🔧 ${i.qty}人 · ${this._escHtml(i.productName)}${i.projectName ? ' · ' + this._escHtml(i.projectName) : ''} ¥${this._fmt(i.unitPrice)}`));
       // 文创明细
       const retItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(normalizeRetailSaleItem);
       retItems.forEach(i => lines.push(fmtItem('🛒', i.qty || 0, itemName(i) || '文创', itemPrice(i))));
@@ -1166,9 +1196,10 @@ const UI = {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   },
 
-  _filterRevenue() {
+  async _filterRevenue() {
     this._revenueFilterDate = document.getElementById('rev-filter-date').value;
-    this._renderRevenueList();
+    await this._renderRevenueList();
+    await this._renderWorkshopProjects();
   },
 
   async _deleteRevenue(id) {
@@ -1190,6 +1221,7 @@ const UI = {
     await Store.delete('revenue', id);
     this.toast('已删除');
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },
@@ -1227,6 +1259,7 @@ const UI = {
     }
     this.toast('收入记录已作废');
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },
@@ -1280,6 +1313,7 @@ const UI = {
     }
     this.toast('退款已记录');
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },

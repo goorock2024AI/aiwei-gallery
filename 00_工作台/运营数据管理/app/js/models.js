@@ -111,6 +111,38 @@ function createRetailSaleItem(name, qty, unitPrice, product = null) {
     costPriceSnapshot: p.costPrice, sku: p.sku || '', barcode: p.barcode || '' };
 }
 
+function createWorkshopSaleItem(product, projectName, activityTypeCode, participants, discount = 0) {
+  const qty = Number(participants);
+  const unitPrice = Number(product?.price);
+  const safeDiscount = Math.max(0, Number(discount) || 0);
+  return {
+    productName: String(product?.name || '').trim(),
+    projectName: String(projectName || '').trim(),
+    activityTypeCode: activityTypeCode === 'course_study' ? 'course_study' : 'workshop',
+    participantCount: qty,
+    qty,
+    unitPrice,
+    discount: safeDiscount,
+    amount: Math.max(0, qty * unitPrice - safeDiscount),
+    snapshotVersion: 1,
+    snapshotAt: new Date().toISOString()
+  };
+}
+
+function normalizeWorkshopSaleItem(item) {
+  const line = Object.fromEntries(Object.entries(item || {}).map(([key, value]) =>
+    [key.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), value]));
+  line.productName = line.productName ?? line.name ?? '工坊/体验';
+  line.projectName = line.projectName ?? '';
+  line.activityTypeCode = line.activityTypeCode === 'course_study' ? 'course_study' : 'workshop';
+  line.qty = Number(line.participantCount ?? line.qty ?? line.quantity ?? 0);
+  line.participantCount = line.qty;
+  line.unitPrice = Number(line.unitPrice ?? line.price ?? 0);
+  line.discount = Number(line.discount ?? 0);
+  line.amount = Number(line.amount ?? Math.max(0, line.qty * line.unitPrice - line.discount));
+  return line;
+}
+
 // The API converts JSONB keys to snake_case on write, but only converts the
 // outer record back on read. Normalize line keys before rendering/editing.
 function normalizeRetailSaleItem(item) {

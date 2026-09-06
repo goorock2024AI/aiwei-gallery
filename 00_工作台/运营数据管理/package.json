@@ -11,7 +11,11 @@
     "deploy:static-hotfix": "powershell -ExecutionPolicy Bypass -File scripts/deploy-static-hotfix.ps1",
     "check:retail-snapshot": "node scripts/check-retail-snapshot.js",
     "check:expense-entry": "node scripts/check-expense-entry-integration.js",
-    "check:expense-migration": "node scripts/check-expense-entry-migration.js"
+    "check:expense-migration": "node scripts/check-expense-entry-migration.js",
+    "check:workshop-projects": "node scripts/check-workshop-projects.js",
+    "check:workshop-integration": "node scripts/check-workshop-projects-integration.js",
+    "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",
+    "check:workshop-browser": "node scripts/check-workshop-projects-browser.js"
   },
   "dependencies": {
     "pdfkit": "^0.17.2",

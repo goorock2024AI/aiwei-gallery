@@ -1,0 +1,54 @@
+// Requires the isolated M3 API on localhost:3106, Edge and Playwright.
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const fs = require('fs');
+const assert = require('assert/strict');
+const { Client } = require('pg');
+(async () => {
+  const cfg = JSON.parse(fs.readFileSync('tmp/m3-05-test.json'));
+  const db = new Client({ host: cfg.host, port: cfg.port, database: cfg.database, user: 'postgres' });
+  await db.connect();
+  await db.query("DELETE FROM revenue WHERE project_name='M306浏览器亲子木刻'");
+  await db.end();
+  const browser = await chromium.launch({ headless: true, channel: 'msedge' });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto('http://127.0.0.1:3106/index.html');
+    await page.locator('#login-username').fill('m305-editor');
+    await page.locator('#login-password').fill(cfg.password);
+    await page.locator('#login-form button').click();
+    await page.locator('#rt-name').waitFor();
+    const firstWorkshop = page.locator('#ws-product-select option').nth(1);
+    await page.locator('#ws-product-select').selectOption(await firstWorkshop.getAttribute('value'));
+    await page.locator('#ws-qty').fill('3');
+    await page.locator('#ws-discount').fill('30');
+    await page.locator('button').filter({ hasText: '+ 添加' }).last().click();
+    await page.locator('.toast').filter({ hasText: '请输入活动项目名称' }).waitFor();
+    assert.equal(await page.locator('#ws-list .pos-item-row').count(), 0);
+    await page.locator('#ws-project').fill('M306浏览器亲子木刻');
+    await page.locator('#ws-type').selectOption('course_study');
+    await page.locator('#ws-product-select').selectOption(await firstWorkshop.getAttribute('value'));
+    await page.locator('#ws-qty').fill('3');
+    await page.locator('#ws-discount').fill('30');
+    await page.locator('button').filter({ hasText: '+ 添加' }).last().click();
+    await page.locator('#ws-list').filter({ hasText: 'M306浏览器亲子木刻' }).waitFor();
+    await page.locator('#ws-list').filter({ hasText: '3人' }).waitFor();
+    const responsePromise = page.waitForResponse(response => response.url().includes('/rest/v1/revenue') && response.request().method() === 'POST');
+    await page.locator('#pos-confirm-btn').click();
+    const response = await responsePromise;
+    assert.equal(response.status(), 201);
+    await page.locator('#workshop-project-list').filter({ hasText: 'M306浏览器亲子木刻' }).waitFor();
+    await page.locator('#workshop-project-list').filter({ hasText: '待补直接成本' }).waitFor();
+    await page.locator('.toast').evaluateAll(nodes => nodes.forEach(node => node.remove()));
+    await page.screenshot({ path: 'tmp/m3-06-desktop.png', fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('#ws-project').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: 'tmp/m3-06-mobile-entry.png' });
+    await page.locator('#workshop-project-list').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: 'tmp/m3-06-mobile-projects.png' });
+    assert.deepEqual(errors, []);
+    fs.writeFileSync('tmp/m3-06-browser-result.json', JSON.stringify({ passed: true, pageErrors: errors }, null, 2));
+    console.log('PASS workshop browser workflow: required project, participant snapshot, saved revenue, project summary, desktop/mobile.');
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });
