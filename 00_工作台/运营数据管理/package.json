@@ -21,6 +21,7 @@
     "check:management-summary": "node scripts/check-management-summary-integration.js",
     "check:management-migration": "node scripts/check-management-summary-migration.js",
     "check:management-browser": "node scripts/check-management-summary-browser.js",
+    "check:m3-stage-review": "node scripts/check-m3-stage-review.js",
     "check:workshop-projects": "node scripts/check-workshop-projects.js",
     "check:workshop-integration": "node scripts/check-workshop-projects-integration.js",
     "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",

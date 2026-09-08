@@ -1367,6 +1367,34 @@ async function prepareProductAlias(data, existing = null) {
   return row;
 }
 
+async function handleOperationLog(req, res) {
+  const requester = await getRequester(req);
+  if (!ensureRole(res, requester, ['admin', 'editor'])) return;
+  if (req.method !== 'POST') return sendError(res, 405, '仅支持 POST');
+
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', async () => {
+    try {
+      const input = JSON.parse(body || '{}');
+      const id = String(input.id || `log_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`);
+      const action = String(input.action || '').trim();
+      const tableName = String(input.table_name || input.tableName || '').trim();
+      const recordId = String(input.record_id || input.recordId || '');
+      if (!action || !tableName) return sendError(res, 400, '操作类型和数据表不能为空');
+      const details = typeof input.details === 'string' ? input.details : JSON.stringify(input.details || {});
+      const result = await pool.query(
+        `INSERT INTO operation_logs(id,user_id,action,table_name,record_id,details,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [id, requester.id, action, tableName, recordId, details, new Date().toISOString()]
+      );
+      sendJSON(res, 201, toCamel(result.rows[0]));
+    } catch (e) {
+      sendError(res, 400, e.message);
+    }
+  });
+}
+
 // --- Static file server ---
 function serveStatic(req, res, pathname) {
   let filePath = path.join(STATIC_DIR, pathname === '/' ? '/index.html' : pathname);
@@ -1414,7 +1442,9 @@ const server = http.createServer((req, res) => {
   }
 
   if (parts[0] === 'rest' && parts[1] === 'v1') {
-    if (parts[2] === 'expense-entry') {
+    if (parts[2] === 'operation-log') {
+      handleOperationLog(req, res);
+    } else if (parts[2] === 'expense-entry') {
       handleExpenseEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'gallery-entry') {
       handleGalleryEntry(req, res, urlInfo.query);

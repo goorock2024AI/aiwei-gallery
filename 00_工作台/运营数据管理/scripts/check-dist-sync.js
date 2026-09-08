@@ -11,6 +11,7 @@ const pairs = [
   ['app/js/charts.js', 'dist/js/charts.js'],
   ['app/js/models.js', 'dist/js/models.js'],
   ['app/js/auth.js', 'dist/js/auth.js'],
+  ['app/js/operation-logger.js', 'dist/js/operation-logger.js'],
   ['app/js/ui.js', 'dist/js/ui.js'],
   ['app/js/import-export.js', 'dist/js/import-export.js']
 ];

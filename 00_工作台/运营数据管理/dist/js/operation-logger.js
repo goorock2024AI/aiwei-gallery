@@ -38,11 +38,9 @@ const OperationLogger = {
 
     // 批量写入（不阻塞主流程）
     Promise.all(batch.map(r =>
-      fetch(SUPABASE_CONFIG.url + '/rest/v1/operation_logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(r)
-      }).catch(() => {})
+      Store._request('POST', '/rest/v1/operation-log', r).catch(error => {
+        console.error('操作日志写入失败：', error);
+      })
     )).catch(() => {});
   },
 
@@ -57,8 +55,7 @@ const OperationLogger = {
       if (tableName) path += '&table_name=eq.' + encodeURIComponent(tableName);
       if (userId) path += '&user_id=eq.' + encodeURIComponent(userId);
 
-      const res = await fetch(base + path + '&limit=' + limit + '&offset=' + offset);
-      const data = await res.json();
+      const data = await Store._request('GET', path + '&limit=' + limit + '&offset=' + offset);
       const records = Array.isArray(data) ? data : [];
       return { records, total: records.length };
     } catch (e) {
