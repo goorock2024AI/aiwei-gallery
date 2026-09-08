@@ -5687,7 +5687,7 @@ const UI = {
     const month = $('#rpt-month')?.value || '';
     const prefix = month ? `${year}-${month}` : year;
     try {
-      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, legacyFacts] = await Promise.all([
+      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, allCostCandidates, legacyFacts] = await Promise.all([
         Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
@@ -5695,6 +5695,7 @@ const UI = {
         Store._request('GET', '/rest/v1/product_master_governance_v2?order=affected_amount.desc&limit=5000'),
         Store._request('GET', '/rest/v1/product_cost_evidence_v2?order=evidence_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/revenue_attribution_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/cost_attribution_candidates_v2?order=business_date.desc&limit=5000'),
         Store.getByYear('revenueFacts', year)
       ]);
       if (renderId !== this._v2SummaryRenderId) return;
@@ -5719,6 +5720,9 @@ const UI = {
       this._v2RevenueAttribution = (allRevenueCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
       this._v2RevenueAttributionPeriod = prefix;
       this._v2RevenueAttributionFilter = this._v2RevenueAttributionFilter || '';
+      this._v2CostAttribution = (allCostCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2CostAttributionPeriod = prefix;
+      this._v2CostAttributionFilter = this._v2CostAttributionFilter || '';
       const issueCount = key => issues.filter(r => r.issueType === key).length;
       const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
       const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
@@ -5742,7 +5746,8 @@ const UI = {
         </div>
         ${this._productAliasCandidatesHtml()}
         ${this._productGovernanceHtml()}
-        ${this._revenueAttributionHtml()}`;
+        ${this._revenueAttributionHtml()}
+        ${this._costAttributionHtml()}`;
     } catch (error) {
       if (renderId !== this._v2SummaryRenderId) return;
       target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
@@ -5918,6 +5923,53 @@ const UI = {
     const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
     const link = document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`历史收入归属候选-${this._v2RevenueAttributionPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);
     this.toast(`已导出 ${rows.length} 条收入归属候选`);
+  },
+
+  _costAttributionHtml() {
+    const allRows = this._v2CostAttribution || [];
+    const filter = this._v2CostAttributionFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      manual_link:'已有人工归属', pending_manual_link:'人工归属待补', unique_rule:'唯一规则候选',
+      partial_rule:'部分规则候选', ambiguous_rules:'规则冲突', no_candidate:'无候选'
+    };
+    const count = status => allRows.filter(r => r.candidateStatus === status).length;
+    const conflictCount = allRows.filter(r => r.candidateStatus === 'ambiguous_rules' || r.projectMatchStatus === 'ambiguous_projects').length;
+    const unresolvedAmount = allRows.filter(r => r.candidateStatus !== 'manual_link' || ['ambiguous_projects','unmatched_project'].includes(r.projectMatchStatus)).reduce((sum,r) => sum + Math.abs(+r.affectedAmount || 0),0);
+    return `<div class="card" id="v2-cost-attribution-card">
+      <div class="card-title">历史支出与成本归属复核 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2CostAttribution()" ${rows.length ? '' : 'disabled'}>导出支出归属候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2CostAttributionPeriod)}：保留原支出类别；人工链接优先，规则只比较最高优先级。成本类型、业务层、能力轴和项目候选均不会自动改写原始支出。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">已有人工归属</div><div class="stat-value">${count('manual_link')}</div><div class="stat-sub">有效成本类型及维度</div></div>
+        <div class="stat-card"><div class="stat-label">唯一规则候选</div><div class="stat-value">${count('unique_rule')}</div><div class="stat-sub">需人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">归属冲突</div><div class="stat-value">${conflictCount}</div><div class="stat-sub">含规则或项目冲突</div></div>
+        <div class="stat-card"><div class="stat-label">未解决影响金额</div><div class="stat-value">¥${this._fmt(unresolvedAmount)}</div><div class="stat-sub">含部分候选、无候选和项目待复核</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="cost-attribution-status" onchange="UI._filterV2CostAttribution(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-cost-attribution-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期/原类别</th><th>支出说明</th><th>金额</th><th>状态</th><th>建议归属</th><th>项目关联</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const dims = [r.suggestedCostTypeName || r.suggestedCostTypeCode, r.suggestedBusinessLayerName || r.suggestedBusinessLayerCode, r.suggestedBusinessTypeName || r.suggestedBusinessTypeCode, r.suggestedCapabilityAxisName || r.suggestedCapabilityAxisCode].filter(Boolean).map(v => this._escHtml(v)).join(' / ') || '-';
+        const project = r.projectMatchStatus === 'unique_project' ? this._escHtml(r.suggestedProjectName) : r.projectMatchStatus === 'ambiguous_projects' ? '同名项目冲突' : r.projectMatchStatus === 'unmatched_project' ? '原项目待登记' : '共享 / 未指定';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}<div class="form-hint">原类别：${this._escHtml(r.originalCategory)}</div></td><td><strong>${this._escHtml(r.description || r.originalProject || '支出')}</strong><div class="form-hint">${this._escHtml(r.relatedActivity || '')}</div></td><td>¥${this._fmt(r.affectedAmount)}</td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${dims}<div class="form-hint">${this._escHtml(r.matchedField || '-')} · ${r.topRuleCount || (r.candidateBasis === 'record_business_links' ? 1 : 0)} 条依据</div></td><td>${project}<div class="form-hint">${this._escHtml(r.originalProject || r.relatedActivity || '')}</div></td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的支出归属候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2CostAttribution(status) {
+    this._v2CostAttributionFilter = status || '';
+    const card = $('#v2-cost-attribution-card');
+    if (card) card.outerHTML = this._costAttributionHtml();
+  },
+
+  _exportV2CostAttribution() {
+    const filter = this._v2CostAttributionFilter || '';
+    const rows = (this._v2CostAttribution || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的支出归属候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','原支出类型','原项目','原支出类别','支出说明','关联活动','影响金额','来源表','来源ID','明细键','候选依据','候选数','命中规则数','最高优先级规则数','置信度','建议成本类型','建议业务层','建议业务类型','建议能力轴','匹配字段','匹配值','项目匹配状态','项目候选数','建议项目ID','建议项目名称','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.originalType,r.originalProject,r.originalCategory,r.description,r.relatedActivity,r.affectedAmount,r.sourceTable,r.sourceId,r.sourceLineKey,r.candidateBasis,r.candidateCount,r.matchedRuleCount,r.topRuleCount,r.confidence,r.suggestedCostTypeCode,r.suggestedBusinessLayerCode,r.suggestedBusinessTypeCode,r.suggestedCapabilityAxisCode,r.matchedField,r.matchedValue,r.projectMatchStatus,r.projectCandidateCount,r.suggestedProjectId,r.suggestedProjectName,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+    const link = document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`历史支出归属候选-${this._v2CostAttributionPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 条支出归属候选`);
   },
 
   // === 数据管理 ===
