@@ -5681,16 +5681,20 @@ const UI = {
   async _renderV2ManagementSummary() {
     const target = $('#v2-management-summary');
     if (!target) return;
+    const renderId = (this._v2SummaryRenderId || 0) + 1;
+    this._v2SummaryRenderId = renderId;
     const year = $('#rpt-year')?.value || todayStr().slice(0,4);
     const month = $('#rpt-month')?.value || '';
     const prefix = month ? `${year}-${month}` : year;
     try {
-      const [allSummary, allIssues, allBaseline, legacyFacts] = await Promise.all([
+      const [allSummary, allIssues, allBaseline, allAliasCandidates, legacyFacts] = await Promise.all([
         Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
+        Store._request('GET', '/rest/v1/product_alias_candidates_v2?order=affected_amount.desc&limit=5000'),
         Store.getByYear('revenueFacts', year)
       ]);
+      if (renderId !== this._v2SummaryRenderId) return;
       const layerDefs = [
         ['visit','到馆参观'],['onsite_consumption','现场消费'],['experience_activity','体验活动'],['art_transaction_cooperation','艺术交易与合作']
       ];
@@ -5704,6 +5708,8 @@ const UI = {
       const issues = (allIssues || []).filter(r => String(r.businessDate || '').startsWith(prefix));
       const baseline = (allBaseline || []).filter(r => String(r.periodMonth || '').startsWith(prefix));
       this._v2GovernanceExport = { prefix, issues, baseline };
+      this._v2AliasCandidates = allAliasCandidates || [];
+      this._v2AliasCandidateFilter = this._v2AliasCandidateFilter || '';
       const issueCount = key => issues.filter(r => r.issueType === key).length;
       const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
       const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
@@ -5719,13 +5725,15 @@ const UI = {
           <div class="table-wrap"><table class="data-table"><thead><tr><th>业务层</th><th>净收入</th><th>销售成本</th><th>期间成本</th><th>销售毛利</th><th>毛利率</th><th>经营贡献</th></tr></thead><tbody>${rows.map(r => `<tr><td><strong>${r.name}</strong></td><td>¥${this._fmt(r.revenue)}</td><td>¥${this._fmt(r.salesCost)}</td><td>¥${this._fmt(r.periodCost)}</td><td>¥${this._fmt(r.gross)}</td><td>${r.revenue ? (r.gross/r.revenue*100).toFixed(1)+'%' : '-'}</td><td>¥${this._fmt(r.contribution)}</td></tr>`).join('')}</tbody></table></div>
           <p class="form-hint">1.0 净收入 ¥${this._fmt(legacy)}；2.0 四层净收入 ¥${this._fmt(totals.revenue)}；差异 ${diff >= 0 ? '+' : ''}¥${this._fmt(diff)}。2.0 按业务明细和实际到账日归属；待归类收入留在治理清单、不计入四层总计。原 1.0 图表保留在下方用于对照。</p>
         </div>
-        <div class="card">
+        <div class="card" id="v2-governance-card">
           <div class="card-title">数据治理基线 <button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2GovernanceIssues()" ${issues.length ? '' : 'disabled'}>导出治理清单</button></div>
           <div class="stat-card-grid" style="margin-bottom:16px"><div class="stat-card"><div class="stat-label">待归类收入</div><div class="stat-value">${issueCount('unclassified_revenue')}</div><div class="stat-sub">影响金额 ¥${this._fmt(issueAmount('unclassified_revenue'))}</div></div><div class="stat-card"><div class="stat-label">待归类成本</div><div class="stat-value">${issueCount('unclassified_cost')}</div><div class="stat-sub">影响金额 ¥${this._fmt(issueAmount('unclassified_cost'))}</div></div><div class="stat-card"><div class="stat-label">缺成本商品/作品</div><div class="stat-value">${issueCount('missing_product_cost')}</div><div class="stat-sub">需补成本证据</div></div></div>
           ${issues.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>问题 ID</th><th>日期</th><th>优先级</th><th>问题</th><th>项目/商品</th><th>金额</th><th>来源</th></tr></thead><tbody>${issues.slice(0,50).map(r => `<tr><td><code>${this._escHtml(r.issueId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><span class="tag ${r.priority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(r.priority)}</span></td><td>${this._escHtml(labels[r.issueType] || r.issueType)}</td><td>${this._escHtml(r.itemName)}</td><td>¥${this._fmt(r.amount)}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">当前期间未发现待归类或缺成本问题</div>'}
           ${issues.length > 50 ? '<p class="form-hint">仅显示最近 50 条，请按来源记录继续治理。</p>' : ''}
-        </div>`;
+        </div>
+        ${this._productAliasCandidatesHtml()}`;
     } catch (error) {
+      if (renderId !== this._v2SummaryRenderId) return;
       target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
     }
   },
@@ -5744,6 +5752,54 @@ const UI = {
     link.click();
     URL.revokeObjectURL(link.href);
     this.toast(`已导出 ${rows.length} 条治理问题`);
+  },
+
+  _productAliasCandidatesHtml() {
+    const allRows = this._v2AliasCandidates || [];
+    const filter = this._v2AliasCandidateFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      matched: '已精确匹配',
+      unique_candidate: '唯一候选',
+      ambiguous: '存在歧义',
+      no_candidate: '无候选'
+    };
+    const tagClass = { matched:'tag-success', unique_candidate:'tag-info', ambiguous:'tag-warning', no_candidate:'tag-danger' };
+    const count = status => allRows.filter(r => r.candidateStatus === status).length;
+    return `<div class="card" id="v2-alias-candidates-card">
+      <div class="card-title">历史商品别名候选 <span class="tag tag-info">只读建议</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2AliasCandidates()" ${rows.length ? '' : 'disabled'}>导出候选清单</button></div>
+      <p class="form-hint">覆盖全部历史零售明细，不受上方年/月筛选影响。售价只用于精确同名商品之间的辅助消歧；候选不会自动写入商品别名或改写历史流水。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">已精确匹配</div><div class="stat-value">${count('matched')}</div><div class="stat-sub">已有别名或历史映射</div></div>
+        <div class="stat-card"><div class="stat-label">唯一候选</div><div class="stat-value">${count('unique_candidate')}</div><div class="stat-sub">等待人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">存在歧义</div><div class="stat-value">${count('ambiguous')}</div><div class="stat-sub">禁止自动处理</div></div>
+        <div class="stat-card"><div class="stat-label">无候选</div><div class="stat-value">${count('no_candidate')}</div><div class="stat-sub">需补主数据或人工判断</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="alias-candidate-status" onchange="UI._filterV2AliasCandidates(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-alias-candidates-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>历史名称</th><th>售价</th><th>状态</th><th>建议标准商品</th><th>候选数</th><th>影响明细/金额</th><th>期间</th></tr></thead><tbody>${rows.slice(0,50).map(r => `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td><strong>${this._escHtml(r.aliasName)}</strong></td><td>¥${this._fmt(r.unitPrice)}</td><td><span class="tag ${tagClass[r.candidateStatus] || 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${r.suggestedStandardName ? `${this._escHtml(r.suggestedStandardName)}${r.suggestedPackageSpec ? ` · ${this._escHtml(r.suggestedPackageSpec)}` : ''}` : '-'}</td><td>${r.candidateCount}</td><td>${r.lineCount} 条 / ¥${this._fmt(r.affectedAmount)}</td><td>${this._escHtml(r.firstBusinessDate)} 至 ${this._escHtml(r.lastBusinessDate)}</td></tr>`).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示影响金额最高的 50 组，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前状态没有历史商品别名候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2AliasCandidates(status) {
+    this._v2AliasCandidateFilter = status || '';
+    const card = $('#v2-alias-candidates-card');
+    if (card) card.outerHTML = this._productAliasCandidatesHtml();
+  },
+
+  _exportV2AliasCandidates() {
+    const filter = this._v2AliasCandidateFilter || '';
+    const rows = (this._v2AliasCandidates || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的商品别名候选', 'error');
+    const headers = ['候选ID','历史名称','标准化名称','历史售价','状态','匹配依据','置信度','候选数','建议商品ID','建议标准名','建议规格','建议业务类型','明细数','影响记录数','销售数量','影响金额','最早日期','最晚日期','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers, ...rows.map(r => [r.candidateId,r.aliasName,r.normalizedAlias,r.unitPrice,r.candidateStatus,r.candidateBasis,r.confidence,r.candidateCount,r.suggestedProductId,r.suggestedStandardName,r.suggestedPackageSpec,r.suggestedBusinessTypeCode,r.lineCount,r.affectedRecordCount,r.totalQuantity,r.affectedAmount,r.firstBusinessDate,r.lastBusinessDate,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `历史商品别名候选-${filter || '全部'}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 组商品别名候选`);
   },
 
   // === 数据管理 ===
