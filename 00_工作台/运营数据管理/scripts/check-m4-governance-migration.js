@@ -1,0 +1,20 @@
+const fs=require('fs'),assert=require('assert/strict'),{Client}=require('pg');
+const cfg=JSON.parse(fs.readFileSync('tmp/m3-05-test.json'));
+(async()=>{const db=new Client({host:cfg.host,port:cfg.port,database:cfg.database,user:'postgres'});await db.connect();try{
+  const sourceSnapshot=async()=>JSON.stringify((await db.query("SELECT (SELECT count(*) FROM revenue) revenue_count,(SELECT coalesce(sum(ticket_amount+combo_amount+coffee_amount+workshop_amount+retail_amount+creative_amount+venue_amount+other_amount),0) FROM revenue) revenue_amount,(SELECT count(*) FROM expense) expense_count,(SELECT coalesce(sum(amount),0) FROM expense) expense_amount,(SELECT count(*) FROM gallery_sales) gallery_count,(SELECT count(*) FROM space_usage) space_count,(SELECT count(*) FROM daily_closings) closing_count")).rows[0]);
+  const before=await sourceSnapshot();
+  await db.query(fs.readFileSync('sql/20260908_m4_02_rollback.sql','utf8'));
+  assert.equal((await db.query("SELECT to_regclass('data_governance_baseline_v2') IS NULL ok")).rows[0].ok,true);
+  for(let i=0;i<2;i++)await db.query(fs.readFileSync('sql/20260908_m4_02_governance_baseline.sql','utf8'));
+  assert.equal(await sourceSnapshot(),before);
+  const issues=(await db.query("SELECT issue_id,issue_key FROM data_governance_issues_v2 ORDER BY issue_key")).rows;
+  assert.ok(issues.length>0,'expected governance issues');
+  assert.equal(new Set(issues.map(x=>x.issue_id)).size,issues.length,'issue ids must be unique');
+  assert.ok(issues.every(x=>/^gov_[0-9a-f]{20}$/.test(x.issue_id)),'stable id format');
+  const again=(await db.query("SELECT issue_id,issue_key FROM data_governance_issues_v2 ORDER BY issue_key")).rows;
+  assert.deepEqual(again,issues,'issue ids must be stable across reads');
+  const detail=await db.query("SELECT LEFT(business_date,7) period_month,issue_type,source_table,count(*)::int issue_count,coalesce(sum(abs(amount)),0)::numeric(14,2) affected_amount FROM data_governance_issues_v2 GROUP BY 1,2,3 ORDER BY 1,2,3");
+  const baseline=await db.query("SELECT period_month,issue_type,source_table,issue_count,affected_amount FROM data_governance_baseline_v2 ORDER BY 1,2,3");
+  assert.deepEqual(baseline.rows,detail.rows,'baseline must reconcile to issue details');
+  console.log(`PASS M4-02 migration: ${issues.length} stable issues, reconciled baseline, idempotence, rollback and unchanged 1.0 facts`);
+}finally{await db.end()}})().catch(e=>{console.error(e);process.exitCode=1});

@@ -5685,9 +5685,10 @@ const UI = {
     const month = $('#rpt-month')?.value || '';
     const prefix = month ? `${year}-${month}` : year;
     try {
-      const [allSummary, allIssues, legacyFacts] = await Promise.all([
+      const [allSummary, allIssues, allBaseline, legacyFacts] = await Promise.all([
         Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
         Store.getByYear('revenueFacts', year)
       ]);
       const layerDefs = [
@@ -5701,7 +5702,10 @@ const UI = {
       const legacy = (legacyFacts || []).filter(r => String(r.date || '').startsWith(prefix)).reduce((s,r) => s + Number(r.netAmount ?? r.amount ?? 0), 0);
       const diff = totals.revenue - legacy;
       const issues = (allIssues || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      const baseline = (allBaseline || []).filter(r => String(r.periodMonth || '').startsWith(prefix));
+      this._v2GovernanceExport = { prefix, issues, baseline };
       const issueCount = key => issues.filter(r => r.issueType === key).length;
+      const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
       const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
       target.innerHTML = `
         <div class="card">
@@ -5716,14 +5720,30 @@ const UI = {
           <p class="form-hint">1.0 净收入 ¥${this._fmt(legacy)}；2.0 四层净收入 ¥${this._fmt(totals.revenue)}；差异 ${diff >= 0 ? '+' : ''}¥${this._fmt(diff)}。2.0 按业务明细和实际到账日归属；待归类收入留在治理清单、不计入四层总计。原 1.0 图表保留在下方用于对照。</p>
         </div>
         <div class="card">
-          <div class="card-title">数据治理缺口</div>
-          <div class="stat-card-grid" style="margin-bottom:16px"><div class="stat-card"><div class="stat-label">待归类收入</div><div class="stat-value">${issueCount('unclassified_revenue')}</div></div><div class="stat-card"><div class="stat-label">待归类成本</div><div class="stat-value">${issueCount('unclassified_cost')}</div></div><div class="stat-card"><div class="stat-label">缺成本商品/作品</div><div class="stat-value">${issueCount('missing_product_cost')}</div></div></div>
-          ${issues.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>问题</th><th>项目/商品</th><th>金额</th><th>来源</th></tr></thead><tbody>${issues.slice(0,50).map(r => `<tr><td>${this._escHtml(r.businessDate)}</td><td><span class="tag tag-info">${labels[r.issueType] || r.issueType}</span></td><td>${this._escHtml(r.itemName)}</td><td>¥${this._fmt(r.amount)}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">当前期间未发现待归类或缺成本问题</div>'}
+          <div class="card-title">数据治理基线 <button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2GovernanceIssues()" ${issues.length ? '' : 'disabled'}>导出治理清单</button></div>
+          <div class="stat-card-grid" style="margin-bottom:16px"><div class="stat-card"><div class="stat-label">待归类收入</div><div class="stat-value">${issueCount('unclassified_revenue')}</div><div class="stat-sub">影响金额 ¥${this._fmt(issueAmount('unclassified_revenue'))}</div></div><div class="stat-card"><div class="stat-label">待归类成本</div><div class="stat-value">${issueCount('unclassified_cost')}</div><div class="stat-sub">影响金额 ¥${this._fmt(issueAmount('unclassified_cost'))}</div></div><div class="stat-card"><div class="stat-label">缺成本商品/作品</div><div class="stat-value">${issueCount('missing_product_cost')}</div><div class="stat-sub">需补成本证据</div></div></div>
+          ${issues.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>问题 ID</th><th>日期</th><th>优先级</th><th>问题</th><th>项目/商品</th><th>金额</th><th>来源</th></tr></thead><tbody>${issues.slice(0,50).map(r => `<tr><td><code>${this._escHtml(r.issueId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><span class="tag ${r.priority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(r.priority)}</span></td><td>${this._escHtml(labels[r.issueType] || r.issueType)}</td><td>${this._escHtml(r.itemName)}</td><td>¥${this._fmt(r.amount)}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">当前期间未发现待归类或缺成本问题</div>'}
           ${issues.length > 50 ? '<p class="form-hint">仅显示最近 50 条，请按来源记录继续治理。</p>' : ''}
         </div>`;
     } catch (error) {
       target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
     }
+  },
+
+  _exportV2GovernanceIssues() {
+    const snapshot = this._v2GovernanceExport;
+    const rows = snapshot?.issues || [];
+    if (!rows.length) return this.toast('当前筛选期间没有可导出的治理问题', 'error');
+    const headers = ['问题ID','优先级','问题类型','问题分组','业务日期','项目/商品','影响金额','来源表','来源ID','明细键','问题说明','稳定问题键'];
+    const quote = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers, ...rows.map(r => [r.issueId,r.priority,r.issueType,r.issueGroup,r.businessDate,r.itemName,r.amount,r.sourceTable,r.sourceId,r.sourceLineKey,r.issueDetail,r.issueKey])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `数据治理基线-${snapshot.prefix}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 条治理问题`);
   },
 
   // === 数据管理 ===
