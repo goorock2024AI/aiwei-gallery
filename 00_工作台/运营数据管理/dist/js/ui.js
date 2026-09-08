@@ -5687,11 +5687,13 @@ const UI = {
     const month = $('#rpt-month')?.value || '';
     const prefix = month ? `${year}-${month}` : year;
     try {
-      const [allSummary, allIssues, allBaseline, allAliasCandidates, legacyFacts] = await Promise.all([
+      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, legacyFacts] = await Promise.all([
         Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/product_alias_candidates_v2?order=affected_amount.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/product_master_governance_v2?order=affected_amount.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/product_cost_evidence_v2?order=evidence_date.desc&limit=5000'),
         Store.getByYear('revenueFacts', year)
       ]);
       if (renderId !== this._v2SummaryRenderId) return;
@@ -5710,6 +5712,9 @@ const UI = {
       this._v2GovernanceExport = { prefix, issues, baseline };
       this._v2AliasCandidates = allAliasCandidates || [];
       this._v2AliasCandidateFilter = this._v2AliasCandidateFilter || '';
+      this._v2ProductGovernance = allProductGovernance || [];
+      this._v2CostEvidence = allCostEvidence || [];
+      this._v2ProductGovernanceFilter = this._v2ProductGovernanceFilter || '';
       const issueCount = key => issues.filter(r => r.issueType === key).length;
       const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
       const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
@@ -5731,7 +5736,8 @@ const UI = {
           ${issues.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>问题 ID</th><th>日期</th><th>优先级</th><th>问题</th><th>项目/商品</th><th>金额</th><th>来源</th></tr></thead><tbody>${issues.slice(0,50).map(r => `<tr><td><code>${this._escHtml(r.issueId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><span class="tag ${r.priority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(r.priority)}</span></td><td>${this._escHtml(labels[r.issueType] || r.issueType)}</td><td>${this._escHtml(r.itemName)}</td><td>¥${this._fmt(r.amount)}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">当前期间未发现待归类或缺成本问题</div>'}
           ${issues.length > 50 ? '<p class="form-hint">仅显示最近 50 条，请按来源记录继续治理。</p>' : ''}
         </div>
-        ${this._productAliasCandidatesHtml()}`;
+        ${this._productAliasCandidatesHtml()}
+        ${this._productGovernanceHtml()}`;
     } catch (error) {
       if (renderId !== this._v2SummaryRenderId) return;
       target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
@@ -5800,6 +5806,67 @@ const UI = {
     link.click();
     URL.revokeObjectURL(link.href);
     this.toast(`已导出 ${rows.length} 组商品别名候选`);
+  },
+
+  _productGovernanceHtml() {
+    const allRows = this._v2ProductGovernance || [];
+    const evidence = this._v2CostEvidence || [];
+    const filter = this._v2ProductGovernanceFilter || '';
+    const rows = filter ? allRows.filter(r => r.governanceStatus === filter) : allRows;
+    const labels = {
+      complete: '资料完整',
+      classification_review: '分类待补',
+      cost_evidence_review: '成本证据待补',
+      classification_and_cost_review: '分类与成本待补'
+    };
+    const costLabels = {
+      verified_sale_snapshots: '历史成交快照完整', partial_sale_snapshots: '部分成交有快照',
+      alias_reference_requires_period: '别名成本待确认期间', current_only_no_backdate: '仅有当前成本',
+      cost_evidence_missing: '无成本证据', current_reference: '当前成本参考', no_sales_cost_missing: '未销售且缺成本'
+    };
+    const needsCost = allRows.filter(r => r.unverifiedCostLineCount > 0 || r.missingCurrentCost).length;
+    const needsClassification = allRows.filter(r => r.classificationIssueCount > 0).length;
+    const verifiedLines = allRows.reduce((sum,r) => sum + (+r.snapshotEvidenceCount || 0), 0);
+    const unverifiedLines = allRows.reduce((sum,r) => sum + (+r.unverifiedCostLineCount || 0), 0);
+    const evidenceCount = type => evidence.filter(r => r.evidenceType === type).length;
+    return `<div class="card" id="v2-product-governance-card">
+      <div class="card-title">商品分类与成本证据 <span class="tag tag-info">只读复核</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2ProductGovernance()" ${rows.length ? '' : 'disabled'}>导出商品治理清单</button></div>
+      <p class="form-hint">销售成本快照只证明对应成交日；别名成本必须确认适用期间；商品当前成本仅作为更新日起参考，不自动倒推更早销售。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">分类待补商品</div><div class="stat-value">${needsClassification}</div><div class="stat-sub">标准名、规格、业务类型或标记</div></div>
+        <div class="stat-card"><div class="stat-label">成本证据待补商品</div><div class="stat-value">${needsCost}</div><div class="stat-sub">未验证历史明细 ${unverifiedLines} 条</div></div>
+        <div class="stat-card"><div class="stat-label">已验证历史明细</div><div class="stat-value">${verifiedLines}</div><div class="stat-sub">来自销售时成本快照</div></div>
+        <div class="stat-card"><div class="stat-label">成本证据记录</div><div class="stat-value">${evidence.length}</div><div class="stat-sub">成交 ${evidenceCount('sale_snapshot')} · 别名 ${evidenceCount('alias_cost_snapshot')} · 当前 ${evidenceCount('current_master_cost')}</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>治理状态</label><select id="product-governance-status" onchange="UI._filterV2ProductGovernance(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-product-governance-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>治理 ID</th><th>商品</th><th>优先级/状态</th><th>分类缺口</th><th>成本证据</th><th>历史成本观察</th><th>销售影响</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const missing = [r.missingStandardName ? '标准名' : '', r.missingPackageSpec ? '规格' : '', r.missingBusinessType ? '业务类型' : '', r.beverageClassificationConflict ? '饮料标记冲突' : '', r.missingCurrentCost ? '当前成本' : ''].filter(Boolean).join('、') || '无';
+        const observed = r.snapshotEvidenceCount ? `¥${this._fmt(r.snapshotCostMin)}${r.snapshotCostCount > 1 ? `–¥${this._fmt(r.snapshotCostMax)}` : ''}<div class="form-hint">${this._escHtml(r.snapshotObservedFrom)} 至 ${this._escHtml(r.snapshotObservedTo)}</div>` : '-';
+        return `<tr><td><code>${this._escHtml(r.governanceId)}</code></td><td><strong>${this._escHtml(r.productName)}</strong><div class="form-hint">${this._escHtml(r.productId)}</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(r.reviewPriority)}</span> ${this._escHtml(labels[r.governanceStatus] || r.governanceStatus)}</td><td>${this._escHtml(missing)}</td><td>${this._escHtml(costLabels[r.costEvidenceStatus] || r.costEvidenceStatus)}<div class="form-hint">当前成本 ¥${this._fmt(r.currentCost)}</div></td><td>${observed}</td><td>${r.salesLineCount} 条 / ¥${this._fmt(r.affectedAmount)}<div class="form-hint">未验证 ${r.unverifiedCostLineCount} 条</div></td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示销售影响最高的 50 项，可导出当前状态的完整清单。</p>' : ''}` : '<div class="empty-state">当前状态没有商品治理项目</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2ProductGovernance(status) {
+    this._v2ProductGovernanceFilter = status || '';
+    const card = $('#v2-product-governance-card');
+    if (card) card.outerHTML = this._productGovernanceHtml();
+  },
+
+  _exportV2ProductGovernance() {
+    const filter = this._v2ProductGovernanceFilter || '';
+    const rows = (this._v2ProductGovernance || []).filter(r => !filter || r.governanceStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的商品治理项目', 'error');
+    const headers = ['治理ID','优先级','治理状态','商品ID','商品名称','标准名称','包装规格','业务类型','是否饮料','缺标准名','缺规格','缺业务类型','饮料标记冲突','缺当前成本','当前成本','成本证据状态','销售明细数','未验证成本明细数','成交快照数','历史成本种数','历史成本最小值','历史成本最大值','观察开始日','观察结束日','建议历史单位成本','影响记录数','销售数量','影响金额','最早销售日','最晚销售日','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers, ...rows.map(r => [r.governanceId,r.reviewPriority,r.governanceStatus,r.productId,r.productName,r.standardName,r.packageSpec,r.businessTypeCode,r.isBeverage,r.missingStandardName,r.missingPackageSpec,r.missingBusinessType,r.beverageClassificationConflict,r.missingCurrentCost,r.currentCost,r.costEvidenceStatus,r.salesLineCount,r.unverifiedCostLineCount,r.snapshotEvidenceCount,r.snapshotCostCount,r.snapshotCostMin,r.snapshotCostMax,r.snapshotObservedFrom,r.snapshotObservedTo,r.suggestedHistoricalUnitCost,r.affectedRecordCount,r.salesQuantity,r.affectedAmount,r.firstBusinessDate,r.lastBusinessDate,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')], { type:'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `商品分类与成本证据-${filter || '全部'}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 项商品治理记录`);
   },
 
   // === 数据管理 ===

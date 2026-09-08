@@ -1,0 +1,10 @@
+// Requires isolated M4 API localhost:3114, Edge and Playwright.
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');const fs=require('fs'),assert=require('assert/strict');
+(async()=>{const cfg=JSON.parse(fs.readFileSync('tmp/m3-05-test.json'));const browser=await chromium.launch({headless:true,channel:'msedge'});try{
+  const page=await browser.newPage({viewport:{width:1440,height:1100}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('http://127.0.0.1:3114/index.html');await page.locator('#login-username').fill('m305-editor');await page.locator('#login-password').fill(cfg.password);await page.locator('#login-form button').click();await page.locator('[data-tab="reports"]').click();
+  const card=page.locator('#v2-product-governance-card');await card.filter({hasText:'商品分类与成本证据'}).waitFor();await card.filter({hasText:'M404快照商品'}).waitFor();assert.match(await card.innerText(),/分类待补商品.*成本证据待补商品.*已验证历史明细/s);assert.match(await card.locator('code').first().innerText(),/^productgov_[0-9a-f]{20}$/);
+  await card.locator('#product-governance-status').selectOption('cost_evidence_review');await card.filter({hasText:'M404仅当前成本'}).waitFor();await card.filter({hasText:'M404别名标准商品'}).waitFor();const filteredText=await card.innerText();assert.match(filteredText,/仅有当前成本/);assert.match(filteredText,/别名成本待确认期间/);
+  const [download]=await Promise.all([page.waitForEvent('download'),card.getByRole('button',{name:'导出商品治理清单'}).click()]);assert.equal(download.suggestedFilename(),'商品分类与成本证据-cost_evidence_review.csv');const csv=fs.readFileSync(await download.path(),'utf8');assert.match(csv,/治理ID.*成本证据状态.*建议历史单位成本/s);assert.match(csv,/M404仅当前成本/);
+  await page.screenshot({path:'tmp/m4-04-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});await card.scrollIntoViewIfNeeded();await page.screenshot({path:'tmp/m4-04-mobile.png'});assert.deepEqual(errors,[]);console.log('PASS M4-04 browser: classification/cost summaries, evidence labels, filter, CSV, desktop/mobile and zero page errors');
+}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});
