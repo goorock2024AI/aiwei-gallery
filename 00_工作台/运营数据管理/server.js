@@ -170,7 +170,8 @@ const READ_ONLY_TABLES = new Set([
   'data_governance_baseline_v2',
   'product_alias_candidates_v2',
   'product_cost_evidence_v2',
-  'product_master_governance_v2'
+  'product_master_governance_v2',
+  'revenue_attribution_candidates_v2'
 ]);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
@@ -390,7 +391,8 @@ function canAccessTable(user, table, method) {
       'business_revenue_facts_v2','business_cost_facts_v2','business_profit_facts_v2',
       'workshop_project_performance_v2','gallery_transaction_performance_v2','space_project_performance_v2',
       'business_layer_summary_v2','data_governance_issues_v2','data_governance_baseline_v2',
-      'product_alias_candidates_v2','product_cost_evidence_v2','product_master_governance_v2'
+      'product_alias_candidates_v2','product_cost_evidence_v2','product_master_governance_v2',
+      'revenue_attribution_candidates_v2'
     ]),
     viewer: new Set([
       'revenue','space_usage','space_payments','space_usage_with_payments',
@@ -1147,7 +1149,8 @@ async function handleREST(req, res, urlInfo) {
     'data_governance_baseline_v2': 'data_governance_baseline_v2',
     'product_alias_candidates_v2': 'product_alias_candidates_v2',
     'product_cost_evidence_v2': 'product_cost_evidence_v2',
-    'product_master_governance_v2': 'product_master_governance_v2'
+    'product_master_governance_v2': 'product_master_governance_v2',
+    'revenue_attribution_candidates_v2': 'revenue_attribution_candidates_v2'
   };
   const dbTable = tableMap[table];
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);

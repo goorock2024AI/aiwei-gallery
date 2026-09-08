@@ -5687,13 +5687,14 @@ const UI = {
     const month = $('#rpt-month')?.value || '';
     const prefix = month ? `${year}-${month}` : year;
     try {
-      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, legacyFacts] = await Promise.all([
+      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, legacyFacts] = await Promise.all([
         Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/product_alias_candidates_v2?order=affected_amount.desc&limit=5000'),
         Store._request('GET', '/rest/v1/product_master_governance_v2?order=affected_amount.desc&limit=5000'),
         Store._request('GET', '/rest/v1/product_cost_evidence_v2?order=evidence_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/revenue_attribution_candidates_v2?order=business_date.desc&limit=5000'),
         Store.getByYear('revenueFacts', year)
       ]);
       if (renderId !== this._v2SummaryRenderId) return;
@@ -5715,6 +5716,9 @@ const UI = {
       this._v2ProductGovernance = allProductGovernance || [];
       this._v2CostEvidence = allCostEvidence || [];
       this._v2ProductGovernanceFilter = this._v2ProductGovernanceFilter || '';
+      this._v2RevenueAttribution = (allRevenueCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2RevenueAttributionPeriod = prefix;
+      this._v2RevenueAttributionFilter = this._v2RevenueAttributionFilter || '';
       const issueCount = key => issues.filter(r => r.issueType === key).length;
       const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
       const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
@@ -5737,7 +5741,8 @@ const UI = {
           ${issues.length > 50 ? '<p class="form-hint">仅显示最近 50 条，请按来源记录继续治理。</p>' : ''}
         </div>
         ${this._productAliasCandidatesHtml()}
-        ${this._productGovernanceHtml()}`;
+        ${this._productGovernanceHtml()}
+        ${this._revenueAttributionHtml()}`;
     } catch (error) {
       if (renderId !== this._v2SummaryRenderId) return;
       target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
@@ -5867,6 +5872,52 @@ const UI = {
     link.click();
     URL.revokeObjectURL(link.href);
     this.toast(`已导出 ${rows.length} 项商品治理记录`);
+  },
+
+  _revenueAttributionHtml() {
+    const allRows = this._v2RevenueAttribution || [];
+    const filter = this._v2RevenueAttributionFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      manual_link:'已有人工归属', pending_manual_link:'人工归属待补', ambiguous_manual_links:'人工归属冲突',
+      unique_rule:'唯一规则候选', ambiguous_rules:'规则冲突', no_candidate:'无候选'
+    };
+    const count = status => allRows.filter(r => r.candidateStatus === status).length;
+    const conflictCount = count('ambiguous_rules') + count('ambiguous_manual_links');
+    const unresolvedAmount = allRows.filter(r => !['manual_link'].includes(r.candidateStatus)).reduce((sum,r) => sum + Math.abs(+r.affectedAmount || 0),0);
+    return `<div class="card" id="v2-revenue-attribution-card">
+      <div class="card-title">历史收入归属复核 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2RevenueAttribution()" ${rows.length ? '' : 'disabled'}>导出收入归属候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2RevenueAttributionPeriod)}：人工链接优先；规则只比较最高优先级。同级规则指向不同业务类型时保留冲突，不自动修改收入流水或事实口径。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">已有人工归属</div><div class="stat-value">${count('manual_link')}</div><div class="stat-sub">等待后续批次采用解释</div></div>
+        <div class="stat-card"><div class="stat-label">唯一规则候选</div><div class="stat-value">${count('unique_rule')}</div><div class="stat-sub">需人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">归属冲突</div><div class="stat-value">${conflictCount}</div><div class="stat-sub">禁止自动归属</div></div>
+        <div class="stat-card"><div class="stat-label">未解决影响金额</div><div class="stat-value">¥${this._fmt(unresolvedAmount)}</div><div class="stat-sub">含无候选和待补人工链接</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="revenue-attribution-status" onchange="UI._filterV2RevenueAttribution(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-revenue-attribution-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期</th><th>收入说明</th><th>金额</th><th>状态</th><th>建议归属</th><th>匹配依据</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const suggestion = r.suggestedBusinessTypeCode ? `${this._escHtml(r.suggestedBusinessLayerName || r.suggestedBusinessLayerCode)} / ${this._escHtml(r.suggestedBusinessTypeName || r.suggestedBusinessTypeCode)}` : '-';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><strong>${this._escHtml(r.itemName)}</strong><div class="form-hint">${this._escHtml(r.projectName || '')}</div></td><td>¥${this._fmt(r.affectedAmount)}</td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${suggestion}</td><td>${this._escHtml(r.matchedField || '-')}<div class="form-hint">${this._escHtml(r.matchedValue || '')} · ${r.topRuleCount || r.manualLinkCount || 0} 条依据</div></td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)} / ${this._escHtml(r.sourceLineKey)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的收入归属候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2RevenueAttribution(status) {
+    this._v2RevenueAttributionFilter = status || '';
+    const card = $('#v2-revenue-attribution-card');
+    if (card) card.outerHTML = this._revenueAttributionHtml();
+  },
+
+  _exportV2RevenueAttribution() {
+    const filter = this._v2RevenueAttributionFilter || '';
+    const rows = (this._v2RevenueAttribution || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的收入归属候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','收入说明','项目','影响金额','来源表','来源ID','明细键','候选依据','候选数','命中规则数','最高优先级规则数','置信度','建议业务层','建议业务类型','匹配字段','匹配值','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.itemName,r.projectName,r.affectedAmount,r.sourceTable,r.sourceId,r.sourceLineKey,r.candidateBasis,r.candidateCount,r.matchedRuleCount,r.topRuleCount,r.confidence,r.suggestedBusinessLayerCode,r.suggestedBusinessTypeCode,r.matchedField,r.matchedValue,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+    const link = document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`历史收入归属候选-${this._v2RevenueAttributionPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 条收入归属候选`);
   },
 
   // === 数据管理 ===
