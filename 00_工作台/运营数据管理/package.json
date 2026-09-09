@@ -49,6 +49,8 @@
     "check:m4-stage-review": "node scripts/check-m4-stage-review.js",
     "check:m4-stage-review-browser": "node scripts/check-m4-stage-review-browser.js",
     "check:m5-shell-browser": "node scripts/check-m5-operations-shell-browser.js",
+    "check:m5-overview": "node scripts/check-m5-operations-overview.js",
+    "check:m5-overview-browser": "node scripts/check-m5-operations-overview-browser.js",
     "check:workshop-projects": "node scripts/check-workshop-projects.js",
     "check:workshop-integration": "node scripts/check-workshop-projects-integration.js",
     "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",

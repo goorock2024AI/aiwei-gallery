@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert/strict');
-const { chromium } = require('playwright');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const cfg = JSON.parse(fs.readFileSync('tmp/m3-05-test.json', 'utf8'));
 const base = process.env.M5_BROWSER_BASE || 'http://127.0.0.1:3121';
@@ -42,7 +42,7 @@ async function login(page, role) {
     assert.match(await governanceLink.getAttribute('class'), /active/);
     assert.equal(await admin.locator('#operations-governance').evaluate(element => document.activeElement === element), true);
     await admin.locator('#operations-refresh').click();
-    assert.match(await admin.locator('#operations-refresh-status').innerText(), /刚刚更新.*2025年6月/);
+    await admin.locator('#operations-refresh-status').filter({ hasText: '已更新 · 2025年6月' }).waitFor();
     await admin.screenshot({ path: desktopPath, fullPage: true });
 
     await admin.setViewportSize({ width: 390, height: 844 });
