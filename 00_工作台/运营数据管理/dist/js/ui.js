@@ -5687,7 +5687,7 @@ const UI = {
     const month = $('#rpt-month')?.value || '';
     const prefix = month ? `${year}-${month}` : year;
     try {
-      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, allCostCandidates, legacyFacts] = await Promise.all([
+      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, allCostCandidates, allGalleryCandidates, allWorkshopCandidates, legacyFacts] = await Promise.all([
         Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
@@ -5696,6 +5696,8 @@ const UI = {
         Store._request('GET', '/rest/v1/product_cost_evidence_v2?order=evidence_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/revenue_attribution_candidates_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/cost_attribution_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/gallery_link_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/workshop_link_candidates_v2?order=business_date.desc&limit=5000'),
         Store.getByYear('revenueFacts', year)
       ]);
       if (renderId !== this._v2SummaryRenderId) return;
@@ -5723,6 +5725,12 @@ const UI = {
       this._v2CostAttribution = (allCostCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
       this._v2CostAttributionPeriod = prefix;
       this._v2CostAttributionFilter = this._v2CostAttributionFilter || '';
+      this._v2GalleryLinks = (allGalleryCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2GalleryLinksPeriod = prefix;
+      this._v2GalleryLinksFilter = this._v2GalleryLinksFilter || '';
+      this._v2WorkshopLinks = (allWorkshopCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2WorkshopLinksPeriod = prefix;
+      this._v2WorkshopLinksFilter = this._v2WorkshopLinksFilter || '';
       const issueCount = key => issues.filter(r => r.issueType === key).length;
       const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
       const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
@@ -5747,7 +5755,9 @@ const UI = {
         ${this._productAliasCandidatesHtml()}
         ${this._productGovernanceHtml()}
         ${this._revenueAttributionHtml()}
-        ${this._costAttributionHtml()}`;
+        ${this._costAttributionHtml()}
+        ${this._galleryLinksHtml()}
+        ${this._workshopLinksHtml()}`;
     } catch (error) {
       if (renderId !== this._v2SummaryRenderId) return;
       target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
@@ -5970,6 +5980,91 @@ const UI = {
     const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
     const link = document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`历史支出归属候选-${this._v2CostAttributionPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);
     this.toast(`已导出 ${rows.length} 条支出归属候选`);
+  },
+
+  _galleryLinksHtml() {
+    const allRows = this._v2GalleryLinks || [];
+    const filter = this._v2GalleryLinksFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      linked_with_snapshot:'作品与快照完整', linked_missing_snapshot:'已关联但缺快照', invalid_artwork_link:'作品链接失效',
+      unique_artwork_no:'编号唯一候选', unique_title_artist:'名称/艺术家唯一候选', unique_title:'仅名称唯一候选',
+      ambiguous_artworks:'作品冲突', no_artwork_candidate:'无作品候选'
+    };
+    const uniqueCount = allRows.filter(r => ['unique_artwork_no','unique_title_artist','unique_title'].includes(r.candidateStatus)).length;
+    const problemCount = allRows.filter(r => ['invalid_artwork_link','ambiguous_artworks','no_artwork_candidate'].includes(r.candidateStatus)).length;
+    const missingSettlement = allRows.filter(r => r.settlementEvidenceStatus !== 'frozen_snapshot').length;
+    return `<div class="card" id="v2-gallery-links-card">
+      <div class="card-title">画廊历史作品与结算证据 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2GalleryLinks()" ${rows.length ? '' : 'disabled'}>导出画廊关联候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2GalleryLinksPeriod)}：作品 ID、作品编号及“名称＋艺术家”按精确证据分级。成交时结算价快照优先；当前作品价格只作复核参考，不回填历史。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">快照完整</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'linked_with_snapshot').length}</div><div class="stat-sub">作品关联及成交证据完整</div></div>
+        <div class="stat-card"><div class="stat-label">唯一作品候选</div><div class="stat-value">${uniqueCount}</div><div class="stat-sub">仍需人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">作品冲突</div><div class="stat-value">${problemCount}</div><div class="stat-sub">含失效、歧义和无候选</div></div>
+        <div class="stat-card"><div class="stat-label">缺结算证据</div><div class="stat-value">${missingSettlement}</div><div class="stat-sub">当前价格不能替代历史快照</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="gallery-link-status" onchange="UI._filterV2GalleryLinks(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-gallery-links-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期</th><th>原作品信息</th><th>成交/净额</th><th>状态</th><th>建议作品</th><th>结算证据</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const suggestion = r.suggestedArtworkId ? `${this._escHtml(r.suggestedArtworkTitle)} / ${this._escHtml(r.suggestedArtworkArtist)}<div class="form-hint">${this._escHtml(r.suggestedArtworkNo)} · ${this._escHtml(r.suggestedArtworkId)}</div>` : '-';
+        const evidence = r.settlementEvidenceStatus === 'frozen_snapshot' ? `成交快照 ¥${this._fmt(r.settlementEvidenceAmount)}` : r.settlementEvidenceStatus === 'current_master_reference' ? `当前参考 ¥${this._fmt(r.settlementEvidenceAmount)}` : '缺历史结算证据';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><strong>${this._escHtml(r.originalArtworkName || '未命名作品')}</strong><div class="form-hint">${this._escHtml(r.originalArtworkNo || '无编号')} · ${this._escHtml(r.originalArtist || '艺术家待补')}</div></td><td>¥${this._fmt(r.grossAmount)}<div class="form-hint">净额 ¥${this._fmt(r.realizedNetAmount)}</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${suggestion}</td><td>${evidence}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的画廊关联候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2GalleryLinks(status) {
+    this._v2GalleryLinksFilter = status || '';
+    const card = $('#v2-gallery-links-card');
+    if (card) card.outerHTML = this._galleryLinksHtml();
+  },
+
+  _exportV2GalleryLinks() {
+    const filter = this._v2GalleryLinksFilter || '';
+    const rows = (this._v2GalleryLinks || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的画廊关联候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','原作品ID','原作品编号','原作品名称','原艺术家','成交数量','成交金额','实现净额','原结算价快照','作品候选数','建议作品ID','建议作品编号','建议作品名称','建议艺术家','匹配依据','置信度','结算证据状态','结算证据金额','证据时间','来源表','来源ID','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.originalArtworkId,r.originalArtworkNo,r.originalArtworkName,r.originalArtist,r.saleQuantity,r.grossAmount,r.realizedNetAmount,r.settlementPriceSnapshot,r.artworkCandidateCount,r.suggestedArtworkId,r.suggestedArtworkNo,r.suggestedArtworkTitle,r.suggestedArtworkArtist,r.matchBasis,r.confidence,r.settlementEvidenceStatus,r.settlementEvidenceAmount,r.settlementEvidenceAt,r.sourceTable,r.sourceId,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`画廊历史关联候选-${this._v2GalleryLinksPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条画廊关联候选`);
+  },
+
+  _workshopLinksHtml() {
+    const allRows = this._v2WorkshopLinks || [];
+    const filter = this._v2WorkshopLinksFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {ready_candidate:'可复核候选',cost_review:'成本待审',missing_direct_cost:'缺直接成本',ambiguous_projects:'项目冲突',unregistered_project:'项目未登记',missing_project:'缺项目名称'};
+    const projectProblems = allRows.filter(r => ['ambiguous_projects','unregistered_project','missing_project'].includes(r.candidateStatus)).length;
+    return `<div class="card" id="v2-workshop-links-card">
+      <div class="card-title">工坊历史项目与直接成本 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2WorkshopLinks()" ${rows.length ? '' : 'disabled'}>导出工坊关联候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2WorkshopLinksPeriod)}：项目只做精确同名候选；直接成本只列同月、同项目的期间支出。待归类成本不计入确认金额，不估算、不跨月分摊。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">可复核候选</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'ready_candidate').length}</div><div class="stat-sub">项目与直接成本证据完整</div></div>
+        <div class="stat-card"><div class="stat-label">成本待审</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'cost_review').length}</div><div class="stat-sub">存在待归类或非活动成本</div></div>
+        <div class="stat-card"><div class="stat-label">项目问题</div><div class="stat-value">${projectProblems}</div><div class="stat-sub">缺名称、未登记或同名冲突</div></div>
+        <div class="stat-card"><div class="stat-label">缺直接成本</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'missing_direct_cost').length}</div><div class="stat-sub">不自动估算</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="workshop-link-status" onchange="UI._filterV2WorkshopLinks(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-workshop-links-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期/活动</th><th>原项目</th><th>收入</th><th>状态</th><th>建议项目</th><th>直接成本候选</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const project = r.suggestedProjectId ? `${this._escHtml(r.suggestedProjectName)}<div class="form-hint">${this._escHtml(r.suggestedProjectId)}</div>` : '-';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}<div class="form-hint">${this._escHtml(r.activityName)}</div></td><td><strong>${this._escHtml(r.originalProjectName || '待补')}</strong></td><td>¥${this._fmt(r.affectedAmount)}<div class="form-hint">${this._fmt(r.participantCount)} 人</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${project}</td><td>确认 ¥${this._fmt(r.confirmedDirectCostAmount)}<div class="form-hint">待审成本 ¥${this._fmt(r.pendingDirectCostAmount)} · ${r.directCostCandidateCount} 条</div></td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)} / ${this._escHtml(r.sourceLineKey)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的工坊关联候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2WorkshopLinks(status) {
+    this._v2WorkshopLinksFilter = status || '';
+    const card = $('#v2-workshop-links-card');
+    if (card) card.outerHTML = this._workshopLinksHtml();
+  },
+
+  _exportV2WorkshopLinks() {
+    const filter = this._v2WorkshopLinksFilter || '';
+    const rows = (this._v2WorkshopLinks || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的工坊关联候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','活动名称','活动类型','参与人数','收入金额','原项目名称','项目候选数','建议项目ID','建议项目名称','项目置信度','直接成本候选数','确认直接成本数','待审成本数','确认直接成本','待审成本','来源表','来源ID','明细键','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.activityName,r.businessTypeName,r.participantCount,r.affectedAmount,r.originalProjectName,r.projectCandidateCount,r.suggestedProjectId,r.suggestedProjectName,r.projectConfidence,r.directCostCandidateCount,r.confirmedDirectCostCount,r.pendingDirectCostCount,r.confirmedDirectCostAmount,r.pendingDirectCostAmount,r.sourceTable,r.sourceId,r.sourceLineKey,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`工坊历史关联候选-${this._v2WorkshopLinksPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条工坊关联候选`);
   },
 
   // === 数据管理 ===
