@@ -175,7 +175,8 @@ const READ_ONLY_TABLES = new Set([
   'cost_attribution_candidates_v2',
   'gallery_link_candidates_v2',
   'workshop_link_candidates_v2',
-  'space_classification_candidates_v2'
+  'space_classification_candidates_v2',
+  'governance_batch_summary_v2'
 ]);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
@@ -397,7 +398,8 @@ function canAccessTable(user, table, method) {
       'business_layer_summary_v2','data_governance_issues_v2','data_governance_baseline_v2',
       'product_alias_candidates_v2','product_cost_evidence_v2','product_master_governance_v2',
       'revenue_attribution_candidates_v2','cost_attribution_candidates_v2',
-      'gallery_link_candidates_v2','workshop_link_candidates_v2','space_classification_candidates_v2'
+      'gallery_link_candidates_v2','workshop_link_candidates_v2','space_classification_candidates_v2',
+      'governance_batch_summary_v2'
     ]),
     viewer: new Set([
       'revenue','space_usage','space_payments','space_usage_with_payments',
@@ -1159,7 +1161,8 @@ async function handleREST(req, res, urlInfo) {
     'cost_attribution_candidates_v2': 'cost_attribution_candidates_v2',
     'gallery_link_candidates_v2': 'gallery_link_candidates_v2',
     'workshop_link_candidates_v2': 'workshop_link_candidates_v2',
-    'space_classification_candidates_v2': 'space_classification_candidates_v2'
+    'space_classification_candidates_v2': 'space_classification_candidates_v2',
+    'governance_batch_summary_v2': 'governance_batch_summary_v2'
   };
   const dbTable = tableMap[table];
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);
@@ -1446,6 +1449,7 @@ function serveStatic(req, res, pathname) {
 const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleGovernanceBatches = require('./governance-batches')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
 
 // --- Main request handler ---
 const server = http.createServer((req, res) => {
@@ -1472,6 +1476,8 @@ const server = http.createServer((req, res) => {
       handleGalleryEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'space-entry') {
       handleSpaceEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'governance-batches') {
+      handleGovernanceBatches(req, res, urlInfo.query);
     } else if (parts[2] === 'login' && req.method === 'POST') {
       handleLogin(req, res);
     } else if (parts[2] === 'change-password' && req.method === 'POST') {

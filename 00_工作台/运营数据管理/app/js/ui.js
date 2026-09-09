@@ -6119,6 +6119,17 @@ const UI = {
     const page = $('#page-manage');
     if (!Auth.hasModuleAccess('manage')) { this._noAccess(page); return; }
     html(page, `
+      <div class="card manage-section" id="governance-batches-card">
+        <h3>🧾 治理变更批次 <span class="tag tag-info">可预览 · 可审计 · 可撤销</span></h3>
+        <p class="manage-desc">将收入或成本归属清单中的“唯一规则”候选 ID 分批加入。应用只写解释层，不修改收入、支出及其他原始流水。</p>
+        <div class="form-grid" style="margin-bottom:14px">
+          <div class="form-group"><label>批次名称</label><input id="governance-batch-name" maxlength="120" placeholder="例如：2026 年 9 月收入归属第一批"></div>
+          <div class="form-group"><label>说明</label><input id="governance-batch-description" maxlength="500" placeholder="范围、依据或复核说明"></div>
+          <div class="form-group full"><label>候选 ID（每行一个，也可用逗号分隔）</label><textarea id="governance-candidate-ids" rows="4" placeholder="revenuecand_...&#10;costcand_..."></textarea></div>
+          <div class="form-actions full"><button type="button" class="btn btn-primary" onclick="UI._createGovernanceBatch()">创建草稿批次</button></div>
+        </div>
+        <div id="governance-batches-list"><div class="empty-state">正在加载治理批次...</div></div>
+      </div>
 <div class="card manage-section">
         <h3>📤 导出数据</h3>
         <p class="manage-desc">选择导出时间范围（留空为全部数据）：</p>
@@ -6160,7 +6171,69 @@ const UI = {
       </div>
           `);
     await this._updateManageStats();
+    await this._loadGovernanceBatches();
     this._checkDBStatus();
+  },
+
+  async _createGovernanceBatch() {
+    const name = $('#governance-batch-name')?.value.trim() || '';
+    const description = $('#governance-batch-description')?.value.trim() || '';
+    const candidateIds = ($('#governance-candidate-ids')?.value || '').split(/[\s,，;；]+/).map(x => x.trim()).filter(Boolean);
+    if (!name) return this.toast('请输入治理批次名称', 'error');
+    if (!candidateIds.length) return this.toast('请至少填写一个候选 ID', 'error');
+    try {
+      await Store._request('POST', '/rest/v1/governance-batches?action=create', { name, description, candidateIds });
+      if ($('#governance-batch-name')) $('#governance-batch-name').value = '';
+      if ($('#governance-batch-description')) $('#governance-batch-description').value = '';
+      if ($('#governance-candidate-ids')) $('#governance-candidate-ids').value = '';
+      this.toast(`已创建包含 ${candidateIds.length} 条候选的草稿批次`);
+      await this._loadGovernanceBatches();
+    } catch (error) { this.toast('创建失败：' + (error.message || error), 'error'); }
+  },
+
+  async _loadGovernanceBatches() {
+    const target = $('#governance-batches-list');
+    if (!target) return;
+    try {
+      const batches = await Store._request('GET', '/rest/v1/governance-batches');
+      this._governanceBatches = batches || [];
+      const statusLabels = {draft:'草稿',pending_review:'待审核',approved:'已批准',rejected:'已拒绝',applied:'已应用',reverted:'已撤销'};
+      if (!batches.length) { target.innerHTML = '<div class="empty-state">尚无治理批次。请从治理候选清单复制唯一规则候选 ID 后创建草稿。</div>'; return; }
+      target.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>批次</th><th>状态</th><th>项目/金额</th><th>dry-run 结果</th><th>审计</th><th>操作</th></tr></thead><tbody>${batches.map(batch => {
+        const summary = batch.dryRunSummary || {};
+        const actions = [];
+        if (batch.status === 'draft') {
+          actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','dry-run')">dry-run</button>`);
+          if (batch.dryRunAt && Number(summary.invalidItemCount || 0) === 0) actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','submit')">提交审核</button>`);
+        } else if (batch.status === 'pending_review') {
+          actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','approve')">批准</button><button class="btn btn-sm btn-secondary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','reject')">拒绝</button>`);
+        } else if (batch.status === 'approved') actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','apply')">应用批次</button>`);
+        else if (batch.status === 'applied') actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','revert')">撤销批次</button>`);
+        if (batch.dryRunAt) actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._exportGovernanceBatch('${this._escAttr(batch.id)}')">导出影响报告</button>`);
+        return `<tr><td><strong>${this._escHtml(batch.name)}</strong><div class="form-hint"><code>${this._escHtml(batch.id)}</code></div><div class="form-hint">${this._escHtml(batch.description || '')}</div></td><td><span class="tag ${batch.status === 'applied' ? 'tag-success' : ['rejected','reverted'].includes(batch.status) ? 'tag-warning' : 'tag-info'}">${this._escHtml(statusLabels[batch.status] || batch.status)}</span></td><td>${batch.itemCount} 条<div class="form-hint">影响金额 ¥${this._fmt(batch.affectedAmount)}</div></td><td>${batch.dryRunAt ? `有效 ${summary.validItemCount || 0} · 无效 ${summary.invalidItemCount || 0}<div class="form-hint">新增解释 ${summary.createCount || 0} · 原始流水变更 ${summary.sourceFactsChanged || 0}</div>` : '尚未预览'}</td><td>${batch.eventCount} 个事件<div class="form-hint">创建 ${this._escHtml(String(batch.createdAt || '').slice(0,19).replace('T',' '))}</div><details><summary>项目与事件</summary><div class="form-hint">${(batch.items || []).map(item => `${this._escHtml(item.candidateId)} · ${this._escHtml(item.validationStatus)}`).join('<br>')}</div><div class="form-hint">${(batch.events || []).map(event => `${this._escHtml(event.action)} · ${this._escHtml(event.actorName || event.actorId)}`).join('<br>')}</div></details></td><td><div class="row-actions">${actions.join('')}</div></td></tr>`;
+      }).join('')}</tbody></table></div>`;
+    } catch (error) { target.innerHTML = `<div class="empty-state">治理批次加载失败：${this._escHtml(error.message || error)}</div>`; }
+  },
+
+  async _governanceBatchAction(id, action) {
+    const confirmText = action === 'apply' ? '确认应用该治理批次？系统只写入业务归属解释层，并保留完整审计。' : action === 'revert' ? '确认撤销该治理批次？仅恢复本批次创建或替换的解释层记录。' : '';
+    if (confirmText && !confirm(confirmText)) return;
+    const notes = {approve:'管理员已复核 dry-run 影响报告',reject:'管理员拒绝该批次'};
+    try {
+      await Store._request('POST', `/rest/v1/governance-batches?id=${encodeURIComponent(id)}&action=${encodeURIComponent(action)}`, notes[action] ? { note: notes[action] } : {});
+      const actionLabels = {'dry-run':'影响预览完成',submit:'已提交审核',approve:'批次已批准',reject:'批次已拒绝',apply:'批次已应用',revert:'批次已撤销'};
+      this.toast(actionLabels[action] || '操作完成');
+      await this._loadGovernanceBatches();
+    } catch (error) { this.toast('操作失败：' + (error.message || error), 'error'); }
+  },
+
+  _exportGovernanceBatch(id) {
+    const batch = (this._governanceBatches || []).find(x => x.id === id);
+    if (!batch) return this.toast('治理批次不存在', 'error');
+    const headers = ['批次ID','批次名称','批次状态','候选类型','候选ID','来源表','来源ID','明细键','验证状态','验证错误','影响金额','建议业务层','建议业务类型','建议成本类型','建议能力轴','应用前解释','应用后解释'];
+    const rows = (batch.items || []).map(item => { const p=item.proposedPayload||{}; return [batch.id,batch.name,batch.status,item.candidateType,item.candidateId,item.sourceTable,item.sourceId,item.sourceLineKey,item.validationStatus,(item.validationErrors||[]).join('；'),item.affectedAmount,p.businessLayerCode,p.businessTypeCode,p.costTypeCode,p.capabilityAxisCode,JSON.stringify(item.beforePayload||null),JSON.stringify(item.appliedPayload||null)]; });
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const blob = new Blob(['\uFEFF' + [headers,...rows].map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`治理批次影响报告-${batch.id}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条治理变更`);
   },
 
   async _updateManageStats() {
