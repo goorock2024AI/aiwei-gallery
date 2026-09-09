@@ -5687,7 +5687,7 @@ const UI = {
     const month = $('#rpt-month')?.value || '';
     const prefix = month ? `${year}-${month}` : year;
     try {
-      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, allCostCandidates, allGalleryCandidates, allWorkshopCandidates, legacyFacts] = await Promise.all([
+      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, allCostCandidates, allGalleryCandidates, allWorkshopCandidates, allSpaceCandidates, legacyFacts] = await Promise.all([
         Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
@@ -5698,6 +5698,7 @@ const UI = {
         Store._request('GET', '/rest/v1/cost_attribution_candidates_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/gallery_link_candidates_v2?order=business_date.desc&limit=5000'),
         Store._request('GET', '/rest/v1/workshop_link_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/space_classification_candidates_v2?order=business_date.desc&limit=5000'),
         Store.getByYear('revenueFacts', year)
       ]);
       if (renderId !== this._v2SummaryRenderId) return;
@@ -5731,6 +5732,9 @@ const UI = {
       this._v2WorkshopLinks = (allWorkshopCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
       this._v2WorkshopLinksPeriod = prefix;
       this._v2WorkshopLinksFilter = this._v2WorkshopLinksFilter || '';
+      this._v2SpaceClassification = (allSpaceCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2SpaceClassificationPeriod = prefix;
+      this._v2SpaceClassificationFilter = this._v2SpaceClassificationFilter || '';
       const issueCount = key => issues.filter(r => r.issueType === key).length;
       const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
       const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
@@ -5757,7 +5761,8 @@ const UI = {
         ${this._revenueAttributionHtml()}
         ${this._costAttributionHtml()}
         ${this._galleryLinksHtml()}
-        ${this._workshopLinksHtml()}`;
+        ${this._workshopLinksHtml()}
+        ${this._spaceClassificationHtml()}`;
     } catch (error) {
       if (renderId !== this._v2SummaryRenderId) return;
       target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
@@ -6065,6 +6070,48 @@ const UI = {
     const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
     const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.activityName,r.businessTypeName,r.participantCount,r.affectedAmount,r.originalProjectName,r.projectCandidateCount,r.suggestedProjectId,r.suggestedProjectName,r.projectConfidence,r.directCostCandidateCount,r.confirmedDirectCostCount,r.pendingDirectCostCount,r.confirmedDirectCostAmount,r.pendingDirectCostAmount,r.sourceTable,r.sourceId,r.sourceLineKey,r.reviewNote])];
     const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`工坊历史关联候选-${this._v2WorkshopLinksPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条工坊关联候选`);
+  },
+
+  _spaceClassificationHtml() {
+    const allRows = this._v2SpaceClassification || [];
+    const filter = this._v2SpaceClassificationFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {complete:'信息完整',ready_candidate:'可复核候选',classification_review:'分类待审',cooperation_review:'合作方式待审',contract_review:'合同待审'};
+    const businessLabels = {space_rental:'空间租赁/合作',brand_event:'品牌活动/企业合作',uncategorized_revenue:'待确认项目'};
+    const contractLabels = {present:'已有合同编号',not_required:'免费项目',missing_review:'付费项目待核',missing_required:'应有合同但缺失',duplicate:'合同编号重复'};
+    const manualCount = allRows.filter(r => ['classification_review','cooperation_review'].includes(r.candidateStatus)).length;
+    return `<div class="card" id="v2-space-classification-card">
+      <div class="card-title">空间与合作历史分类 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2SpaceClassification()" ${rows.length ? '' : 'disabled'}>导出空间分类候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2SpaceClassificationPeriod)}：分别复核业务类型、合作方式、合同编号和经营状态。只有明确的租赁或品牌快闪场景提供高置信建议；混合用途、重复合同和资料缺失均保留人工判断。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">信息完整</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'complete').length}</div><div class="stat-sub">四个维度已确认</div></div>
+        <div class="stat-card"><div class="stat-label">可复核候选</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'ready_candidate').length}</div><div class="stat-sub">现有字段可给出明确建议</div></div>
+        <div class="stat-card"><div class="stat-label">需人工分类</div><div class="stat-value">${manualCount}</div><div class="stat-sub">业务类型或合作方式待审</div></div>
+        <div class="stat-card"><div class="stat-label">合同待审</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'contract_review').length}</div><div class="stat-sub">缺失或编号重复</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="space-classification-status" onchange="UI._filterV2SpaceClassification(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-space-classification-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期/项目</th><th>执行证据</th><th>业务类型</th><th>合作方式</th><th>合同</th><th>经营状态</th><th>应收/已收</th><th>状态</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const originalType = businessLabels[r.originalBusinessTypeCode] || r.originalBusinessTypeCode || '待补';
+        const suggestedType = businessLabels[r.suggestedBusinessTypeCode] || r.suggestedBusinessTypeCode || '-';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}<div><strong>${this._escHtml(r.projectName || '未命名项目')}</strong></div><div class="form-hint">${this._escHtml(r.space)} · ${this._escHtml(r.client || '无合作方')}</div></td><td>${this._escHtml(r.executionType || '-')}<div class="form-hint">${this._escHtml(r.executionStatus || '-')} · ${this._escHtml(r.rentalType || '-')}</div></td><td>${this._escHtml(originalType)}<div class="form-hint">${r.businessTypeStatus === 'confirmed' ? '已确认' : `建议：${this._escHtml(suggestedType)} · ${this._fmt((+r.businessTypeConfidence || 0) * 100)}%`}</div></td><td>${this._escHtml(r.originalCooperationMode || '待补')}<div class="form-hint">${r.cooperationStatus === 'confirmed' ? '已确认' : `建议：${this._escHtml(r.suggestedCooperationMode || '人工判断')}`}</div></td><td>${this._escHtml(r.originalContractNo || '待补')}<div class="form-hint">${this._escHtml(contractLabels[r.contractStatus] || r.contractStatus)}${r.contractUsageCount > 1 ? ` · ${r.contractUsageCount} 个项目重复` : ''}</div></td><td>${this._escHtml(r.originalBusinessStatus || '待补')}<div class="form-hint">${r.businessStatusStatus === 'confirmed' ? '已确认' : `建议：${this._escHtml(r.suggestedBusinessStatus || '人工判断')}`}</div></td><td>¥${this._fmt(r.receivableAmount)} / ¥${this._fmt(r.receivedAmount)}<div class="form-hint">待收 ¥${this._fmt(r.outstandingAmount)}</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的空间分类候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2SpaceClassification(status) {
+    this._v2SpaceClassificationFilter = status || '';
+    const card = $('#v2-space-classification-card');
+    if (card) card.outerHTML = this._spaceClassificationHtml();
+  },
+
+  _exportV2SpaceClassification() {
+    const filter = this._v2SpaceClassificationFilter || '';
+    const rows = (this._v2SpaceClassification || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的空间分类候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','问题数','开始日期','结束日期','空间','项目名称','合作方','执行类型','执行状态','租金类型','应收金额','已收金额','待收金额','原业务类型','业务类型状态','建议业务类型','类型置信度','原合作方式','合作方式状态','建议合作方式','原合同编号','合同状态','合同使用数','原经营状态','经营状态状态','建议经营状态','负责人','来源表','来源ID','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.issueCount,r.businessDate,r.endDate,r.space,r.projectName,r.client,r.executionType,r.executionStatus,r.rentalType,r.receivableAmount,r.receivedAmount,r.outstandingAmount,r.originalBusinessTypeCode,r.businessTypeStatus,r.suggestedBusinessTypeCode,r.businessTypeConfidence,r.originalCooperationMode,r.cooperationStatus,r.suggestedCooperationMode,r.originalContractNo,r.contractStatus,r.contractUsageCount,r.originalBusinessStatus,r.businessStatusStatus,r.suggestedBusinessStatus,r.projectOwner,r.sourceTable,r.sourceId,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`空间合作历史分类候选-${this._v2SpaceClassificationPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条空间分类候选`);
   },
 
   // === 数据管理 ===
