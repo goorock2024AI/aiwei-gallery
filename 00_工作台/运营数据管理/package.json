@@ -46,6 +46,8 @@
     "check:m4-batches-migration": "node scripts/check-m4-governance-batches-migration.js",
     "check:m4-batches": "node scripts/check-m4-governance-batches-integration.js",
     "check:m4-batches-browser": "node scripts/check-m4-governance-batches-browser.js",
+    "check:m4-stage-review": "node scripts/check-m4-stage-review.js",
+    "check:m4-stage-review-browser": "node scripts/check-m4-stage-review-browser.js",
     "check:workshop-projects": "node scripts/check-workshop-projects.js",
     "check:workshop-integration": "node scripts/check-workshop-projects-integration.js",
     "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",

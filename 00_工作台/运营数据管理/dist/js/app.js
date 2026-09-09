@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-const APP_VERSION = '2.0.0-dev.m4-09.1';
-  const LAST_UPDATE = '2026-09-08';
+const APP_VERSION = '2.0.0-dev.m4-10.1';
+  const LAST_UPDATE = '2026-09-09';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
     const icpEl = document.getElementById('sidebar-icp');
