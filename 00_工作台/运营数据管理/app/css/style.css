@@ -833,8 +833,111 @@ table.data-table .tag {
 }
 .filter-bar .form-group { min-width: 140px; }
 
+/* M5 美术馆运营管理 */
+.operations-shell { --operations-ink: #163426; }
+.operations-hero {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  justify-content: space-between;
+  gap: 28px;
+  align-items: center;
+  padding: 32px;
+  margin-bottom: 16px;
+  color: var(--white);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 82% 10%, rgba(245,230,200,.2), transparent 28%),
+    linear-gradient(125deg, #153a29 0%, #2d5a3f 70%, #6f623c 130%);
+  box-shadow: var(--shadow-lg);
+}
+.operations-hero::after {
+  content: "";
+  position: absolute;
+  right: -50px;
+  bottom: -85px;
+  width: 240px;
+  height: 240px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 50%;
+}
+.operations-eyebrow { margin-bottom: 8px; color: var(--gold-light); font-size: 11px; font-weight: 700; letter-spacing: .18em; }
+.operations-hero h2 { margin-bottom: 6px; font-size: 28px; line-height: 1.25; letter-spacing: .06em; }
+.operations-hero p { max-width: 620px; color: rgba(255,255,255,.76); }
+.operations-period-card {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 220px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 12px;
+  background: rgba(255,255,255,.1);
+  backdrop-filter: blur(8px);
+}
+.operations-period-card span, .operations-period-card small { display: block; color: rgba(255,255,255,.68); font-size: 11px; }
+.operations-period-card strong { display: block; margin: 3px 0 7px; color: var(--white); font-size: 21px; }
+.operations-toolbar { display: grid; grid-template-columns: 130px 130px minmax(220px, 1fr) auto; gap: 12px; align-items: end; }
+.operations-filter-group { display: flex; flex-direction: column; gap: 4px; }
+.operations-filter-group label, .operations-scope span { color: var(--gray-500); font-size: 11px; }
+.operations-filter-group select { width: 100%; }
+.operations-scope { align-self: center; display: flex; flex-direction: column; padding-top: 12px; }
+.operations-scope strong { color: var(--green-700); font-size: 13px; }
+.operations-refresh-status { grid-column: 1 / -1; color: var(--gray-500); font-size: 11px; text-align: right; }
+.operations-section-nav { display: flex; gap: 6px; margin: 0 0 16px; overflow-x: auto; scrollbar-width: thin; }
+.operations-section-link {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 7px 13px;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  background: rgba(255,255,255,.75);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.operations-section-link:hover, .operations-section-link.active { color: var(--white); border-color: var(--green-700); background: var(--green-700); }
+.operations-section { scroll-margin-top: 16px; }
+.operations-section:focus { outline: 2px solid var(--gold); outline-offset: 2px; }
+.operations-section-heading { display: flex; justify-content: space-between; gap: 18px; align-items: center; margin-bottom: 16px; }
+.operations-section-heading > div { display: flex; gap: 10px; align-items: center; }
+.operations-section-heading span { color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: .1em; }
+.operations-section-heading h3 { color: var(--operations-ink); font-size: 17px; }
+.operations-section-heading p { color: var(--gray-500); font-size: 12px; text-align: right; }
+.operations-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.operations-stat-placeholder { min-height: 104px; padding: 15px; border: 1px solid var(--gray-200); border-radius: 10px; background: linear-gradient(145deg, #fff, #faf8f2); }
+.operations-stat-placeholder span, .operations-stat-placeholder small { display: block; color: var(--gray-500); font-size: 11px; }
+.operations-stat-placeholder strong { display: block; margin: 5px 0; color: var(--green-700); font-size: 24px; }
+.operations-layer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.operations-layer-grid article { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 15px; border: 1px solid var(--gray-200); border-radius: 10px; }
+.operations-layer-grid article > span { color: var(--gold); font-size: 11px; font-weight: 700; }
+.operations-layer-grid h4 { margin-bottom: 2px; color: var(--operations-ink); }
+.operations-layer-grid p { color: var(--gray-500); font-size: 11px; }
+.operations-layer-grid article > strong { color: var(--gray-500); font-size: 11px; font-weight: 500; }
+.operations-empty-panel { display: flex; gap: 14px; align-items: center; min-height: 112px; padding: 20px; border: 1px dashed var(--gray-300); border-radius: 10px; background: var(--gray-100); }
+.operations-empty-panel > span { color: var(--gold); font-size: 26px; }
+.operations-empty-panel strong { display: block; margin-bottom: 3px; color: var(--green-700); }
+.operations-empty-panel p { color: var(--gray-500); font-size: 12px; }
+.operations-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.operations-chip-row span { padding: 8px 12px; color: var(--green-700); border: 1px solid var(--green-100); border-radius: 8px; background: var(--green-100); font-size: 12px; }
+.operations-model-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.operations-model-grid div { padding: 16px; border-left: 3px solid var(--gold); background: var(--gray-100); }
+.operations-model-grid span { display: block; margin-bottom: 4px; color: var(--gray-500); font-size: 11px; }
+.operations-model-grid strong { color: var(--operations-ink); font-size: 13px; }
+
 /* 响应式 */
 @media (max-width: 768px) {
+  .operations-hero { align-items: stretch; padding: 24px 20px; flex-direction: column; }
+  .operations-hero h2 { font-size: 23px; }
+  .operations-period-card { flex-basis: auto; }
+  .operations-toolbar { grid-template-columns: 1fr 1fr; }
+  .operations-scope { grid-column: 1 / -1; padding-top: 0; }
+  #operations-refresh { grid-column: 1 / -1; }
+  .operations-stat-grid, .operations-layer-grid, .operations-model-grid { grid-template-columns: 1fr; }
+  .operations-section-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .operations-section-heading p { text-align: left; }
+  .operations-layer-grid article { grid-template-columns: 24px minmax(0, 1fr); }
+  .operations-layer-grid article > strong { grid-column: 2; }
   #sidebar { width: 48px; }
   .sidebar-header { padding: 12px 8px; }
   .sidebar-header h1 { font-size: 0; }
