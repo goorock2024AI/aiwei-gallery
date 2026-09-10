@@ -5,8 +5,15 @@ const OperationsDashboard = {
   _trendLoadId: 0,
   _governanceLoadId: 0,
   _modelLoadId: 0,
+  _detailLoadId: 0,
   _loadAllId: 0,
   _trendCharts: [],
+  _detailType: 'revenue',
+  _detailLayer: 'all',
+  _detailStatus: 'all',
+  _detailKeyword: '',
+  _detailRows: [],
+  _expandedFactId: '',
 
   _defaultPeriod() {
     const today = new Date();
@@ -440,6 +447,243 @@ const OperationsDashboard = {
     ];
   },
 
+  _detailTypeDefinitions() {
+    return {
+      revenue: { label: '收入事实', table: 'business_revenue_facts_v2', amountLabel: '净收入' },
+      cost: { label: '成本事实', table: 'business_cost_facts_v2', amountLabel: '成本金额' },
+      profit: { label: '利润事实', table: 'business_profit_facts_v2', amountLabel: '销售毛利' }
+    };
+  },
+
+  _detailLayerOptions(selected) {
+    return [['all', '全部业务层'], ...this._layerDefinitions().map(([code, name]) => [code, name])]
+      .map(([value, label]) => `<option value="${value}"${selected === value ? ' selected' : ''}>${label}</option>`).join('');
+  },
+
+  _detailStatusOptions(selected) {
+    const values = [
+      ['all', '全部映射状态'], ['system_field', '系统字段'], ['system_default', '系统默认'], ['sale_snapshot', '成交快照'],
+      ['alias_match', '别名匹配'], ['product_match', '商品匹配'], ['manual_link', '人工归属'],
+      ['rule_match', '规则匹配'], ['rule_confirmed', '规则已确认'], ['pending_review', '待复核'],
+      ['unmatched', '未匹配'], ['unmatched_default', '未匹配兜底']
+    ];
+    return values.map(([value, label]) => `<option value="${value}"${selected === value ? ' selected' : ''}>${label}</option>`).join('');
+  },
+
+  _detailMappingLabel(status) {
+    const labels = {
+      system_field: '系统字段', system_default: '系统默认', sale_snapshot: '成交快照', alias_match: '别名匹配', product_match: '商品匹配',
+      manual_link: '人工归属', rule_match: '规则匹配', rule_confirmed: '规则已确认',
+      pending_review: '待复核', unmatched: '未匹配', unmatched_default: '未匹配兜底'
+    };
+    return labels[status] || String(status || '状态未知').replaceAll('_', ' ');
+  },
+
+  _detailQuality(row) {
+    const flags = row.qualityFlags && typeof row.qualityFlags === 'object' ? row.qualityFlags : {};
+    const labels = {
+      missing_product: '缺商品', missing_unit_cost: '缺单位成本', missing_settlement_price: '缺结算价',
+      missing_project: '缺项目', ambiguous_mapping: '映射冲突', pending_review: '待复核'
+    };
+    const active = Object.entries(flags).filter(([, value]) => value === true || (value !== false && value !== '' && value !== null && value !== undefined));
+    return active.map(([key, value]) => labels[key] || (value === true ? key : `${key}: ${value}`));
+  },
+
+  _normalizeDetailRow(type, row) {
+    const quality = this._detailQuality(row);
+    const amount = type === 'cost' ? this._number(row.costAmount) : type === 'profit' ? this._number(row.grossProfit) : this._number(row.netAmount);
+    const label = row.productNameStandard || row.productNameRaw || row.projectName || row.sourceCategory || row.businessTypeName || row.businessTypeCode || row.sourceId || '未命名事实';
+    return {
+      type,
+      factId: String(row.factId || ''),
+      date: String(row.businessDate || ''),
+      sourceTable: String(row.sourceTable || ''),
+      sourceId: String(row.sourceId || ''),
+      sourceLineKey: String(row.sourceLineKey || ''),
+      layerCode: String(row.businessLayerCode || ''),
+      layerName: String(row.businessLayerName || row.businessLayerCode || '待归类'),
+      businessType: String(row.businessTypeName || row.businessTypeCode || '待归类'),
+      costType: String(row.costTypeName || row.costTypeCode || ''),
+      capability: String(row.capabilityAxisName || row.capabilityAxisCode || ''),
+      mappingStatus: String(row.mappingStatus || ''),
+      label: String(label),
+      amount,
+      grossAmount: this._number(row.grossAmount),
+      revenueAmount: this._number(row.revenueAmount ?? row.netAmount),
+      costAmount: this._number(row.costAmount),
+      grossProfit: this._number(row.grossProfit),
+      grossMargin: row.grossMargin === null || row.grossMargin === undefined ? null : Number(row.grossMargin),
+      quantity: this._number(row.quantity),
+      unitPrice: this._number(row.unitPrice),
+      unitCost: this._number(row.unitCost),
+      productId: String(row.productId || ''),
+      projectName: String(row.projectName || ''),
+      paymentMethod: String(row.paymentMethod || ''),
+      quality
+    };
+  },
+
+  _buildDetailModel(type, rows = [], keyword = '') {
+    const definitions = this._detailTypeDefinitions();
+    const normalized = rows.map(row => this._normalizeDetailRow(type, row));
+    const needle = String(keyword || '').trim().toLocaleLowerCase('zh-CN');
+    const visible = needle ? normalized.filter(row => [row.factId, row.date, row.sourceTable, row.sourceId, row.sourceLineKey, row.layerName, row.businessType, row.costType, row.capability, row.mappingStatus, row.label, row.projectName, row.productId, ...row.quality]
+      .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(needle))) : normalized;
+    return {
+      type,
+      definition: definitions[type] || definitions.revenue,
+      rows: normalized,
+      visible,
+      keyword: String(keyword || ''),
+      amount: visible.reduce((sum, row) => sum + row.amount, 0),
+      qualityCount: visible.filter(row => row.quality.length).length,
+      sourceCount: new Set(visible.map(row => `${row.sourceTable}:${row.sourceId}`)).size,
+      truncated: rows.length >= 500
+    };
+  },
+
+  _detailRequestPath() {
+    const definition = this._detailTypeDefinitions()[this._detailType] || this._detailTypeDefinitions().revenue;
+    const { start, end } = this._periodDateRange();
+    const filters = [`business_date=gte.${start}`, `business_date=lte.${end}`];
+    if (this._detailLayer !== 'all') filters.push(`business_layer_code=eq.${encodeURIComponent(this._detailLayer)}`);
+    if (this._detailStatus !== 'all') filters.push(`mapping_status=eq.${encodeURIComponent(this._detailStatus)}`);
+    filters.push('order=business_date.desc', 'limit=500');
+    return `/rest/v1/${definition.table}?${filters.join('&')}`;
+  },
+
+  _detailFiltersHtml(model) {
+    return `<div class="operations-detail-filters" aria-label="经营明细筛选">
+      <div class="operations-filter-group"><label for="operations-detail-type">事实类型</label><select id="operations-detail-type" onchange="OperationsDashboard.setDetailType(this.value)">${Object.entries(this._detailTypeDefinitions()).map(([value, definition]) => `<option value="${value}"${model.type === value ? ' selected' : ''}>${definition.label}</option>`).join('')}</select></div>
+      <div class="operations-filter-group"><label for="operations-detail-layer">业务层</label><select id="operations-detail-layer" onchange="OperationsDashboard.setDetailLayer(this.value)">${this._detailLayerOptions(this._detailLayer)}</select></div>
+      <div class="operations-filter-group"><label for="operations-detail-status-filter">映射状态</label><select id="operations-detail-status-filter" onchange="OperationsDashboard.setDetailStatus(this.value)">${this._detailStatusOptions(this._detailStatus)}</select></div>
+      <div class="operations-filter-group operations-keyword-filter"><label for="operations-detail-keyword">定位关键词</label><input id="operations-detail-keyword" type="search" value="${this._escapeTrendText(this._detailKeyword)}" placeholder="来源 ID、项目、商品或明细键" oninput="OperationsDashboard.setDetailKeyword(this.value)"></div>
+      <button type="button" class="btn btn-secondary" onclick="OperationsDashboard.resetDetailFilters()">重置明细筛选</button>
+      <button id="operations-detail-export" type="button" class="btn btn-primary" onclick="OperationsDashboard.exportDetailCSV()"${model.visible.length ? '' : ' disabled'}>导出当前结果</button>
+    </div>
+    <div class="operations-detail-scope"><span>统一期间：<strong>${this._periodLabel()}</strong></span><span>服务端条件：业务日期${this._detailLayer === 'all' ? '' : ` · ${this._escapeTrendText(model.visible[0]?.layerName || this._detailLayer)}`}${this._detailStatus === 'all' ? '' : ` · ${this._detailMappingLabel(this._detailStatus)}`}</span><span>最多读取 500 条</span></div>
+    <div id="operations-detail-results">${this._detailResultsHtml(model)}</div>`;
+  },
+
+  _detailResultsHtml(model) {
+    const warning = model.truncated ? '<div class="operations-data-notice warning" role="note"><strong>当前结果已达到 500 条上限</strong><span>请缩小业务层或映射状态范围后再导出，避免遗漏。</span></div>' : '';
+    const empty = model.visible.length ? '' : `<div class="operations-data-notice" role="note"><strong>${this._periodLabel()} 没有符合筛选的${model.definition.label}</strong><span>可重置明细筛选，或切换事实类型、业务层和映射状态。</span></div>`;
+    const rows = model.visible.map(row => {
+      const expanded = this._expandedFactId === row.factId;
+      return `<tr class="operations-detail-row" data-fact-id="${this._escapeTrendText(row.factId)}">
+        <td data-label="展开"><button type="button" class="operations-detail-toggle" data-fact-id="${this._escapeTrendText(row.factId)}" aria-expanded="${expanded}" onclick="OperationsDashboard.toggleDetail(this.dataset.factId)">${expanded ? '−' : '+'}</button></td>
+        <td data-label="日期">${this._escapeTrendText(row.date)}</td>
+        <th scope="row"><strong>${this._escapeTrendText(row.label)}</strong><small>${this._escapeTrendText(row.businessType)}</small></th>
+        <td data-label="业务层">${this._escapeTrendText(row.layerName)}</td>
+        <td data-label="金额"><strong>${this._money(row.amount)}</strong></td>
+        <td data-label="映射状态"><span class="operations-mapping-status ${/pending|unmatched/.test(row.mappingStatus) ? 'attention' : ''}">${this._detailMappingLabel(row.mappingStatus)}</span></td>
+        <td data-label="质量标记">${row.quality.length ? row.quality.map(flag => `<span class="operations-quality-flag">${this._escapeTrendText(flag)}</span>`).join('') : '—'}</td>
+      </tr>
+      <tr class="operations-detail-expansion" data-detail-for="${this._escapeTrendText(row.factId)}"${expanded ? '' : ' hidden'}><td colspan="7"><div class="operations-source-details">
+        <div><span>来源表</span><code>${this._escapeTrendText(row.sourceTable) || '—'}</code></div><div><span>来源 ID</span><code>${this._escapeTrendText(row.sourceId) || '—'}</code></div><div><span>明细键</span><code>${this._escapeTrendText(row.sourceLineKey) || '—'}</code></div><div><span>事实 ID</span><code>${this._escapeTrendText(row.factId) || '—'}</code></div>
+        <div><span>业务类型</span><strong>${this._escapeTrendText(row.businessType)}</strong></div><div><span>成本类型</span><strong>${this._escapeTrendText(row.costType) || '—'}</strong></div><div><span>能力轴</span><strong>${this._escapeTrendText(row.capability) || '—'}</strong></div><div><span>项目 / 商品</span><strong>${this._escapeTrendText(row.projectName || row.productId) || '—'}</strong></div>
+        ${row.type === 'profit' ? `<div><span>净收入</span><strong>${this._money(row.revenueAmount)}</strong></div><div><span>销售成本</span><strong>${this._money(row.costAmount)}</strong></div><div><span>毛利率</span><strong>${this._margin(row.grossMargin)}</strong></div>` : ''}
+      </div></td></tr>`;
+    }).join('');
+    return `${warning}<div class="operations-detail-summary"><div><span>当前结果</span><strong>${model.visible.length}${model.truncated ? '+' : ''}</strong><small>加载 ${model.rows.length} 条</small></div><div><span>${model.definition.amountLabel}</span><strong>${this._money(model.amount)}</strong><small>当前筛选结果合计</small></div><div><span>原始记录</span><strong>${model.sourceCount}</strong><small>按来源表 + 来源 ID 去重</small></div><div><span>含质量标记</span><strong>${model.qualityCount}</strong><small>不会静默隐藏</small></div></div>${empty}${model.visible.length ? `<div class="operations-detail-table-wrap"><table class="operations-detail-table"><thead><tr><th>展开</th><th>业务日期</th><th>事实说明</th><th>业务层</th><th>金额</th><th>映射状态</th><th>质量标记</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}`;
+  },
+
+  _setDetailState(label, state) {
+    const indicator = document.getElementById('operations-detail-state');
+    if (!indicator) return;
+    indicator.className = `operations-state-pill ${state}`;
+    indicator.textContent = label;
+  },
+
+  async _loadDetail() {
+    const target = document.getElementById('operations-detail-content');
+    if (!target) return false;
+    const loadId = ++this._detailLoadId;
+    this._setDetailState('加载中', 'loading');
+    target.innerHTML = this._loadingHtml('经营明细');
+    try {
+      const rows = await Store._request('GET', this._detailRequestPath());
+      if (loadId !== this._detailLoadId) return false;
+      this._detailRows = Array.isArray(rows) ? rows : [];
+      this._expandedFactId = '';
+      const model = this._buildDetailModel(this._detailType, this._detailRows, this._detailKeyword);
+      target.innerHTML = this._detailFiltersHtml(model);
+      this._setDetailState(model.rows.length ? '数据已就绪' : '空期间', model.rows.length ? 'ready' : 'empty');
+      return true;
+    } catch (error) {
+      if (loadId !== this._detailLoadId) return false;
+      this._detailRows = [];
+      this._setDetailState('加载失败', 'error');
+      target.innerHTML = '<div class="operations-error-state"><strong>经营明细加载失败</strong><span>无法读取当前筛选下的只读事实；总览、趋势、治理和模型区不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard._loadDetail()">重新加载明细</button></div>';
+      return false;
+    }
+  },
+
+  async setDetailType(value) {
+    if (!this._detailTypeDefinitions()[value]) return;
+    this._detailType = value;
+    this._detailStatus = 'all';
+    this._detailKeyword = '';
+    await this._loadDetail();
+  },
+
+  async setDetailLayer(value) {
+    if (!['all', ...this._layerDefinitions().map(([code]) => code)].includes(value)) return;
+    this._detailLayer = value;
+    this._detailKeyword = '';
+    await this._loadDetail();
+  },
+
+  async setDetailStatus(value) {
+    this._detailStatus = String(value || 'all');
+    this._detailKeyword = '';
+    await this._loadDetail();
+  },
+
+  setDetailKeyword(value) {
+    this._detailKeyword = String(value || '');
+    const results = document.getElementById('operations-detail-results');
+    if (results) results.innerHTML = this._detailResultsHtml(this._buildDetailModel(this._detailType, this._detailRows, this._detailKeyword));
+    const exportButton = document.getElementById('operations-detail-export');
+    if (exportButton) exportButton.disabled = !this._buildDetailModel(this._detailType, this._detailRows, this._detailKeyword).visible.length;
+  },
+
+  async resetDetailFilters() {
+    this._detailLayer = 'all';
+    this._detailStatus = 'all';
+    this._detailKeyword = '';
+    await this._loadDetail();
+  },
+
+  toggleDetail(factId) {
+    this._expandedFactId = this._expandedFactId === factId ? '' : factId;
+    const results = document.getElementById('operations-detail-results');
+    if (results) results.innerHTML = this._detailResultsHtml(this._buildDetailModel(this._detailType, this._detailRows, this._detailKeyword));
+  },
+
+  _csvCell(value) {
+    const text = String(value ?? '');
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  },
+
+  _detailCsvContent(model) {
+    const headers = ['事实类型','事实ID','业务日期','来源表','来源ID','明细键','业务层','业务类型','成本类型','能力轴','事实说明','当前金额','净收入','成本金额','销售毛利','毛利率','映射状态','质量标记'];
+    const rows = model.visible.map(row => [model.definition.label,row.factId,row.date,row.sourceTable,row.sourceId,row.sourceLineKey,row.layerName,row.businessType,row.costType,row.capability,row.label,row.amount,row.revenueAmount,row.costAmount,row.grossProfit,row.grossMargin === null ? '' : row.grossMargin,row.mappingStatus,row.quality.join('；')]);
+    return '\uFEFF' + [headers, ...rows].map(line => line.map(value => this._csvCell(value)).join(',')).join('\r\n');
+  },
+
+  exportDetailCSV() {
+    const model = this._buildDetailModel(this._detailType, this._detailRows, this._detailKeyword);
+    if (!model.visible.length || typeof document === 'undefined') return;
+    const blob = new Blob([this._detailCsvContent(model)], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `运营管理-${model.definition.label}-${this._period.year}-${this._period.month}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    if (typeof UI !== 'undefined' && UI.toast) UI.toast(`已导出 ${model.visible.length} 条${model.definition.label}`);
+  },
+
   _buildBusinessModel(rows = []) {
     const layerOrder = new Map(this._layerDefinitions().map(([code], index) => [code, index]));
     const normalized = rows.map(row => ({
@@ -710,9 +954,9 @@ const OperationsDashboard = {
     const status = document.getElementById('operations-refresh-status');
     if (refreshButton) refreshButton.disabled = true;
     if (status) status.textContent = `${message} · ${this._periodLabel()}`;
-    const [overviewOk, trendOk, governanceOk, modelOk] = await Promise.all([this._loadOverview(), this._loadTrend(), this._loadGovernance(), this._loadBusinessModel()]);
+    const [overviewOk, trendOk, governanceOk, modelOk, detailOk] = await Promise.all([this._loadOverview(), this._loadTrend(), this._loadGovernance(), this._loadBusinessModel(), this._loadDetail()]);
     if (loadId !== this._loadAllId) return;
-    const results = [overviewOk, trendOk, governanceOk, modelOk];
+    const results = [overviewOk, trendOk, governanceOk, modelOk, detailOk];
     if (status) status.textContent = `${results.every(Boolean) ? '已更新' : results.some(Boolean) ? '部分数据加载失败' : '加载失败'} · ${this._periodLabel()}`;
     if (refreshButton) refreshButton.disabled = false;
   },
@@ -831,8 +1075,8 @@ const OperationsDashboard = {
         </section>
 
         <section id="operations-detail" class="card operations-section" tabindex="-1">
-          <div class="operations-section-heading"><div><span>06</span><h3>明细与导出</h3></div><p>统一筛选、来源定位与可复核证据</p></div>
-          <div class="operations-empty-panel"><span aria-hidden="true">⇩</span><div><strong>明细能力已预留</strong><p>明细将保留来源表、来源 ID、明细键和治理状态。</p></div></div>
+          <div class="operations-section-heading"><div><span>06</span><h3>明细与导出</h3><em id="operations-detail-state" class="operations-state-pill loading">加载中</em></div><p>统一筛选、来源定位与可复核证据</p></div>
+          <div id="operations-detail-content">${this._loadingHtml('经营明细')}</div>
         </section>
       </div>`;
     await this._loadAll('正在加载');
