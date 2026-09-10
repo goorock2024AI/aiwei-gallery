@@ -64,7 +64,8 @@
     "check:workshop-projects": "node scripts/check-workshop-projects.js",
     "check:workshop-integration": "node scripts/check-workshop-projects-integration.js",
     "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",
-    "check:workshop-browser": "node scripts/check-workshop-projects-browser.js"
+    "check:workshop-browser": "node scripts/check-workshop-projects-browser.js",
+    "check:m5-stage-review": "node scripts/check-m5-stage-review.js"
   },
   "dependencies": {
     "pdfkit": "^0.17.2",
