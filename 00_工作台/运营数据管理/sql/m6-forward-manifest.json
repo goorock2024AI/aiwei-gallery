@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "name": "Aiwei Operations 2.0 forward migration chain",
+  "baseline": {
+    "path": "sql/baselines/20260903-pre-v2-init.sql",
+    "sourceCommit": "bd309ee902901670a29965bb899cf0860f2e42e0",
+    "sha256": "4a659e770a702f833aa8a1c0066f171be5de268db9d9120b8dda701fef3294c2"
+  },
+  "forward": [
+    {
+      "path": "sql/20260827_role_permissions_product_approval.sql",
+      "sha256": "4d84cbe1d10ae313fbc5ea961660ba26bc58c278165a763eab405b159f647c0a"
+    },
+    {
+      "path": "sql/20260903_m3_02_business_dimensions.sql",
+      "sha256": "87732e9a2b07f3b73c90a40c7cd19452b33697bbc53b87da86fcba7696e215e7"
+    },
+    {
+      "path": "sql/20260903_m3_02_product_gallery_space_extensions.sql",
+      "sha256": "27eb5fd731f782d64fd456042a32303d62134fca281976875676dd1b79635202"
+    },
+    {
+      "path": "sql/20260903_m3_02_business_fact_views.sql",
+      "sha256": "f70bf13f37fa81d6fc6d1b8009a7c944a3c74a2f4a159d082c78393470fce1aa"
+    },
+    {
+      "path": "sql/20260905_m3_04_retail_snapshot.sql",
+      "sha256": "a3a31613de2ded2736aa16ca149931e307c17ed8e8b072d2ea6b6dbeaf940c4d"
+    },
+    {
+      "path": "sql/20260905_m3_05_expense_classification.sql",
+      "sha256": "9b65752e2f0f6bf1c90d35514d427f55a1e677d1892599ce3b7c2bfc33ba412a"
+    },
+    {
+      "path": "sql/20260906_m3_06_workshop_projects.sql",
+      "sha256": "f22e9dfb489a1c32a27f549d48dd1594c9d47d90cc1362a933d51dfbccc6f63a"
+    },
+    {
+      "path": "sql/20260906_m3_07_gallery_transactions.sql",
+      "sha256": "3af63eb9463950117f86d4f22915f3a9a095111014dabb273671077995631dc1"
+    },
+    {
+      "path": "sql/20260906_m3_08_space_projects.sql",
+      "sha256": "7dc2eedbdbbad25130c7f0d42112ee0c8df27028dd20c534806eaf2d05232a28"
+    },
+    {
+      "path": "sql/20260906_m3_09_management_summary.sql",
+      "sha256": "e6deb36cda43276a66af3c93fffff00a836952c4d55a2e888025443502766b62"
+    },
+    {
+      "path": "sql/20260908_m4_02_governance_baseline.sql",
+      "sha256": "3b87a1d8e8bf8d58ec29a97864f37a64753835069670840544e84e6572a8d7e1"
+    },
+    {
+      "path": "sql/20260908_m4_03_product_alias_candidates.sql",
+      "sha256": "8ca206d24f6cee32382b1c661d5e80e6f7fb6aa6ec3cf8de066fb9e04f65b0bc"
+    },
+    {
+      "path": "sql/20260908_m4_04_product_cost_evidence.sql",
+      "sha256": "7961966d12c41a2fa4658cf493822ff0e96a061905a8f780d8ce0b0effa5f5fb"
+    },
+    {
+      "path": "sql/20260908_m4_05_revenue_attribution_candidates.sql",
+      "sha256": "dde1ce50666715a2f9db9ae336e8ccda501b5b320efaab5605f1b73c3dde42a2"
+    },
+    {
+      "path": "sql/20260908_m4_06_cost_attribution_candidates.sql",
+      "sha256": "39415ba91888a426f52c83b0a29ebfc458891054546297c35871922da90d2c94"
+    },
+    {
+      "path": "sql/20260908_m4_07_gallery_workshop_link_candidates.sql",
+      "sha256": "e8cd6ed7397fb034e57ef16a483b7ac6c6cc24b474f45974d8fb0be2d71f9bef"
+    },
+    {
+      "path": "sql/20260909_m4_08_space_classification_candidates.sql",
+      "sha256": "bb944003e29ead59a19ea95cdc38d4c3e5d4ce5a2ac92cd70ecdcee0b827ed8a"
+    },
+    {
+      "path": "sql/20260909_m4_09_governance_batches.sql",
+      "sha256": "8c363572b720ea2f66d92dc9aeddb1f1d09d6db3391b5bf9d4a1f56181add78c"
+    }
+  ],
+  "rollback": [
+    {
+      "path": "sql/20260909_m4_09_rollback.sql",
+      "sha256": "bf4c51d24a3c7d321609186b9a6ecb4fe38d2853bdb021205469d2dc8aa08f52"
+    },
+    {
+      "path": "sql/20260909_m4_08_rollback.sql",
+      "sha256": "c7681dccbd61b6de466f07ac9160530a5970c7e872c36be0a35a5829203c6925"
+    },
+    {
+      "path": "sql/20260908_m4_07_rollback.sql",
+      "sha256": "cf4da1b37c404b95e8c8618244600918f768e4f4b2314f313588d5a3ca39af90"
+    },
+    {
+      "path": "sql/20260908_m4_06_rollback.sql",
+      "sha256": "342a80091b07e9917ba356d49bdb8dae6f386a2acc53548bf903c3174c7d0aa8"
+    },
+    {
+      "path": "sql/20260908_m4_05_rollback.sql",
+      "sha256": "dc05708cbf642704b7e581839bf570cc97bfe57e0d374f955e69545f8276bbd7"
+    },
+    {
+      "path": "sql/20260908_m4_04_rollback.sql",
+      "sha256": "cdfefb2032e1b3daa57b907cfcacac6b951261aca336ff504d2bd77eece2b724"
+    },
+    {
+      "path": "sql/20260908_m4_03_rollback.sql",
+      "sha256": "de5b1910479a95925ee3f02e36a59252a168abe07786d0f54b4be3806e3fc66f"
+    },
+    {
+      "path": "sql/20260908_m4_02_rollback.sql",
+      "sha256": "19584704ae0ee49b2cf98b9a12501b1d4d7bf40fc38c50c4dad039e640cb99a3"
+    },
+    {
+      "path": "sql/20260906_m3_09_rollback.sql",
+      "sha256": "1a6cd71dafc2112a2d36bfec51a1071771bd85531fb1cf2c77c592db199bf193"
+    },
+    {
+      "path": "sql/20260906_m3_08_rollback.sql",
+      "sha256": "e379c9e11d27ffbe0d11332e8acdb7b3df9c74b4baa022f34c65b76ec0a6cea3"
+    },
+    {
+      "path": "sql/20260906_m3_07_rollback.sql",
+      "sha256": "d54e2103cbb8e8b285c22f786daadb07c78a3ebee79b8e1b99eb528440e66d38"
+    },
+    {
+      "path": "sql/20260906_m3_06_rollback.sql",
+      "sha256": "020e29cb78843fe2f3b3baf1be84f4ad652908eb7cfb3e43e957dce198c277d6"
+    },
+    {
+      "path": "sql/20260905_m3_05_rollback.sql",
+      "sha256": "5e806c96c2861fcb65eb478b1aa328c52c889ce628f2ce0b5f3597456e2f51bb"
+    },
+    {
+      "path": "sql/20260903_m3_02_rollback.sql",
+      "sha256": "40bd6fb7a683e79adb66e09f8f291f150419fa3ed6d341adb191fd2d172acb2f"
+    }
+  ]
+}
