@@ -11,7 +11,7 @@ const Store = {
   },
 
   // ===== REST 请求封装 =====
-  async _request(method, path, body) {
+  async _request(method, path, body, options = {}) {
     const base = await this._ensureClient();
     const url = base + path;
     const opts = {
@@ -22,6 +22,7 @@ const Store = {
         ...(typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {})
       }
     };
+    if (options.signal) opts.signal = options.signal;
     if (body !== undefined) opts.body = JSON.stringify(body);
     const res = await fetch(url, opts);
     if (!res.ok) {

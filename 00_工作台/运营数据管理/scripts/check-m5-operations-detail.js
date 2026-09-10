@@ -32,7 +32,7 @@ assert.match(dashboard._detailResultsHtml(model), /明细键/);
 dashboard._detailType = 'profit';
 dashboard._detailLayer = 'visit';
 dashboard._detailStatus = 'manual_link';
-assert.equal(dashboard._detailRequestPath(), '/rest/v1/business_profit_facts_v2?business_date=gte.2026-09-01&business_date=lte.2026-09-30&business_layer_code=eq.visit&mapping_status=eq.manual_link&order=business_date.desc&limit=500');
+assert.equal(dashboard._detailRequestPath(), '/rest/v1/business_profit_facts_v2?business_date=gte.2026-09-01&business_date=lte.2026-09-30&business_layer_code=eq.visit&mapping_status=eq.manual_link&order=business_date.desc&limit=500&count=none');
 
 const profit = dashboard._buildDetailModel('profit', [{
   factId: 'profit:one', sourceTable: 'revenue', sourceId: 'r,3', sourceLineKey: 'retail:1', businessDate: '2026-09-10',

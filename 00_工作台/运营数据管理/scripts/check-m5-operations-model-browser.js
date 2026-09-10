@@ -75,8 +75,7 @@ async function loginToken(role) {
     const originalCount = requests.length;
     await page.locator('#operations-month').selectOption('02');
     await page.locator('#operations-refresh-status').filter({ hasText: /已更新|部分数据加载失败/ }).waitFor();
-    assert.ok(requests.length > originalCount, 'Period refresh should reload the global dictionary with the same bounded query');
-    assert.ok(requests.slice(originalCount).every(url => !url.includes('period_month') && !url.includes('business_date')));
+    assert.equal(requests.length, originalCount, 'Period changes should reuse the global dictionary cache');
 
     intentionalFailure = true;
     await page.route('**/rest/v1/business_dimensions?**', route => route.abort());

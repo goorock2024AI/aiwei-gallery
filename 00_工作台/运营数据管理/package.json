@@ -59,6 +59,8 @@
     "check:m5-model-browser": "node scripts/check-m5-operations-model-browser.js",
     "check:m5-detail": "node scripts/check-m5-operations-detail.js",
     "check:m5-detail-browser": "node scripts/check-m5-operations-detail-browser.js",
+    "check:m5-resilience-browser": "node scripts/check-m5-operations-resilience-browser.js",
+    "check:m5-resilience": "node scripts/check-m5-operations-resilience.js",
     "check:workshop-projects": "node scripts/check-workshop-projects.js",
     "check:workshop-integration": "node scripts/check-workshop-projects-integration.js",
     "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",

@@ -883,6 +883,8 @@ table.data-table .tag {
 .operations-scope { align-self: center; display: flex; flex-direction: column; padding-top: 12px; }
 .operations-scope strong { color: var(--green-700); font-size: 13px; }
 .operations-refresh-status { grid-column: 1 / -1; color: var(--gray-500); font-size: 11px; text-align: right; }
+.operations-last-updated { grid-column: 1 / -1; margin-top: -8px; color: var(--gray-400); font-size: 9px; text-align: right; }
+.operations-refreshing { opacity: .68; pointer-events: none; transition: opacity .15s ease; }
 .operations-section-nav { display: flex; gap: 6px; margin: 0 0 16px; overflow-x: auto; scrollbar-width: thin; }
 .operations-section-link {
   flex: 0 0 auto;
@@ -1090,6 +1092,10 @@ table.data-table .tag {
 .operations-source-details > div { min-width: 0; padding: 10px 12px; background: #fbfaf6; }
 .operations-source-details span { display: block; margin-bottom: 3px; color: var(--gray-500); font-size: 9px; }
 .operations-source-details strong, .operations-source-details code { display: block; color: var(--operations-ink); font-size: 10px; overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) {
+  .operations-refreshing { transition: none; }
+}
 
 /* 响应式 */
 @media (max-width: 768px) {

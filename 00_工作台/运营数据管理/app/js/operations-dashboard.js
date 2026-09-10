@@ -14,6 +14,51 @@ const OperationsDashboard = {
   _detailKeyword: '',
   _detailRows: [],
   _expandedFactId: '',
+  _requestControllers: {},
+  _trendCache: null,
+  _dimensionCache: null,
+  _governanceGlobalCache: null,
+
+  _beginSectionLoad(section) {
+    if (this._requestControllers[section]) this._requestControllers[section].abort();
+    const controller = typeof AbortController === 'undefined' ? null : new AbortController();
+    this._requestControllers[section] = controller;
+    return controller?.signal;
+  },
+
+  _sectionRequest(signal, path) {
+    return Store._request('GET', path, undefined, signal ? { signal } : {});
+  },
+
+  _setBusy(sectionId, busy) {
+    const section = document.getElementById(sectionId);
+    if (section) section.setAttribute('aria-busy', busy ? 'true' : 'false');
+  },
+
+  _prepareSection(target, label, scope) {
+    if (target.dataset.loadedScope === scope) {
+      target.classList.add('operations-refreshing');
+      return;
+    }
+    target.innerHTML = this._loadingHtml(label);
+  },
+
+  _completeSection(target, html, scope) {
+    target.innerHTML = html;
+    target.dataset.loadedScope = scope;
+    target.classList.remove('operations-refreshing');
+  },
+
+  _failSection(target, html, scope) {
+    target.classList.remove('operations-refreshing');
+    if (target.dataset.loadedScope === scope) {
+      const stale = `<div class="operations-data-notice warning operations-stale-notice" role="alert"><strong>刷新失败，已保留上次成功数据</strong><span>${html}</span></div>`;
+      target.querySelector('.operations-stale-notice')?.remove();
+      target.insertAdjacentHTML('afterbegin', stale);
+      return;
+    }
+    target.innerHTML = html;
+  },
 
   _defaultPeriod() {
     const today = new Date();
@@ -548,7 +593,7 @@ const OperationsDashboard = {
     const filters = [`business_date=gte.${start}`, `business_date=lte.${end}`];
     if (this._detailLayer !== 'all') filters.push(`business_layer_code=eq.${encodeURIComponent(this._detailLayer)}`);
     if (this._detailStatus !== 'all') filters.push(`mapping_status=eq.${encodeURIComponent(this._detailStatus)}`);
-    filters.push('order=business_date.desc', 'limit=500');
+    filters.push('order=business_date.desc', 'limit=500', 'count=none');
     return `/rest/v1/${definition.table}?${filters.join('&')}`;
   },
 
@@ -593,28 +638,32 @@ const OperationsDashboard = {
     if (!indicator) return;
     indicator.className = `operations-state-pill ${state}`;
     indicator.textContent = label;
+    this._setBusy('operations-detail', state === 'loading');
   },
 
   async _loadDetail() {
     const target = document.getElementById('operations-detail-content');
     if (!target) return false;
     const loadId = ++this._detailLoadId;
+    const signal = this._beginSectionLoad('detail');
+    const scope = `${this._period.year}-${this._period.month}:${this._detailType}:${this._detailLayer}:${this._detailStatus}`;
     this._setDetailState('加载中', 'loading');
-    target.innerHTML = this._loadingHtml('经营明细');
+    this._prepareSection(target, '经营明细', scope);
     try {
-      const rows = await Store._request('GET', this._detailRequestPath());
+      const rows = await this._sectionRequest(signal, this._detailRequestPath());
       if (loadId !== this._detailLoadId) return false;
       this._detailRows = Array.isArray(rows) ? rows : [];
       this._expandedFactId = '';
       const model = this._buildDetailModel(this._detailType, this._detailRows, this._detailKeyword);
-      target.innerHTML = this._detailFiltersHtml(model);
+      this._completeSection(target, this._detailFiltersHtml(model), scope);
       this._setDetailState(model.rows.length ? '数据已就绪' : '空期间', model.rows.length ? 'ready' : 'empty');
       return true;
     } catch (error) {
       if (loadId !== this._detailLoadId) return false;
       this._detailRows = [];
       this._setDetailState('加载失败', 'error');
-      target.innerHTML = '<div class="operations-error-state"><strong>经营明细加载失败</strong><span>无法读取当前筛选下的只读事实；总览、趋势、治理和模型区不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard._loadDetail()">重新加载明细</button></div>';
+      this._failSection(target, '<strong>经营明细加载失败</strong>：无法读取当前筛选下的只读事实；其他分区不受影响。', scope);
+      if (target.dataset.loadedScope !== scope) target.innerHTML = '<div class="operations-error-state"><strong>经营明细加载失败</strong><span>无法读取当前筛选下的只读事实；总览、趋势、治理和模型区不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard._loadDetail()">重新加载明细</button></div>';
       return false;
     }
   },
@@ -773,26 +822,36 @@ const OperationsDashboard = {
     if (!indicator) return;
     indicator.className = `operations-state-pill ${state}`;
     indicator.textContent = label;
+    this._setBusy('operations-model', state === 'loading');
   },
 
-  async _loadBusinessModel() {
+  async _loadBusinessModel(force = false) {
     const target = document.getElementById('operations-model-content');
     if (!target) return false;
     const loadId = ++this._modelLoadId;
+    const scope = 'global';
+    if (!force && this._dimensionCache) {
+      this._completeSection(target, this._businessModelHtml(this._dimensionCache), scope);
+      this._setModelState(this._dimensionCache.hasRows ? '数据已就绪 · 缓存' : '字典为空 · 缓存', this._dimensionCache.hasRows ? 'ready' : 'empty');
+      return true;
+    }
+    const signal = this._beginSectionLoad('model');
     this._setModelState('加载中', 'loading');
-    target.innerHTML = this._loadingHtml('业务模型');
+    this._prepareSection(target, '业务模型', scope);
     try {
-      const rows = await Store._request('GET', '/rest/v1/business_dimensions?order=sort_order.asc&limit=500');
+      const rows = await this._sectionRequest(signal, '/rest/v1/business_dimensions?order=sort_order.asc&limit=500&count=none');
       if (loadId !== this._modelLoadId) return false;
       const model = this._buildBusinessModel(rows || []);
-      target.innerHTML = this._businessModelHtml(model);
+      this._dimensionCache = model;
+      this._completeSection(target, this._businessModelHtml(model), scope);
       this._setModelState(model.hasRows ? '数据已就绪' : '字典为空', model.hasRows ? 'ready' : 'empty');
       return true;
     } catch (error) {
       if (loadId !== this._modelLoadId) return false;
       this._setModelState('加载失败', 'error');
       const model = this._buildBusinessModel([]);
-      target.innerHTML = `<div class="operations-error-state"><strong>业务维度字典加载失败</strong><span>无法读取冻结字典；经营总览、趋势和治理工作台不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>${this._businessModelHtml(model)}`;
+      this._failSection(target, '<strong>业务维度字典加载失败</strong>：已保留上次成功字典；其他经营分区不受影响。', scope);
+      if (target.dataset.loadedScope !== scope) target.innerHTML = `<div class="operations-error-state"><strong>业务维度字典加载失败</strong><span>无法读取冻结字典；经营总览、趋势和治理工作台不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>${this._businessModelHtml(model)}`;
       return false;
     }
   },
@@ -802,6 +861,7 @@ const OperationsDashboard = {
     if (!indicator) return;
     indicator.className = `operations-state-pill ${state}`;
     indicator.textContent = label;
+    this._setBusy('operations-governance', state === 'loading');
   },
 
   _periodDateRange() {
@@ -812,23 +872,26 @@ const OperationsDashboard = {
     return { period, start: `${period}-01`, end: `${period}-${String(lastDay).padStart(2, '0')}` };
   },
 
-  async _loadGovernance() {
+  async _loadGovernance(force = false) {
     const target = document.getElementById('operations-governance-content');
     if (!target) return false;
     const loadId = ++this._governanceLoadId;
+    const signal = this._beginSectionLoad('governance');
     this._setGovernanceState('加载中', 'loading');
-    target.innerHTML = this._loadingHtml('数据治理工作台');
     const { period, start, end } = this._periodDateRange();
+    const scope = period;
+    this._prepareSection(target, '数据治理工作台', scope);
+    const cachedGlobal = !force ? this._governanceGlobalCache : null;
     const requests = {
-      baseline: { limit: 200, call: () => Store._request('GET', `/rest/v1/data_governance_baseline_v2?period_month=eq.${period}&order=priority.asc&limit=200`) },
-      aliases: { limit: 500, call: () => Store._request('GET', '/rest/v1/product_alias_candidates_v2?order=affected_amount.desc&limit=500') },
-      products: { limit: 500, call: () => Store._request('GET', '/rest/v1/product_master_governance_v2?order=review_priority.asc&limit=500') },
-      revenue: { limit: 500, call: () => Store._request('GET', `/rest/v1/revenue_attribution_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
-      cost: { limit: 500, call: () => Store._request('GET', `/rest/v1/cost_attribution_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
-      gallery: { limit: 500, call: () => Store._request('GET', `/rest/v1/gallery_link_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
-      workshop: { limit: 500, call: () => Store._request('GET', `/rest/v1/workshop_link_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
-      space: { limit: 500, call: () => Store._request('GET', `/rest/v1/space_classification_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
-      batches: { limit: 200, call: () => Store._request('GET', `/rest/v1/governance_batch_summary_v2?created_at=gte.${start}&created_at=lte.${end}T23:59:59.999Z&order=created_at.desc&limit=200`) }
+      baseline: { limit: 200, call: () => this._sectionRequest(signal, `/rest/v1/data_governance_baseline_v2?period_month=eq.${period}&order=priority.asc&limit=200&count=none`) },
+      aliases: { limit: 500, call: () => cachedGlobal ? Promise.resolve(cachedGlobal.aliases) : this._sectionRequest(signal, '/rest/v1/product_alias_candidates_v2?order=affected_amount.desc&limit=500&count=none') },
+      products: { limit: 500, call: () => cachedGlobal ? Promise.resolve(cachedGlobal.products) : this._sectionRequest(signal, '/rest/v1/product_master_governance_v2?order=review_priority.asc&limit=500&count=none') },
+      revenue: { limit: 500, call: () => this._sectionRequest(signal, `/rest/v1/revenue_attribution_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500&count=none`) },
+      cost: { limit: 500, call: () => this._sectionRequest(signal, `/rest/v1/cost_attribution_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500&count=none`) },
+      gallery: { limit: 500, call: () => this._sectionRequest(signal, `/rest/v1/gallery_link_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500&count=none`) },
+      workshop: { limit: 500, call: () => this._sectionRequest(signal, `/rest/v1/workshop_link_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500&count=none`) },
+      space: { limit: 500, call: () => this._sectionRequest(signal, `/rest/v1/space_classification_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500&count=none`) },
+      batches: { limit: 200, call: () => this._sectionRequest(signal, `/rest/v1/governance_batch_summary_v2?created_at=gte.${start}&created_at=lte.${end}T23:59:59.999Z&order=created_at.desc&limit=200&count=none`) }
     };
     const entries = Object.entries(requests);
     const settled = await Promise.allSettled(entries.map(([, request]) => request.call()));
@@ -839,13 +902,15 @@ const OperationsDashboard = {
       const rows = result.status === 'fulfilled' && Array.isArray(result.value) ? result.value : [];
       sources[key] = { rows, failed: result.status === 'rejected', truncated: rows.length >= request.limit };
     });
+    if (!sources.aliases.failed && !sources.products.failed) this._governanceGlobalCache = { aliases: sources.aliases.rows, products: sources.products.rows };
     if (settled.every(result => result.status === 'rejected')) {
       this._setGovernanceState('加载失败', 'error');
-      target.innerHTML = '<div class="operations-error-state"><strong>数据治理工作台加载失败</strong><span>所有治理数据源均暂不可用；经营总览和趋势不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
+      this._failSection(target, '<strong>数据治理工作台加载失败</strong>：已保留同期间上次成功数据。', scope);
+      if (target.dataset.loadedScope !== scope) target.innerHTML = '<div class="operations-error-state"><strong>数据治理工作台加载失败</strong><span>所有治理数据源均暂不可用；经营总览和趋势不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
       return false;
     }
     const model = this._buildGovernanceModel(period, sources.baseline.rows, sources);
-    target.innerHTML = this._governanceHtml(model);
+    this._completeSection(target, this._governanceHtml(model), scope);
     const partial = model.failedSources.length > 0;
     this._setGovernanceState(partial ? '部分数据失败' : model.hasPeriodData ? '数据已就绪' : '空期间', partial ? 'error' : model.hasPeriodData ? 'ready' : 'empty');
     return !partial;
@@ -918,46 +983,66 @@ const OperationsDashboard = {
     if (!indicator) return;
     indicator.className = `operations-state-pill ${state}`;
     indicator.textContent = label;
+    this._setBusy('operations-trend', state === 'loading');
   },
 
-  async _loadTrend() {
+  async _loadTrend(force = false) {
     const target = document.getElementById('operations-trend-content');
     if (!target) return false;
     const loadId = ++this._trendLoadId;
-    this._destroyTrendCharts();
-    this._setTrendState('加载中', 'loading');
-    target.innerHTML = this._loadingHtml('月度趋势');
     const year = this._period.year;
+    const scope = year;
+    if (!force && this._trendCache?.year === year) {
+      const cachedModel = this._buildTrendModel(year, this._trendCache.summaryRows, this._trendCache.legacyRows);
+      this._completeSection(target, this._trendHtml(cachedModel), scope);
+      this._renderTrendCharts(cachedModel);
+      this._setTrendState(cachedModel.hasData ? '数据已就绪 · 缓存' : '空年度 · 缓存', cachedModel.hasData ? 'ready' : 'empty');
+      return true;
+    }
+    const signal = this._beginSectionLoad('trend');
+    this._setTrendState('加载中', 'loading');
+    this._prepareSection(target, '月度趋势', scope);
     try {
       const [summaryRows, legacyRows] = await Promise.all([
-        Store._request('GET', `/rest/v1/business_layer_summary_v2?period_month=gte.${year}-01&period_month=lte.${year}-12&order=period_month.asc&limit=48`),
-        Store._request('GET', `/rest/v1/revenue_facts?date=gte.${year}-01-01&date=lte.${year}-12-31&order=date.asc&limit=5000`)
+        this._sectionRequest(signal, `/rest/v1/business_layer_summary_v2?period_month=gte.${year}-01&period_month=lte.${year}-12&order=period_month.asc&limit=48&count=none`),
+        this._sectionRequest(signal, `/rest/v1/revenue_facts?date=gte.${year}-01-01&date=lte.${year}-12-31&order=date.asc&limit=5000&count=none`)
       ]);
       if (loadId !== this._trendLoadId) return false;
+      this._trendCache = { year, summaryRows: summaryRows || [], legacyRows: legacyRows || [] };
       const model = this._buildTrendModel(year, summaryRows || [], legacyRows || []);
-      target.innerHTML = this._trendHtml(model);
+      this._completeSection(target, this._trendHtml(model), scope);
       this._renderTrendCharts(model);
       this._setTrendState(model.hasData ? '数据已就绪' : '空年度', model.hasData ? 'ready' : 'empty');
       return true;
     } catch (error) {
       if (loadId !== this._trendLoadId) return false;
-      this._destroyTrendCharts();
       this._setTrendState('加载失败', 'error');
-      target.innerHTML = '<div class="operations-error-state"><strong>月度趋势加载失败</strong><span>无法读取当前年份的经营汇总或 1.0 对照数据；总览和其他分区不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
+      this._failSection(target, '<strong>月度趋势加载失败</strong>：已保留同年度上次成功数据。', scope);
+      if (target.dataset.loadedScope !== scope) {
+        this._destroyTrendCharts();
+        target.innerHTML = '<div class="operations-error-state"><strong>月度趋势加载失败</strong><span>无法读取当前年份的经营汇总或 1.0 对照数据；总览和其他分区不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
+      }
       return false;
     }
   },
 
-  async _loadAll(message = '正在加载') {
+  async _loadAll(message = '正在加载', force = false) {
     const loadId = ++this._loadAllId;
+    const startedAt = Date.now();
     const refreshButton = document.getElementById('operations-refresh');
     const status = document.getElementById('operations-refresh-status');
+    const shell = document.querySelector('.operations-shell');
     if (refreshButton) refreshButton.disabled = true;
+    if (shell) shell.setAttribute('aria-busy', 'true');
     if (status) status.textContent = `${message} · ${this._periodLabel()}`;
-    const [overviewOk, trendOk, governanceOk, modelOk, detailOk] = await Promise.all([this._loadOverview(), this._loadTrend(), this._loadGovernance(), this._loadBusinessModel(), this._loadDetail()]);
+    const [overviewOk, trendOk, governanceOk, modelOk, detailOk] = await Promise.all([this._loadOverview(), this._loadTrend(force), this._loadGovernance(force), this._loadBusinessModel(force), this._loadDetail()]);
     if (loadId !== this._loadAllId) return;
     const results = [overviewOk, trendOk, governanceOk, modelOk, detailOk];
-    if (status) status.textContent = `${results.every(Boolean) ? '已更新' : results.some(Boolean) ? '部分数据加载失败' : '加载失败'} · ${this._periodLabel()}`;
+    const elapsed = Date.now() - startedAt;
+    if (status) status.textContent = `${results.every(Boolean) ? '已更新' : results.some(Boolean) ? '部分数据加载失败' : '加载失败'} · ${this._periodLabel()} · ${elapsed} ms`;
+    const updated = document.getElementById('operations-last-updated');
+    if (updated) updated.textContent = `最近完成 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+    if (shell) shell.setAttribute('aria-busy', 'false');
     if (refreshButton) refreshButton.disabled = false;
   },
 
@@ -966,6 +1051,8 @@ const OperationsDashboard = {
     if (!indicator) return;
     indicator.className = `operations-state-pill ${state}`;
     indicator.textContent = label;
+    this._setBusy('operations-overview', state === 'loading');
+    this._setBusy('operations-layers', state === 'loading');
   },
 
   async _loadOverview() {
@@ -973,26 +1060,29 @@ const OperationsDashboard = {
     const layers = document.getElementById('operations-layers-content');
     if (!overview || !layers) return;
     const loadId = ++this._overviewLoadId;
+    const signal = this._beginSectionLoad('overview');
     this._setOverviewState('加载中', 'loading');
-    overview.innerHTML = this._loadingHtml('经营总览');
-    layers.innerHTML = this._loadingHtml('四层经营矩阵');
     const period = `${this._period.year}-${this._period.month}`;
+    this._prepareSection(overview, '经营总览', period);
+    this._prepareSection(layers, '四层经营矩阵', period);
     try {
       const [summaryRows, baselineRows] = await Promise.all([
-        Store._request('GET', `/rest/v1/business_layer_summary_v2?period_month=eq.${period}&order=sort_order.asc&limit=4`),
-        Store._request('GET', `/rest/v1/data_governance_baseline_v2?period_month=eq.${period}&order=priority.asc&limit=500`)
+        this._sectionRequest(signal, `/rest/v1/business_layer_summary_v2?period_month=eq.${period}&order=sort_order.asc&limit=4&count=none`),
+        this._sectionRequest(signal, `/rest/v1/data_governance_baseline_v2?period_month=eq.${period}&order=priority.asc&limit=500&count=none`)
       ]);
       if (loadId !== this._overviewLoadId) return;
       const model = this._buildOverviewModel(summaryRows || [], baselineRows || []);
-      overview.innerHTML = this._overviewHtml(model);
-      layers.innerHTML = this._layersHtml(model);
+      this._completeSection(overview, this._overviewHtml(model), period);
+      this._completeSection(layers, this._layersHtml(model), period);
       this._setOverviewState(model.hasBusinessValues ? '数据已就绪' : '空期间', model.hasBusinessValues ? 'ready' : 'empty');
       return true;
     } catch (error) {
       if (loadId !== this._overviewLoadId) return;
       this._setOverviewState('加载失败', 'error');
-      overview.innerHTML = '<div class="operations-error-state"><strong>经营总览加载失败</strong><span>无法读取当前期间的只读经营汇总，请稍后重试。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
-      layers.innerHTML = '<div class="operations-error-state"><strong>四层矩阵暂不可用</strong><span>其他运营管理分区仍可继续查看。</span></div>';
+      this._failSection(overview, '<strong>经营总览加载失败</strong>：已保留同期间上次成功数据。', period);
+      this._failSection(layers, '<strong>四层矩阵刷新失败</strong>：已保留同期间上次成功数据。', period);
+      if (overview.dataset.loadedScope !== period) overview.innerHTML = '<div class="operations-error-state"><strong>经营总览加载失败</strong><span>无法读取当前期间的只读经营汇总，请稍后重试。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
+      if (layers.dataset.loadedScope !== period) layers.innerHTML = '<div class="operations-error-state"><strong>四层矩阵暂不可用</strong><span>其他运营管理分区仍可继续查看。</span></div>';
       return false;
     }
   },
@@ -1040,6 +1130,7 @@ const OperationsDashboard = {
           </div>
           <button id="operations-refresh" type="button" class="btn btn-secondary" onclick="OperationsDashboard.refresh()">刷新数据</button>
           <span id="operations-refresh-status" class="operations-refresh-status" role="status" aria-live="polite">准备加载经营汇总</span>
+          <span id="operations-last-updated" class="operations-last-updated">尚未完成加载</span>
         </section>
 
         <nav class="operations-section-nav" aria-label="运营管理分区">
@@ -1097,12 +1188,13 @@ const OperationsDashboard = {
     if (!target) return;
     document.querySelectorAll('.operations-section-link').forEach(link => link.classList.remove('active'));
     button?.classList.add('active');
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const reduceMotion = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
     target.focus({ preventScroll: true });
   },
 
   async refresh() {
-    await this._loadAll('正在刷新');
+    await this._loadAll('正在刷新', true);
   }
 };
 

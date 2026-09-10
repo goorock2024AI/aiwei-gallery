@@ -1188,7 +1188,7 @@ async function handleREST(req, res, urlInfo) {
 
       // Handle id=eq.{id}
       for (let k of Object.keys(query)) {
-        if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset') continue;
+        if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset' || k === 'count') continue;
         let vals = query[k];
         if (!Array.isArray(vals)) vals = [vals];
         for (let v of vals) {
@@ -1241,11 +1241,13 @@ async function handleREST(req, res, urlInfo) {
         return sendJSON(res, 200, toCamel(result.rows[0]));
       }
 
-      // Count for Content-Range
-      let countSql = `SELECT COUNT(*) FROM "${dbTable}"`;
-      if (conditions.length) countSql += ' WHERE ' + conditions.join(' AND ');
-      const countResult = await pool.query(countSql, params);
-      const total = parseInt(countResult.rows[0].count);
+      let total;
+      if (query.count !== 'none') {
+        let countSql = `SELECT COUNT(*) FROM "${dbTable}"`;
+        if (conditions.length) countSql += ' WHERE ' + conditions.join(' AND ');
+        const countResult = await pool.query(countSql, params);
+        total = parseInt(countResult.rows[0].count);
+      }
 
       sendJSON(res, 200, result.rows.map(r => toCamel(r)), total);
     }
