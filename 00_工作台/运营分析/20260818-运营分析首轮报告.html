@@ -1,0 +1,1380 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>艾维美术馆运营分析首轮报告</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    @font-face {
+      font-family: "Noto Sans SC Local";
+      src: url("../运营数据管理/fonts/NotoSansSC-VF.ttf") format("truetype");
+      font-weight: 100 900;
+      font-display: swap;
+    }
+
+    :root {
+      --paper: #f7f3ea;
+      --paper-2: #fffaf0;
+      --ink: #171512;
+      --muted: #6f675a;
+      --line: #ddd3c3;
+      --line-strong: #c8bba8;
+      --green: #0f766e;
+      --green-soft: #dbece7;
+      --red: #b6422a;
+      --red-soft: #f3ded6;
+      --blue: #244f87;
+      --blue-soft: #dce7f2;
+      --gold: #a97922;
+      --gold-soft: #efe2c0;
+      --shadow: 0 18px 50px rgba(44, 34, 20, 0.11);
+      --radius: 8px;
+      --max: 1240px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(23, 21, 18, 0.045) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(23, 21, 18, 0.035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 40px 40px;
+      color: var(--ink);
+      font-family: "Noto Sans SC Local", "Microsoft YaHei", "PingFang SC", sans-serif;
+      letter-spacing: 0;
+      overflow-x: hidden;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    p,
+    span,
+    strong,
+    h1,
+    h2,
+    h3 {
+      overflow-wrap: anywhere;
+    }
+
+    .page {
+      min-height: 100vh;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid rgba(23, 21, 18, 0.12);
+      background: rgba(247, 243, 234, 0.86);
+      backdrop-filter: blur(18px);
+    }
+
+    .topbar-inner {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .topbar-inner > * {
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .seal {
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--ink);
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1;
+      background: var(--red);
+      color: var(--paper-2);
+    }
+
+    .brand-title {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .brand-title strong {
+      font-size: 15px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .brand-title span {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .nav {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .nav a,
+    .mode-toggle {
+      border: 1px solid rgba(23, 21, 18, 0.16);
+      background: rgba(255, 250, 240, 0.62);
+      color: var(--ink);
+      text-decoration: none;
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+    }
+
+    .nav a:hover,
+    .mode-toggle:hover {
+      transform: translateY(-1px);
+      background: var(--paper-2);
+      border-color: rgba(23, 21, 18, 0.34);
+    }
+
+    .hero {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 76px 24px 42px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+      gap: 40px;
+      align-items: end;
+    }
+
+    .hero > *,
+    .matrix > *,
+    .split > *,
+    .metric-grid > *,
+    .insight-grid > *,
+    .risk-board > * {
+      min-width: 0;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      width: fit-content;
+      color: var(--red);
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 42px;
+      height: 1px;
+      background: var(--red);
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 780px;
+      font-size: 80px;
+      line-height: 1.02;
+      letter-spacing: 0;
+      text-wrap: pretty;
+    }
+
+    .hero-copy {
+      margin: 26px 0 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.75;
+      text-wrap: pretty;
+    }
+
+    .hero-panel {
+      border: 1px solid var(--line-strong);
+      background: rgba(255, 250, 240, 0.72);
+      box-shadow: var(--shadow);
+      border-radius: var(--radius);
+      padding: 22px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero-panel .panel-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 14px;
+    }
+
+    .north-star {
+      display: grid;
+      gap: 8px;
+    }
+
+    .north-star .label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .north-star .number {
+      font-size: 68px;
+      font-weight: 900;
+      line-height: 0.95;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .north-star .note {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .mini {
+      border: 1px solid var(--line);
+      background: rgba(247, 243, 234, 0.72);
+      padding: 12px;
+      min-height: 86px;
+      display: grid;
+      align-content: space-between;
+      border-radius: 6px;
+    }
+
+    .mini strong {
+      font-size: 24px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+
+    .mini span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    main {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 0 24px 72px;
+    }
+
+    .section {
+      margin-top: 28px;
+      padding-top: 24px;
+      border-top: 1px solid rgba(23, 21, 18, 0.18);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+
+    .section-kicker {
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 44px;
+      line-height: 1.06;
+      letter-spacing: 0;
+      text-wrap: pretty;
+    }
+
+    .section-note {
+      max-width: 440px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+      text-align: right;
+      text-wrap: pretty;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.72);
+      border-radius: var(--radius);
+      padding: 16px;
+      min-height: 132px;
+      display: grid;
+      align-content: space-between;
+      gap: 18px;
+    }
+
+    .metric .name {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .metric .value {
+      font-size: 38px;
+      line-height: 1;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric .caption {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(340px, 0.82fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.76);
+      border-radius: var(--radius);
+      padding: 18px;
+      min-width: 0;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 16px;
+    }
+
+    .panel-header h3 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .panel-header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .chart-wrap {
+      position: relative;
+      min-height: 340px;
+    }
+
+    .chart-wrap.compact {
+      min-height: 290px;
+    }
+
+    canvas {
+      max-width: 100%;
+    }
+
+    .bar-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr) 92px;
+      gap: 12px;
+      align-items: center;
+      font-size: 13px;
+    }
+
+    .bar-name {
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .track {
+      height: 10px;
+      border: 1px solid rgba(23, 21, 18, 0.13);
+      background: rgba(23, 21, 18, 0.05);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .fill {
+      width: var(--w);
+      height: 100%;
+      border-radius: inherit;
+      background: var(--c);
+      transform-origin: left center;
+      animation: grow 900ms cubic-bezier(.2, .8, .2, 1) both;
+    }
+
+    .bar-value {
+      color: var(--muted);
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    @keyframes grow {
+      from { transform: scaleX(0); }
+      to { transform: scaleX(1); }
+    }
+
+    .insight-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .insight {
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.72);
+      border-radius: var(--radius);
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      min-height: 210px;
+    }
+
+    .insight .tag {
+      width: fit-content;
+      padding: 7px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 900;
+      border: 1px solid var(--line-strong);
+      color: var(--muted);
+    }
+
+    .insight h3 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      text-wrap: pretty;
+    }
+
+    .insight p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.75;
+      text-wrap: pretty;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .status-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .status-item:last-child {
+      border-bottom: 0;
+    }
+
+    .status-item strong {
+      font-size: 14px;
+    }
+
+    .status-item span {
+      color: var(--muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .inventory-band {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .inventory-box {
+      border: 1px solid var(--line);
+      background: rgba(247, 243, 234, 0.72);
+      border-radius: 6px;
+      padding: 14px;
+    }
+
+    .inventory-box span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .inventory-box strong {
+      font-size: 28px;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+
+    .risk-board {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .risk {
+      border-radius: var(--radius);
+      padding: 18px;
+      min-height: 180px;
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.76);
+      display: grid;
+      align-content: space-between;
+      gap: 18px;
+    }
+
+    .risk.high {
+      background: linear-gradient(135deg, var(--red-soft), rgba(255, 250, 240, 0.82));
+      border-color: rgba(182, 66, 42, 0.32);
+    }
+
+    .risk.medium {
+      background: linear-gradient(135deg, var(--gold-soft), rgba(255, 250, 240, 0.82));
+      border-color: rgba(169, 121, 34, 0.32);
+    }
+
+    .risk.good {
+      background: linear-gradient(135deg, var(--green-soft), rgba(255, 250, 240, 0.82));
+      border-color: rgba(15, 118, 110, 0.28);
+    }
+
+    .risk h3 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .risk p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .action-list {
+      counter-reset: action;
+      display: grid;
+      gap: 12px;
+    }
+
+    .action {
+      counter-increment: action;
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 240, 0.76);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .action::before {
+      content: counter(action, decimal-leading-zero);
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--ink);
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      font-size: 13px;
+      background: var(--ink);
+      color: var(--paper-2);
+    }
+
+    .action strong {
+      display: block;
+      font-size: 17px;
+      margin-bottom: 4px;
+    }
+
+    .action span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .action .owner {
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+      border: 1px solid rgba(182, 66, 42, 0.24);
+      background: rgba(243, 222, 214, 0.62);
+      padding: 7px 9px;
+      border-radius: 999px;
+    }
+
+    .closing {
+      margin-top: 34px;
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      color: var(--paper-2);
+      border-radius: var(--radius);
+      padding: 40px;
+      display: grid;
+      grid-template-columns: 1fr 0.42fr;
+      gap: 28px;
+      align-items: end;
+    }
+
+    .closing h2 {
+      color: var(--paper-2);
+      max-width: 760px;
+    }
+
+    .closing p {
+      margin: 18px 0 0;
+      color: rgba(255, 250, 240, 0.76);
+      font-size: 16px;
+      line-height: 1.75;
+      max-width: 760px;
+      text-wrap: pretty;
+    }
+
+    .closing-meta {
+      border-left: 1px solid rgba(255, 250, 240, 0.24);
+      padding-left: 22px;
+      display: grid;
+      gap: 12px;
+      color: rgba(255, 250, 240, 0.76);
+      font-size: 13px;
+    }
+
+    .closing-meta strong {
+      display: block;
+      color: var(--paper-2);
+      font-size: 24px;
+      margin-bottom: 3px;
+    }
+
+    body.dark {
+      --paper: #181713;
+      --paper-2: #232017;
+      --ink: #f7f3ea;
+      --muted: #bdb29f;
+      --line: #3e382c;
+      --line-strong: #615746;
+      --green-soft: rgba(15, 118, 110, 0.22);
+      --red-soft: rgba(182, 66, 42, 0.22);
+      --blue-soft: rgba(36, 79, 135, 0.22);
+      --gold-soft: rgba(169, 121, 34, 0.22);
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    }
+
+    body.dense .hero {
+      padding-top: 42px;
+    }
+
+    body.dense .metric,
+    body.dense .panel,
+    body.dense .insight,
+    body.dense .risk {
+      padding: 14px;
+    }
+
+    body.dense .section {
+      margin-top: 18px;
+      padding-top: 18px;
+    }
+
+    @media (max-width: 980px) {
+      h1 {
+        font-size: 64px;
+      }
+
+      h2 {
+        font-size: 36px;
+      }
+
+      .north-star .number {
+        font-size: 58px;
+      }
+
+      .hero,
+      .matrix,
+      .split,
+      .closing {
+        grid-template-columns: 1fr;
+      }
+
+      .metric-grid,
+      .insight-grid,
+      .risk-board {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .section-head {
+        display: grid;
+      }
+
+      .section-note {
+        text-align: left;
+        max-width: 680px;
+      }
+
+      .closing-meta {
+        border-left: 0;
+        border-top: 1px solid rgba(255, 250, 240, 0.24);
+        padding: 18px 0 0;
+      }
+    }
+
+    @media (max-width: 720px) {
+      h1 {
+        font-size: 39px;
+        line-height: 1.08;
+      }
+
+      h2 {
+        font-size: 30px;
+        line-height: 1.12;
+      }
+
+      .hero-copy {
+        font-size: 16px;
+      }
+
+      .north-star .number {
+        font-size: 40px;
+      }
+
+      .metric .value {
+        font-size: 34px;
+      }
+
+      .closing {
+        padding: 24px;
+      }
+
+      .topbar {
+        position: static;
+      }
+
+      .topbar-inner {
+        align-items: start;
+        display: grid;
+      }
+
+      .nav {
+        justify-content: start;
+        flex-wrap: nowrap;
+        max-width: 100%;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+      }
+
+      .nav::-webkit-scrollbar {
+        display: none;
+      }
+
+      .nav a,
+      .mode-toggle {
+        flex: 0 0 auto;
+      }
+
+      .hero {
+        padding: 42px 18px 28px;
+        width: 100%;
+        max-width: 100%;
+        overflow: hidden;
+      }
+
+      .hero > div,
+      .hero-panel,
+      .hero-copy,
+      .north-star,
+      .north-star .note {
+        width: 100%;
+        max-width: 100%;
+      }
+
+      .north-star .note {
+        display: block;
+      }
+
+      .hero-panel .panel-title {
+        display: grid;
+        gap: 6px;
+      }
+
+      main {
+        padding: 0 18px 52px;
+      }
+
+      .metric-grid,
+      .insight-grid,
+      .risk-board,
+      .mini-grid,
+      .inventory-band {
+        grid-template-columns: 1fr;
+      }
+
+      .bar-row {
+        grid-template-columns: 76px minmax(0, 1fr);
+      }
+
+      .bar-value {
+        grid-column: 2;
+        text-align: left;
+      }
+
+      .action {
+        grid-template-columns: 44px minmax(0, 1fr);
+      }
+
+      .action .owner {
+        grid-column: 2;
+        width: fit-content;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      .topbar,
+      .mode-toggle {
+        display: none;
+      }
+
+      .hero,
+      main {
+        max-width: none;
+      }
+
+      .panel,
+      .metric,
+      .insight,
+      .risk,
+      .action,
+      .hero-panel {
+        break-inside: avoid;
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand-mark">
+          <div class="seal" aria-hidden="true">艾维</div>
+          <div class="brand-title">
+            <strong>艾维美术馆运营分析</strong>
+            <span>2026-01-01 至 2026-08-16</span>
+          </div>
+        </div>
+        <nav class="nav" aria-label="页面导航">
+          <a href="#overview">概览</a>
+          <a href="#revenue">收入结构</a>
+          <a href="#operations">经营单元</a>
+          <a href="#risks">风险</a>
+          <a href="#actions">行动</a>
+          <button class="mode-toggle" type="button" data-mode="dark">深色</button>
+          <button class="mode-toggle" type="button" data-mode="dense">紧凑</button>
+        </nav>
+      </div>
+    </header>
+
+    <section class="hero" id="overview">
+      <div>
+        <div class="eyebrow">首轮经营基线</div>
+        <h1>数据已经够用，<br>下一步要让<br>经营制度跟上。</h1>
+        <p class="hero-copy">
+          运营系统已经累积出可分析的真实记录。当前最清楚的信号是：门票仍是基本盘，文创已经成为第二收入来源，空间经营尚未产品化，日结与库存制度需要尽快补齐。
+        </p>
+      </div>
+      <aside class="hero-panel" aria-label="核心收入指标">
+        <div class="panel-title">
+          <span>报告日期 2026-08-18</span>
+          <span>只读数据分析</span>
+        </div>
+        <div class="north-star">
+          <span class="label">累计经营收入</span>
+          <strong class="number">173,257.40</strong>
+          <span class="note">统一收入事实口径，覆盖 POS、空间、画廊等主要经营来源。</span>
+        </div>
+        <div class="mini-grid">
+          <div class="mini">
+            <strong>932</strong>
+            <span>收入事实记录</span>
+          </div>
+          <div class="mini">
+            <strong>172</strong>
+            <span>有收入日期</span>
+          </div>
+          <div class="mini">
+            <strong>1,007</strong>
+            <span>有收入日均收入</span>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <main>
+      <section class="section">
+        <div class="metric-grid">
+          <div class="metric">
+            <span class="name">POS 收入占比</span>
+            <strong class="value">90.3%</strong>
+            <span class="caption">当前经营高度依赖现场收银。</span>
+          </div>
+          <div class="metric">
+            <span class="name">门票收入占比</span>
+            <strong class="value">48.1%</strong>
+            <span class="caption">流量基本盘仍然成立。</span>
+          </div>
+          <div class="metric">
+            <span class="name">文创收入占比</span>
+            <strong class="value">17.6%</strong>
+            <span class="caption">第二收入来源，值得专项经营。</span>
+          </div>
+          <div class="metric">
+            <span class="name">已复核日结</span>
+            <strong class="value">0</strong>
+            <span class="caption">制度还没有跟上系统能力。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="revenue">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Revenue Structure</div>
+            <h2>收入结构：票务托底，文创开始冒头。</h2>
+          </div>
+          <p class="section-note">
+            门票贡献接近一半；文创、工坊、咖啡和套票共同构成提升客单价的主要空间。
+          </p>
+        </div>
+        <div class="matrix">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>月度收入趋势</h3>
+                <p>7 月记录数大幅增加，需要把系统使用密度与真实经营增长分开判断。</p>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="monthlyChart" aria-label="月度收入趋势图"></canvas>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>品类收入占比</h3>
+                <p>门票之外，文创已经具备独立经营价值。</p>
+              </div>
+            </div>
+            <div class="bar-list" aria-label="收入分类条形图">
+              <div class="bar-row"><span class="bar-name">门票</span><span class="track"><span class="fill" style="--w:48.1%;--c:var(--green)"></span></span><span class="bar-value">83,334 / 48.1%</span></div>
+              <div class="bar-row"><span class="bar-name">文创</span><span class="track"><span class="fill" style="--w:17.6%;--c:var(--red)"></span></span><span class="bar-value">30,486 / 17.6%</span></div>
+              <div class="bar-row"><span class="bar-name">工坊</span><span class="track"><span class="fill" style="--w:8%;--c:var(--blue)"></span></span><span class="bar-value">13,823 / 8.0%</span></div>
+              <div class="bar-row"><span class="bar-name">其他</span><span class="track"><span class="fill" style="--w:7.4%;--c:var(--gold)"></span></span><span class="bar-value">12,815 / 7.4%</span></div>
+              <div class="bar-row"><span class="bar-name">场地</span><span class="track"><span class="fill" style="--w:7.3%;--c:#557f65"></span></span><span class="bar-value">12,630 / 7.3%</span></div>
+              <div class="bar-row"><span class="bar-name">咖啡</span><span class="track"><span class="fill" style="--w:3.8%;--c:#7c5f38"></span></span><span class="bar-value">6,640 / 3.8%</span></div>
+              <div class="bar-row"><span class="bar-name">套票</span><span class="track"><span class="fill" style="--w:3%;--c:#6a6f93"></span></span><span class="bar-value">5,200 / 3.0%</span></div>
+              <div class="bar-row"><span class="bar-name">画廊</span><span class="track"><span class="fill" style="--w:2.4%;--c:#7f4d5b"></span></span><span class="bar-value">4,180 / 2.4%</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Management Reading</div>
+            <h2>三个经营读数，决定下一阶段优先级。</h2>
+          </div>
+        </div>
+        <div class="insight-grid">
+          <article class="insight">
+            <span class="tag">基本盘</span>
+            <h3>门票不能丢，但不能只靠门票。</h3>
+            <p>门票约 8.33 万，占 48.1%。这证明景区自然流量和基础参观仍有效，但如果没有文创、工坊、咖啡和空间转化，收入天花板会很快出现。</p>
+          </article>
+          <article class="insight">
+            <span class="tag">增长点</span>
+            <h3>文创已经有销售，不再只是陈列。</h3>
+            <p>文创约 3.05 万，占 17.6%。下一步应从“有卖出去”升级到“知道卖什么、赚多少、该补什么货”。</p>
+          </article>
+          <article class="insight">
+            <span class="tag">制度债</span>
+            <h3>日结使用不足会压低数据可信度。</h3>
+            <p>目前只有 4 天日结，且全部为草稿。系统能力已经有了，现场动作需要形成闭馆固定流程。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="operations">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Operating Units</div>
+            <h2>空间、库存、支出：三个单元需要进入闭环。</h2>
+          </div>
+          <p class="section-note">
+            这部分不是单纯看金额，而是看经营动作是否能被追踪、复盘和持续改进。
+          </p>
+        </div>
+        <div class="split">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>空间经营</h3>
+                <p>33 条空间项目记录，已完成 28 条；应收和已收存在 160 元口径差异。</p>
+              </div>
+            </div>
+            <div class="chart-wrap compact">
+              <canvas id="spaceChart" aria-label="空间项目状态图"></canvas>
+            </div>
+            <div class="status-list">
+              <div class="status-item"><strong>应收金额</strong><span>12,470.00 元</span></div>
+              <div class="status-item"><strong>已收金额</strong><span>12,630.00 元</span></div>
+              <div class="status-item"><strong>待复核差额</strong><span>-160.00 元</span></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h3>文创库存</h3>
+                <p>库存价值已经能支持基础毛利分析，但 SKU 状态需要盘点校准。</p>
+              </div>
+            </div>
+            <div class="inventory-band">
+              <div class="inventory-box">
+                <span>SKU 数</span>
+                <strong>118</strong>
+              </div>
+              <div class="inventory-box">
+                <span>库存件数</span>
+                <strong>153</strong>
+              </div>
+              <div class="inventory-box">
+                <span>库存成本</span>
+                <strong>6,736.94</strong>
+              </div>
+              <div class="inventory-box">
+                <span>库存零售价</span>
+                <strong>12,068.40</strong>
+              </div>
+            </div>
+            <div class="status-list" style="margin-top:14px">
+              <div class="status-item"><strong>零库存 SKU</strong><span>72 个</span></div>
+              <div class="status-item"><strong>缺成本价 SKU</strong><span>2 个</span></div>
+              <div class="status-item"><strong>缺零售价 SKU</strong><span>0 个</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="risks">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Risks and Gaps</div>
+            <h2>目前最该处理的不是更多功能，而是口径和制度。</h2>
+          </div>
+        </div>
+        <div class="risk-board">
+          <article class="risk high">
+            <div>
+              <h3>日结覆盖率不足</h3>
+              <p>仅 4 条日结记录，且没有已复核记录。现金、扫码、退款和差异原因无法稳定闭环。</p>
+            </div>
+            <strong>优先级 P1</strong>
+          </article>
+          <article class="risk medium">
+            <div>
+              <h3>收入口径混杂</h3>
+              <p>“其他”和“场地旧口径”金额不小，会影响管理层判断品类贡献与项目表现。</p>
+            </div>
+            <strong>优先级 P1</strong>
+          </article>
+          <article class="risk medium">
+            <div>
+              <h3>文创库存待盘点</h3>
+              <p>72 个 SKU 为零库存，需要区分真实售罄、未入库、停售和历史数据待补。</p>
+            </div>
+            <strong>优先级 P1</strong>
+          </article>
+          <article class="risk good">
+            <div>
+              <h3>数据基础已经形成</h3>
+              <p>收入事实、POS、空间、文创、支出和现金模块都有数据，可开始周报与月报。</p>
+            </div>
+            <strong>机会</strong>
+          </article>
+          <article class="risk high">
+            <div>
+              <h3>空间尚未产品化</h3>
+              <p>空间项目有记录，但还没有形成线索、报价、合同、收款、复盘的经营漏斗。</p>
+            </div>
+            <strong>优先级 P1</strong>
+          </article>
+          <article class="risk medium">
+            <div>
+              <h3>支出样本仍偏少</h3>
+              <p>支出记录 17 条，暂时不能支撑完整利润分析，需要持续录入和票据留存。</p>
+            </div>
+            <strong>观察</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="actions">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Next Actions</div>
+            <h2>建议从五个动作开始，把数据变成管理节奏。</h2>
+          </div>
+        </div>
+        <div class="action-list">
+          <div class="action">
+            <div>
+              <strong>建立每周经营周报</strong>
+              <span>每周一输出上一周收入、支出、空间、文创、异常日期和下周建议。</span>
+            </div>
+            <span class="owner">运营分析师</span>
+          </div>
+          <div class="action">
+            <div>
+              <strong>固定每日闭馆日结</strong>
+              <span>至少确认系统净收入、实收金额、现金余额、扫码/转账和差异原因。</span>
+            </div>
+            <span class="owner">现场运营</span>
+          </div>
+          <div class="action">
+            <div>
+              <strong>文创库存盘点</strong>
+              <span>优先处理 72 个零库存 SKU 和 2 个缺成本价 SKU，补足毛利分析基础。</span>
+            </div>
+            <span class="owner">文创负责人</span>
+          </div>
+          <div class="action">
+            <div>
+              <strong>搭建空间经营漏斗</strong>
+              <span>把 33 条空间记录拆成活动类型、客户类型、空间、单价和收款状态。</span>
+            </div>
+            <span class="owner">商务合作</span>
+          </div>
+          <div class="action">
+            <div>
+              <strong>清理收入分析口径</strong>
+              <span>明确“其他”和“场地旧口径”是否纳入经营收入，避免后续月报失真。</span>
+            </div>
+            <span class="owner">总协调</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing">
+        <div>
+          <h2>首轮判断：艾维已经越过“没有数据”的阶段。</h2>
+          <p>
+            下一阶段的重点，是把门票流量转化为文创、咖啡、工坊和会员，把空间资源转化为可报价、可招商、可复盘的商业产品，并让每日收入通过日结、现金、支出和库存形成可信经营账。
+          </p>
+        </div>
+        <div class="closing-meta">
+          <span><strong>17.33 万</strong>累计收入</span>
+          <span><strong>90.3%</strong>POS 来源占比</span>
+          <span><strong>17.6%</strong>文创收入占比</span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const palette = {
+      green: "#0f766e",
+      red: "#b6422a",
+      blue: "#244f87",
+      gold: "#a97922",
+      muted: "#8c826f",
+      line: "rgba(23, 21, 18, 0.14)"
+    };
+
+    const money = new Intl.NumberFormat("zh-CN", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    });
+
+    function makeCharts() {
+      if (!window.Chart) return;
+
+      Chart.defaults.font.family = '"Noto Sans SC Local", "Microsoft YaHei", sans-serif';
+      Chart.defaults.color = getComputedStyle(document.body).getPropertyValue("--muted").trim();
+      Chart.defaults.plugins.legend.labels.boxWidth = 10;
+      Chart.defaults.plugins.legend.labels.boxHeight = 10;
+
+      new Chart(document.getElementById("monthlyChart"), {
+        type: "bar",
+        data: {
+          labels: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月"],
+          datasets: [
+            {
+              label: "收入",
+              data: [22701.6, 36926.3, 15087.1, 17200.4, 8034.8, 14359, 37491.5, 21456.7],
+              backgroundColor: [palette.blue, palette.green, palette.gold, palette.gold, palette.red, palette.blue, palette.green, palette.red],
+              borderRadius: 4,
+              barThickness: 32
+            },
+            {
+              type: "line",
+              label: "记录数",
+              data: [38, 55, 30, 56, 38, 59, 401, 255],
+              yAxisID: "records",
+              borderColor: palette.red,
+              backgroundColor: palette.red,
+              tension: 0.32,
+              pointRadius: 3,
+              borderWidth: 2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label(context) {
+                  if (context.dataset.yAxisID === "records") return "记录数 " + context.parsed.y + " 行";
+                  return "收入 " + money.format(context.parsed.y) + " 元";
+                }
+              }
+            }
+          },
+          scales: {
+            x: { grid: { display: false } },
+            y: {
+              beginAtZero: true,
+              grid: { color: palette.line },
+              ticks: { callback: value => money.format(value) }
+            },
+            records: {
+              position: "right",
+              beginAtZero: true,
+              grid: { display: false },
+              ticks: { callback: value => value + " 行" }
+            }
+          }
+        }
+      });
+
+      new Chart(document.getElementById("spaceChart"), {
+        type: "doughnut",
+        data: {
+          labels: ["已完成", "进行中", "筹备中"],
+          datasets: [{
+            data: [28, 3, 2],
+            backgroundColor: [palette.green, palette.gold, palette.blue],
+            borderColor: getComputedStyle(document.body).getPropertyValue("--paper-2").trim(),
+            borderWidth: 3,
+            hoverOffset: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: "66%",
+          plugins: {
+            legend: { position: "bottom" },
+            tooltip: {
+              callbacks: {
+                label(context) {
+                  return context.label + " " + context.parsed + " 条";
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    document.querySelectorAll(".mode-toggle").forEach(button => {
+      button.addEventListener("click", () => {
+        const mode = button.dataset.mode;
+        if (mode === "dark") {
+          document.body.classList.toggle("dark");
+          button.textContent = document.body.classList.contains("dark") ? "浅色" : "深色";
+        }
+        if (mode === "dense") {
+          document.body.classList.toggle("dense");
+          button.textContent = document.body.classList.contains("dense") ? "舒展" : "紧凑";
+        }
+      });
+    });
+
+    makeCharts();
+  </script>
+</body>
+</html>
