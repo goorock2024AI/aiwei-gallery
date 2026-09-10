@@ -53,6 +53,8 @@
     "check:m5-overview-browser": "node scripts/check-m5-operations-overview-browser.js",
     "check:m5-trend": "node scripts/check-m5-operations-trend.js",
     "check:m5-trend-browser": "node scripts/check-m5-operations-trend-browser.js",
+    "check:m5-governance": "node scripts/check-m5-operations-governance.js",
+    "check:m5-governance-browser": "node scripts/check-m5-operations-governance-browser.js",
     "check:workshop-projects": "node scripts/check-workshop-projects.js",
     "check:workshop-integration": "node scripts/check-workshop-projects-integration.js",
     "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",

@@ -190,7 +190,7 @@ const Auth = {
     if (role === 'admin') return true;
     const matrix = {
       editor: {
-        view: ['revenue','expense','gallery','space','daily-closing','project-list','operations','reports','products','creative-products','artworks'],
+        view: ['revenue','expense','gallery','space','daily-closing','project-list','operations','reports','manage','products','creative-products','artworks'],
         create: ['revenue','expense','gallery','space','daily-closing','project-list','creative-products','artworks'],
         edit: ['revenue','expense','gallery','space','daily-closing','project-list','creative-products','artworks'],
         approve: [],
@@ -225,7 +225,7 @@ const Auth = {
       'project-list': ['admin', 'editor', 'viewer'],
       operations: ['admin', 'editor'],
       reports:  ['admin', 'editor', 'viewer'],
-      manage:   ['admin'],
+      manage:   ['admin', 'editor'],
       products: ['admin', 'editor'],
       users:    ['admin'],
       logs:     ['admin'],

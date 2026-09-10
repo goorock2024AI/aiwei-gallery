@@ -966,6 +966,67 @@ table.data-table .tag {
 .operations-trend-table tbody tr.selected { background: #fff8e6; }
 .operations-trend-table tbody tr:hover { background: #fbfaf6; }
 .operations-trend-table tbody tr.selected:hover { background: #fff5d6; }
+.operations-data-notice.warning { border-color: #e8c98b; background: #fff8e8; }
+.operations-governance-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin-bottom: 12px; }
+.operations-governance-summary article { padding: 13px 14px; border: 1px solid var(--gray-200); border-radius: 9px; background: #fff; }
+.operations-governance-summary span, .operations-governance-summary small { display: block; color: var(--gray-500); font-size: 10px; }
+.operations-governance-summary strong { display: block; margin: 5px 0; color: var(--operations-ink); font-size: 18px; font-variant-numeric: tabular-nums; }
+.operations-governance-columns { display: grid; grid-template-columns: 1.35fr .65fr; gap: 12px; margin-bottom: 12px; }
+.operations-governance-panel { overflow: hidden; border: 1px solid var(--gray-200); border-radius: 10px; background: #fff; }
+.operations-governance-panel > header { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--gray-200); background: var(--gray-100); }
+.operations-governance-panel > header > div { display: flex; gap: 8px; align-items: center; }
+.operations-governance-panel > header > div > span { color: var(--gold); font-family: monospace; font-size: 10px; font-weight: 700; }
+.operations-governance-panel > header strong { color: var(--operations-ink); font-size: 13px; }
+.operations-governance-panel > header small { color: var(--gray-500); font-size: 10px; text-align: right; }
+.operations-governance-table-wrap { overflow-x: auto; }
+.operations-governance-table { width: 100%; min-width: 650px; border-collapse: collapse; color: var(--gray-700); font-size: 11px; }
+.operations-governance-table th, .operations-governance-table td { padding: 10px 12px; border-bottom: 1px solid var(--gray-200); text-align: right; font-variant-numeric: tabular-nums; }
+.operations-governance-table thead th { color: var(--gray-500); font-size: 10px; }
+.operations-governance-table th:first-child, .operations-governance-table td:last-child { text-align: left; }
+.operations-governance-table tbody tr:last-child th, .operations-governance-table tbody tr:last-child td { border-bottom: 0; }
+.operations-governance-table code { display: inline-block; margin: 1px 2px; color: var(--gray-600); font-size: 9px; }
+.operations-priority { display: inline-flex; min-width: 28px; justify-content: center; padding: 3px 6px; border-radius: 999px; font-size: 9px; font-style: normal; font-weight: 700; }
+.operations-priority.p1 { color: #8d3030; background: #fde8e8; }
+.operations-priority.p2 { color: #855d12; background: #fff2cd; }
+.operations-priority.p3 { color: #195d7a; background: #e7f4fa; }
+.operations-priority.p4 { color: var(--green-700); background: #e8f5ed; }
+.operations-priority-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--gray-200); }
+.operations-priority-grid > div { min-height: 91px; padding: 13px; background: #fff; }
+.operations-priority-grid strong, .operations-priority-grid small { display: block; }
+.operations-priority-grid strong { margin: 8px 0 3px; color: var(--operations-ink); font-size: 16px; font-variant-numeric: tabular-nums; }
+.operations-priority-grid small { color: var(--gray-500); font-size: 10px; }
+.operations-candidate-panel, .operations-batch-panel { margin-bottom: 12px; }
+.operations-candidate-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; padding: 12px; }
+.operations-candidate-card { min-width: 0; padding: 13px; border: 1px solid var(--gray-200); border-radius: 9px; background: #fbfaf6; }
+.operations-candidate-card.failed { border-color: #e8c98b; background: #fffaf0; }
+.operations-candidate-card > div:first-child { min-height: 39px; }
+.operations-candidate-card > div:first-child strong, .operations-candidate-card > div:first-child span, .operations-candidate-card > small { display: block; }
+.operations-candidate-card > div:first-child strong { color: var(--operations-ink); font-size: 12px; }
+.operations-candidate-card > div:first-child span, .operations-candidate-card > small { color: var(--gray-500); font-size: 9px; }
+.operations-candidate-card > b { display: block; margin: 8px 0 3px; color: var(--green-700); font-size: 22px; font-variant-numeric: tabular-nums; }
+.operations-source-error { display: block; margin-top: 13px; color: #9b4b35; font-size: 11px; font-style: normal; }
+.operations-status-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 9px; }
+.operations-status-chips span { padding: 3px 6px; border-radius: 999px; color: var(--gray-600); background: var(--gray-200); font-size: 8px; }
+.operations-batch-statuses { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--gray-200); }
+.operations-batch-statuses > div { padding: 11px 12px; background: #fff; }
+.operations-batch-statuses span, .operations-batch-statuses strong { display: block; }
+.operations-batch-statuses span { color: var(--gray-500); font-size: 9px; }
+.operations-batch-statuses strong { margin-top: 3px; color: var(--operations-ink); font-size: 16px; }
+.operations-batch-list { border-top: 1px solid var(--gray-200); }
+.operations-batch-list > div { display: grid; grid-template-columns: 8px minmax(150px, 1fr) auto; gap: 8px; align-items: center; padding: 9px 13px; border-bottom: 1px solid var(--gray-200); }
+.operations-batch-list > div:last-child { border-bottom: 0; }
+.operations-batch-list strong { overflow: hidden; color: var(--gray-700); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.operations-batch-list em { color: var(--gray-500); font-size: 9px; font-style: normal; }
+.operations-batch-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gray-300); }
+.operations-batch-dot.pending_review, .operations-batch-dot.approved { background: var(--gold); }
+.operations-batch-dot.applied { background: var(--green-500); }
+.operations-batch-dot.rejected, .operations-batch-dot.reverted { background: #a13f3f; }
+.operations-empty-inline { padding: 18px; color: var(--gray-500); font-size: 11px; text-align: center; }
+.operations-error-state.compact { min-height: 150px; margin: 12px; }
+.operations-governance-actions { display: grid; grid-template-columns: 1fr auto auto; gap: 9px; align-items: center; padding: 13px 14px; border: 1px solid #cfe0d5; border-radius: 10px; background: #f0f7f2; }
+.operations-governance-actions strong, .operations-governance-actions span { display: block; }
+.operations-governance-actions strong { color: var(--green-900); font-size: 11px; }
+.operations-governance-actions span { margin-top: 3px; color: var(--gray-600); font-size: 9px; }
 .operations-empty-panel { display: flex; gap: 14px; align-items: center; min-height: 112px; padding: 20px; border: 1px dashed var(--gray-300); border-radius: 10px; background: var(--gray-100); }
 .operations-empty-panel > span { color: var(--gold); font-size: 26px; }
 .operations-empty-panel strong { display: block; margin-bottom: 3px; color: var(--green-700); }
@@ -1004,6 +1065,27 @@ table.data-table .tag {
   .operations-trend-table tbody td { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 7px 0; border-bottom: 1px dashed var(--gray-200); text-align: right; }
   .operations-trend-table tbody td::before { content: attr(data-label); color: var(--gray-500); text-align: left; }
   .operations-trend-table tbody tr td:last-child { padding-bottom: 0; border-bottom: 0; }
+  .operations-governance-summary { grid-template-columns: 1fr 1fr; }
+  .operations-governance-summary article:last-child { grid-column: 1 / -1; }
+  .operations-governance-columns { grid-template-columns: 1fr; }
+  .operations-governance-panel > header { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .operations-governance-panel > header small { text-align: left; }
+  .operations-governance-table-wrap { overflow: visible; }
+  .operations-governance-table { min-width: 0; }
+  .operations-governance-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .operations-governance-table tbody, .operations-governance-table tr, .operations-governance-table th, .operations-governance-table td { display: block; width: 100%; }
+  .operations-governance-table tbody { display: grid; gap: 8px; padding: 10px; }
+  .operations-governance-table tbody tr { padding: 11px 12px; border: 1px solid var(--gray-200); border-radius: 8px; }
+  .operations-governance-table tbody th { padding: 0 0 8px; text-align: left; }
+  .operations-governance-table tbody td { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--gray-200); text-align: right; }
+  .operations-governance-table tbody td::before { content: attr(data-label); color: var(--gray-500); text-align: left; }
+  .operations-governance-table tbody td:last-child { border-bottom: 0; text-align: right; }
+  .operations-candidate-grid { grid-template-columns: 1fr 1fr; }
+  .operations-batch-statuses { grid-template-columns: repeat(3, 1fr); }
+  .operations-batch-list > div { grid-template-columns: 8px 1fr; }
+  .operations-batch-list em { grid-column: 2; }
+  .operations-governance-actions { grid-template-columns: 1fr 1fr; }
+  .operations-governance-actions > div { grid-column: 1 / -1; }
   .operations-section-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .operations-section-heading p { text-align: left; }
   .operations-section-heading > div { flex-wrap: wrap; }

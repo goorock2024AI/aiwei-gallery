@@ -3,6 +3,7 @@ const OperationsDashboard = {
   _period: null,
   _overviewLoadId: 0,
   _trendLoadId: 0,
+  _governanceLoadId: 0,
   _loadAllId: 0,
   _trendCharts: [],
 
@@ -258,6 +259,240 @@ const OperationsDashboard = {
     return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   },
 
+  _governanceStatusLabel(status) {
+    const labels = {
+      matched: '已匹配', unique_candidate: '唯一候选', ambiguous: '存在歧义', no_candidate: '无候选',
+      complete: '资料完整', classification_review: '分类待补', cost_evidence_review: '成本证据待补',
+      classification_and_cost_review: '分类与成本待补', manual_link: '已有人工归属', pending_manual_link: '人工归属待补',
+      unique_rule: '唯一规则', partial_rule: '部分规则', ambiguous_rules: '规则冲突', ambiguous_manual_links: '人工链接冲突',
+      linked_snapshot: '成交快照已关联', valid_artwork_link: '作品关联有效', unique_artwork_no: '作品编号唯一候选',
+      unique_title_artist: '标题与艺术家唯一候选', unique_title: '标题唯一候选', ambiguous_artworks: '作品候选冲突',
+      invalid_artwork_link: '作品关联无效', no_artwork_candidate: '无作品候选', ready_candidate: '可进入复核',
+      cost_review: '直接成本待审', missing_project: '缺项目名称', ambiguous_projects: '项目候选冲突',
+      unregistered_project: '项目未登记', missing_direct_cost: '缺直接成本', confirmed: '已确认', suggested: '有建议待审',
+      review: '待人工复核', invalid: '原值无效', draft: '草稿', pending_review: '待审核', approved: '已批准',
+      rejected: '已拒绝', applied: '已应用', reverted: '已撤销', unknown: '状态待确认'
+    };
+    return labels[status] || String(status || '状态待确认').replaceAll('_', ' ');
+  },
+
+  _candidatePriority(row, sourceKey) {
+    if (/^P[1-4]$/.test(String(row.reviewPriority || ''))) return row.reviewPriority;
+    if (sourceKey === 'aliases') {
+      return row.candidateStatus === 'ambiguous' ? 'P1' : row.candidateStatus === 'no_candidate' ? 'P2' : row.candidateStatus === 'unique_candidate' ? 'P3' : 'P4';
+    }
+    return 'P4';
+  },
+
+  _buildGovernanceModel(period, baselineRows = [], sources = {}) {
+    const issueDefinitions = [
+      ['unclassified_revenue', '待归类收入'],
+      ['unclassified_cost', '待归类成本'],
+      ['missing_product_cost', '缺成本商品/作品']
+    ];
+    const issues = issueDefinitions.map(([key, label]) => {
+      const rows = baselineRows.filter(row => row.issueType === key);
+      return {
+        key, label,
+        priority: rows[0]?.priority || (key === 'missing_product_cost' ? 'P1' : 'P2'),
+        count: rows.reduce((sum, row) => sum + this._number(row.issueCount), 0),
+        records: rows.reduce((sum, row) => sum + this._number(row.affectedRecordCount), 0),
+        amount: rows.reduce((sum, row) => sum + this._number(row.affectedAmount), 0),
+        sources: [...new Set(rows.map(row => row.sourceTable).filter(Boolean))]
+      };
+    });
+    const issueTotals = issues.reduce((result, issue) => ({
+      count: result.count + issue.count,
+      records: result.records + issue.records,
+      amount: result.amount + issue.amount
+    }), { count: 0, records: 0, amount: 0 });
+    const issuePriority = { P1: 0, P2: 0, P3: 0, P4: 0 };
+    issues.forEach(issue => { issuePriority[issue.priority] = (issuePriority[issue.priority] || 0) + issue.count; });
+
+    const definitions = [
+      { key: 'products', label: '商品与成本', note: '历史别名 + 当前商品主数据', sourceKeys: ['aliases', 'products'] },
+      { key: 'revenue', label: '收入归属', note: `${period} 收入候选`, sourceKeys: ['revenue'] },
+      { key: 'cost', label: '支出归属', note: `${period} 支出候选`, sourceKeys: ['cost'] },
+      { key: 'gallery', label: '画廊关联', note: `${period} 作品与结算证据`, sourceKeys: ['gallery'] },
+      { key: 'workshop', label: '工坊关联', note: `${period} 项目与直接成本`, sourceKeys: ['workshop'] },
+      { key: 'space', label: '空间合作', note: `${period} 分类与合同证据`, sourceKeys: ['space'] }
+    ];
+    const candidatePriority = { P1: 0, P2: 0, P3: 0, P4: 0 };
+    const domains = definitions.map(definition => {
+      const entries = definition.sourceKeys.flatMap(sourceKey => (sources[sourceKey]?.rows || []).map(row => ({ row, sourceKey })));
+      const statusCounts = new Map();
+      let p1 = 0;
+      let human = 0;
+      let ready = 0;
+      let amount = 0;
+      entries.forEach(({ row, sourceKey }) => {
+        const status = row.candidateStatus || row.governanceStatus || 'unknown';
+        const priority = this._candidatePriority(row, sourceKey);
+        candidatePriority[priority] = (candidatePriority[priority] || 0) + 1;
+        if (priority === 'P1') p1++;
+        if (/unique|ready_candidate|suggested/.test(status)) ready++;
+        if (/ambiguous|no_candidate|missing|invalid|pending|review|unregistered|partial|conflict/.test(status)) human++;
+        amount += this._number(row.affectedAmount);
+        statusCounts.set(status, (statusCounts.get(status) || 0) + 1);
+      });
+      return {
+        ...definition,
+        count: entries.length,
+        p1,
+        human,
+        ready,
+        amount,
+        failed: definition.sourceKeys.some(key => sources[key]?.failed),
+        truncated: definition.sourceKeys.some(key => sources[key]?.truncated),
+        statuses: [...statusCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+      };
+    });
+    const candidateTotals = domains.reduce((result, domain) => ({
+      count: result.count + domain.count,
+      p1: result.p1 + domain.p1,
+      human: result.human + domain.human,
+      ready: result.ready + domain.ready
+    }), { count: 0, p1: 0, human: 0, ready: 0 });
+
+    const batches = sources.batches?.rows || [];
+    const batchStatuses = ['draft', 'pending_review', 'approved', 'applied', 'rejected', 'reverted'].map(status => ({
+      status,
+      label: this._governanceStatusLabel(status),
+      count: batches.filter(batch => batch.status === status).length
+    }));
+    const openBatchCount = batches.filter(batch => ['draft', 'pending_review', 'approved'].includes(batch.status)).length;
+    const failedSources = Object.entries(sources).filter(([, source]) => source?.failed).map(([key]) => key);
+    return {
+      period,
+      issues,
+      issueTotals,
+      issuePriority,
+      domains,
+      candidatePriority,
+      candidateTotals,
+      batches,
+      batchStatuses,
+      openBatchCount,
+      batchAmount: batches.reduce((sum, batch) => sum + this._number(batch.affectedAmount), 0),
+      failedSources,
+      baselineFailed: Boolean(sources.baseline?.failed),
+      batchFailed: Boolean(sources.batches?.failed),
+      hasPeriodData: issueTotals.count > 0 || domains.slice(1).some(domain => domain.count > 0) || batches.length > 0
+    };
+  },
+
+  _governanceHtml(model) {
+    const priorityNote = { P1: '优先核对', P2: '安排复核', P3: '可进入确认', P4: '已有证据或完成' };
+    const sourceLabels = { baseline: '问题基线', aliases: '商品别名', products: '商品主数据', revenue: '收入归属', cost: '支出归属', gallery: '画廊关联', workshop: '工坊关联', space: '空间合作', batches: '治理批次' };
+    const warnings = model.failedSources.length ? `<div class="operations-data-notice warning" role="alert"><strong>部分治理数据暂不可用</strong><span>${model.failedSources.map(key => sourceLabels[key] || key).join('、')}加载失败；已成功的数据仍保留。</span></div>` : '';
+    const empty = model.hasPeriodData ? '' : `<div class="operations-data-notice" role="note"><strong>${model.period} 暂无期间治理问题或候选</strong><span>商品与成本卡仍显示全部历史别名和当前商品主数据快照。</span></div>`;
+    const issueBody = model.baselineFailed
+      ? '<div class="operations-error-state compact"><strong>问题基线加载失败</strong><span>候选队列和批次状态仍可查看。</span></div>'
+      : `<div class="operations-governance-table-wrap"><table class="operations-governance-table"><thead><tr><th>问题类型</th><th>优先级</th><th>问题数</th><th>影响记录</th><th>影响金额</th><th>来源</th></tr></thead><tbody>${model.issues.map(issue => `<tr data-issue-type="${issue.key}"><th scope="row">${issue.label}</th><td data-label="优先级"><span class="operations-priority ${issue.priority.toLowerCase()}">${issue.priority}</span></td><td data-label="问题数">${issue.count}</td><td data-label="影响记录">${issue.records}</td><td data-label="影响金额">${this._money(issue.amount)}</td><td data-label="来源">${issue.sources.length ? issue.sources.map(source => `<code>${this._escapeTrendText(source)}</code>`).join(' ') : '—'}</td></tr>`).join('')}</tbody></table></div>`;
+    const batches = model.batchFailed
+      ? '<div class="operations-error-state compact"><strong>治理批次加载失败</strong><span>问题基线和候选队列仍可查看。</span></div>'
+      : `<div class="operations-batch-statuses">${model.batchStatuses.map(item => `<div data-batch-status="${item.status}"><span>${item.label}</span><strong>${item.count}</strong></div>`).join('')}</div>
+        ${model.batches.length ? `<div class="operations-batch-list">${model.batches.slice(0, 5).map(batch => `<div><span class="operations-batch-dot ${batch.status}"></span><strong>${this._escapeTrendText(batch.name)}</strong><em>${this._governanceStatusLabel(batch.status)} · ${this._number(batch.itemCount)} 条 · ${this._money(batch.affectedAmount)}</em></div>`).join('')}</div>` : '<div class="operations-empty-inline">当前月份没有新建治理批次</div>'}`;
+    return `${warnings}${empty}
+      <div class="operations-governance-summary" aria-label="数据治理摘要">
+        <article data-governance-metric="issues"><span>治理问题</span><strong>${model.issueTotals.count}</strong><small>${model.period} 稳定问题 ID</small></article>
+        <article data-governance-metric="p1"><span>P1 优先项</span><strong>${model.issuePriority.P1 + model.candidatePriority.P1}</strong><small>问题 ${model.issuePriority.P1} · 候选 ${model.candidatePriority.P1}</small></article>
+        <article data-governance-metric="candidates"><span>候选与证据</span><strong>${model.candidateTotals.count}</strong><small>需人工判断 ${model.candidateTotals.human}</small></article>
+        <article data-governance-metric="affected"><span>问题影响金额</span><strong>${this._money(model.issueTotals.amount)}</strong><small>${model.issueTotals.records} 条影响记录（分组合计）</small></article>
+        <article data-governance-metric="batches"><span>进行中批次</span><strong>${model.openBatchCount}</strong><small>本月批次 ${model.batches.length} 个</small></article>
+      </div>
+      <div class="operations-governance-columns">
+        <article class="operations-governance-panel">
+          <header><div><span>01</span><strong>问题基线</strong></div><small>${model.period} · 按稳定问题 ID 对账</small></header>
+          ${issueBody}
+        </article>
+        <article class="operations-governance-panel">
+          <header><div><span>02</span><strong>优先级队列</strong></div><small>问题数 / 候选数分开显示</small></header>
+          <div class="operations-priority-grid">${['P1','P2','P3','P4'].map(priority => `<div data-priority="${priority}"><span class="operations-priority ${priority.toLowerCase()}">${priority}</span><strong>${model.issuePriority[priority]} / ${model.candidatePriority[priority]}</strong><small>${priorityNote[priority]}</small></div>`).join('')}</div>
+        </article>
+      </div>
+      <article class="operations-governance-panel operations-candidate-panel">
+        <header><div><span>03</span><strong>候选类型与证据队列</strong></div><small>每类最多读取 500 条；达到上限时显示 500+</small></header>
+        <div class="operations-candidate-grid">${model.domains.map(domain => `<div class="operations-candidate-card${domain.failed ? ' failed' : ''}" data-candidate-domain="${domain.key}">
+          <div><strong>${domain.label}</strong><span>${domain.note}</span></div>
+          ${domain.failed && domain.count === 0 ? '<em class="operations-source-error">数据源加载失败</em>' : `<b>${domain.count}${domain.truncated ? '+' : ''}</b><small>P1 ${domain.p1} · 人工判断 ${domain.human} · 可复核 ${domain.ready}</small><small>候选影响金额 ${this._money(domain.amount)}</small>`}
+          ${domain.statuses.length ? `<div class="operations-status-chips">${domain.statuses.map(([status, count]) => `<span>${this._governanceStatusLabel(status)} ${count}</span>`).join('')}</div>` : ''}
+        </div>`).join('')}</div>
+      </article>
+      <article class="operations-governance-panel operations-batch-panel">
+        <header><div><span>04</span><strong>治理批次状态</strong></div><small>${model.period} 创建 · 影响金额 ${this._money(model.batchAmount)}</small></header>
+        ${batches}
+      </article>
+      <div class="operations-governance-actions">
+        <div><strong>运营管理页保持只读</strong><span>候选明细与受控写入继续复用 M4 页面；歧义和无候选不会自动进入批次。</span></div>
+        <button type="button" class="btn btn-secondary" onclick="OperationsDashboard.openGovernanceReview()">查看完整候选</button>
+        <button type="button" class="btn btn-primary" onclick="OperationsDashboard.openGovernanceFlow()">进入受控批次</button>
+      </div>`;
+  },
+
+  _setGovernanceState(label, state) {
+    const indicator = document.getElementById('operations-governance-state');
+    if (!indicator) return;
+    indicator.className = `operations-state-pill ${state}`;
+    indicator.textContent = label;
+  },
+
+  _periodDateRange() {
+    const year = Number(this._period.year);
+    const month = Number(this._period.month);
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const period = `${this._period.year}-${this._period.month}`;
+    return { period, start: `${period}-01`, end: `${period}-${String(lastDay).padStart(2, '0')}` };
+  },
+
+  async _loadGovernance() {
+    const target = document.getElementById('operations-governance-content');
+    if (!target) return false;
+    const loadId = ++this._governanceLoadId;
+    this._setGovernanceState('加载中', 'loading');
+    target.innerHTML = this._loadingHtml('数据治理工作台');
+    const { period, start, end } = this._periodDateRange();
+    const requests = {
+      baseline: { limit: 200, call: () => Store._request('GET', `/rest/v1/data_governance_baseline_v2?period_month=eq.${period}&order=priority.asc&limit=200`) },
+      aliases: { limit: 500, call: () => Store._request('GET', '/rest/v1/product_alias_candidates_v2?order=affected_amount.desc&limit=500') },
+      products: { limit: 500, call: () => Store._request('GET', '/rest/v1/product_master_governance_v2?order=review_priority.asc&limit=500') },
+      revenue: { limit: 500, call: () => Store._request('GET', `/rest/v1/revenue_attribution_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
+      cost: { limit: 500, call: () => Store._request('GET', `/rest/v1/cost_attribution_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
+      gallery: { limit: 500, call: () => Store._request('GET', `/rest/v1/gallery_link_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
+      workshop: { limit: 500, call: () => Store._request('GET', `/rest/v1/workshop_link_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
+      space: { limit: 500, call: () => Store._request('GET', `/rest/v1/space_classification_candidates_v2?business_date=gte.${start}&business_date=lte.${end}&order=business_date.desc&limit=500`) },
+      batches: { limit: 200, call: () => Store._request('GET', `/rest/v1/governance_batch_summary_v2?created_at=gte.${start}&created_at=lte.${end}T23:59:59.999Z&order=created_at.desc&limit=200`) }
+    };
+    const entries = Object.entries(requests);
+    const settled = await Promise.allSettled(entries.map(([, request]) => request.call()));
+    if (loadId !== this._governanceLoadId) return false;
+    const sources = {};
+    settled.forEach((result, index) => {
+      const [key, request] = entries[index];
+      const rows = result.status === 'fulfilled' && Array.isArray(result.value) ? result.value : [];
+      sources[key] = { rows, failed: result.status === 'rejected', truncated: rows.length >= request.limit };
+    });
+    if (settled.every(result => result.status === 'rejected')) {
+      this._setGovernanceState('加载失败', 'error');
+      target.innerHTML = '<div class="operations-error-state"><strong>数据治理工作台加载失败</strong><span>所有治理数据源均暂不可用；经营总览和趋势不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
+      return false;
+    }
+    const model = this._buildGovernanceModel(period, sources.baseline.rows, sources);
+    target.innerHTML = this._governanceHtml(model);
+    const partial = model.failedSources.length > 0;
+    this._setGovernanceState(partial ? '部分数据失败' : model.hasPeriodData ? '数据已就绪' : '空期间', partial ? 'error' : model.hasPeriodData ? 'ready' : 'empty');
+    return !partial;
+  },
+
+  _openTab(tab) {
+    const button = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+    if (button && getComputedStyle(button).display !== 'none') button.click();
+  },
+
+  openGovernanceReview() { this._openTab('reports'); },
+
+  openGovernanceFlow() { this._openTab('manage'); },
+
   _destroyTrendCharts() {
     this._trendCharts.forEach(chart => {
       try { chart.destroy(); } catch {}
@@ -352,9 +587,10 @@ const OperationsDashboard = {
     const status = document.getElementById('operations-refresh-status');
     if (refreshButton) refreshButton.disabled = true;
     if (status) status.textContent = `${message} · ${this._periodLabel()}`;
-    const [overviewOk, trendOk] = await Promise.all([this._loadOverview(), this._loadTrend()]);
+    const [overviewOk, trendOk, governanceOk] = await Promise.all([this._loadOverview(), this._loadTrend(), this._loadGovernance()]);
     if (loadId !== this._loadAllId) return;
-    if (status) status.textContent = `${overviewOk && trendOk ? '已更新' : overviewOk || trendOk ? '部分数据加载失败' : '加载失败'} · ${this._periodLabel()}`;
+    const results = [overviewOk, trendOk, governanceOk];
+    if (status) status.textContent = `${results.every(Boolean) ? '已更新' : results.some(Boolean) ? '部分数据加载失败' : '加载失败'} · ${this._periodLabel()}`;
     if (refreshButton) refreshButton.disabled = false;
   },
 
@@ -462,8 +698,8 @@ const OperationsDashboard = {
         </section>
 
         <section id="operations-governance" class="card operations-section" tabindex="-1">
-          <div class="operations-section-heading"><div><span>04</span><h3>数据治理工作台</h3></div><p>问题、候选、证据与治理批次</p></div>
-          <div class="operations-chip-row">${['治理问题','商品与成本','收入归属','支出归属','画廊与工坊','空间合作','治理批次'].map(label => `<span>${label}</span>`).join('')}</div>
+          <div class="operations-section-heading"><div><span>04</span><h3>数据治理工作台</h3><em id="operations-governance-state" class="operations-state-pill loading">加载中</em></div><p>问题、候选、证据与治理批次</p></div>
+          <div id="operations-governance-content">${this._loadingHtml('数据治理工作台')}</div>
         </section>
 
         <section id="operations-model" class="card operations-section" tabindex="-1">
