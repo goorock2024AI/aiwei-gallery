@@ -2,6 +2,9 @@
 const OperationsDashboard = {
   _period: null,
   _overviewLoadId: 0,
+  _trendLoadId: 0,
+  _loadAllId: 0,
+  _trendCharts: [],
 
   _defaultPeriod() {
     const today = new Date();
@@ -148,6 +151,213 @@ const OperationsDashboard = {
     <p class="operations-method-note">四大业务层固定保留，零值层不会消失。毛利率使用视图字段；分母为零或数据库返回空值时显示“—”，不显示伪造的 0%。</p>`;
   },
 
+  _buildTrendModel(year, summaryRows = [], legacyRows = []) {
+    const rows = Array.from({ length: 12 }, (_, index) => ({
+      period: `${year}-${String(index + 1).padStart(2, '0')}`,
+      label: `${index + 1}月`,
+      revenue: 0,
+      salesCost: 0,
+      periodCost: 0,
+      totalCost: 0,
+      grossProfit: 0,
+      contribution: 0,
+      legacyRevenue: 0,
+      difference: 0
+    }));
+    summaryRows.forEach(row => {
+      const period = String(row.periodMonth || '');
+      if (!period.startsWith(`${year}-`)) return;
+      const index = Number(period.slice(5, 7)) - 1;
+      if (!rows[index]) return;
+      rows[index].revenue += this._number(row.revenueAmount);
+      rows[index].salesCost += this._number(row.salesCostAmount);
+      rows[index].periodCost += this._number(row.periodCostAmount);
+      rows[index].totalCost += this._number(row.totalCostAmount);
+      rows[index].grossProfit += this._number(row.grossProfit);
+      rows[index].contribution += this._number(row.operatingContribution);
+    });
+    legacyRows.forEach(row => {
+      const date = String(row.date || '');
+      if (!date.startsWith(`${year}-`)) return;
+      const index = Number(date.slice(5, 7)) - 1;
+      if (!rows[index]) return;
+      rows[index].legacyRevenue += this._number(row.netAmount ?? row.amount);
+    });
+    rows.forEach(row => { row.difference = row.revenue - row.legacyRevenue; });
+    const totals = rows.reduce((result, row) => ({
+      revenue: result.revenue + row.revenue,
+      salesCost: result.salesCost + row.salesCost,
+      periodCost: result.periodCost + row.periodCost,
+      totalCost: result.totalCost + row.totalCost,
+      grossProfit: result.grossProfit + row.grossProfit,
+      contribution: result.contribution + row.contribution,
+      legacyRevenue: result.legacyRevenue + row.legacyRevenue,
+      difference: result.difference + row.difference
+    }), { revenue: 0, salesCost: 0, periodCost: 0, totalCost: 0, grossProfit: 0, contribution: 0, legacyRevenue: 0, difference: 0 });
+    return {
+      year: String(year),
+      rows,
+      totals,
+      selected: rows[Number(this._period?.month || 1) - 1],
+      hasData: rows.some(row => [row.revenue, row.totalCost, row.legacyRevenue].some(value => value !== 0))
+    };
+  },
+
+  _signedMoney(value) {
+    const amount = this._number(value);
+    if (amount === 0) return this._money(0);
+    return `${amount > 0 ? '+' : '−'}${this._money(Math.abs(amount))}`;
+  },
+
+  _trendHtml(model) {
+    const selected = model.selected;
+    const differenceClass = value => value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral';
+    const emptyNotice = model.hasData ? '' : `<div class="operations-data-notice" role="note"><strong>${model.year} 年暂无经营数据</strong><span>12 个月仍完整显示零值，用于区分“无数据”与图表加载失败。</span></div>`;
+    return `${emptyNotice}
+      <div class="operations-trend-summary" aria-label="年度经营趋势汇总">
+        <article data-year-metric="revenue"><span>2.0 年度净收入</span><strong>${this._money(model.totals.revenue)}</strong><small>四层已归类收入</small></article>
+        <article data-year-metric="total-cost"><span>年度总成本</span><strong>${this._money(model.totals.totalCost)}</strong><small>销售成本 + 期间成本</small></article>
+        <article data-year-metric="gross-profit"><span>年度销售毛利</span><strong>${this._money(model.totals.grossProfit)}</strong><small>按月汇总视图字段</small></article>
+        <article data-year-metric="contribution"><span>年度经营贡献</span><strong>${this._money(model.totals.contribution)}</strong><small>按月汇总视图字段</small></article>
+        <article data-year-metric="difference" class="${differenceClass(model.totals.difference)}"><span>年度口径差异</span><strong>${this._signedMoney(model.totals.difference)}</strong><small>2.0 − 1.0 净收入</small></article>
+      </div>
+      <div class="operations-period-compare" data-period="${selected.period}">
+        <div data-compare="period"><span>当前选择</span><strong>${this._escapeTrendText(selected.label)}</strong></div>
+        <div data-compare="legacy"><span>1.0 净收入</span><strong>${this._money(selected.legacyRevenue)}</strong></div>
+        <div data-compare="v2"><span>2.0 净收入</span><strong>${this._money(selected.revenue)}</strong></div>
+        <div data-compare="difference" class="${differenceClass(selected.difference)}"><span>口径差异</span><strong>${this._signedMoney(selected.difference)}</strong></div>
+      </div>
+      <div class="operations-chart-grid">
+        <article class="operations-chart-card">
+          <div><strong>2.0 月度经营趋势</strong><span>净收入、总成本、销售毛利、经营贡献</span></div>
+          <div class="operations-chart-canvas"><canvas id="operations-performance-chart" role="img" aria-label="${model.year}年2.0月度经营趋势图"></canvas></div>
+        </article>
+        <article class="operations-chart-card">
+          <div><strong>1.0 / 2.0 净收入比较</strong><span>差异 = 2.0 净收入 − 1.0 净收入</span></div>
+          <div class="operations-chart-canvas"><canvas id="operations-definition-chart" role="img" aria-label="${model.year}年1.0和2.0净收入比较图"></canvas></div>
+        </article>
+      </div>
+      <div class="operations-trend-table-wrap">
+        <table class="operations-trend-table">
+          <thead><tr><th>月份</th><th>2.0净收入</th><th>总成本</th><th>销售毛利</th><th>经营贡献</th><th>1.0净收入</th><th>口径差异</th></tr></thead>
+          <tbody>${model.rows.map(row => `<tr${row.period === selected.period ? ' class="selected"' : ''} data-trend-period="${row.period}">
+            <th scope="row">${row.label}</th>
+            <td data-label="2.0净收入">${this._money(row.revenue)}</td>
+            <td data-label="总成本">${this._money(row.totalCost)}</td>
+            <td data-label="销售毛利">${this._money(row.grossProfit)}</td>
+            <td data-label="经营贡献">${this._money(row.contribution)}</td>
+            <td data-label="1.0净收入">${this._money(row.legacyRevenue)}</td>
+            <td data-label="口径差异" class="${differenceClass(row.difference)}">${this._signedMoney(row.difference)}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+      <p class="operations-method-note">2.0 使用四层业务明细和实际到账日归属；1.0 使用既有 <code>revenue_facts</code>。待归类收入不会静默并入 2.0，因而可能形成差异；差异只用于口径核对，不代表现金短款或会计损益。</p>`;
+  },
+
+  _escapeTrendText(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+  },
+
+  _destroyTrendCharts() {
+    this._trendCharts.forEach(chart => {
+      try { chart.destroy(); } catch {}
+    });
+    this._trendCharts = [];
+  },
+
+  _renderTrendCharts(model) {
+    this._destroyTrendCharts();
+    if (typeof Chart === 'undefined') return;
+    const labels = model.rows.map(row => row.label);
+    const currencyTick = value => {
+      const amount = this._number(value);
+      return Math.abs(amount) >= 10000 ? `¥${(amount / 10000).toFixed(1)}万` : `¥${amount}`;
+    };
+    const tooltipLabel = context => `${context.dataset.label}: ${this._money(context.parsed.y)}`;
+    const commonOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 10, padding: 14, usePointStyle: true } },
+        tooltip: { callbacks: { label: tooltipLabel } }
+      },
+      scales: {
+        x: { grid: { display: false } },
+        y: { beginAtZero: true, ticks: { callback: currencyTick }, grid: { color: 'rgba(31,68,48,.08)' } }
+      }
+    };
+    const performanceCanvas = document.getElementById('operations-performance-chart');
+    const definitionCanvas = document.getElementById('operations-definition-chart');
+    if (performanceCanvas) this._trendCharts.push(new Chart(performanceCanvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: '2.0净收入', data: model.rows.map(row => row.revenue), borderColor: '#246044', backgroundColor: '#246044', tension: .28, pointRadius: 2 },
+        { label: '总成本', data: model.rows.map(row => row.totalCost), borderColor: '#a8673f', backgroundColor: '#a8673f', tension: .28, pointRadius: 2 },
+        { label: '销售毛利', data: model.rows.map(row => row.grossProfit), borderColor: '#c28b2c', backgroundColor: '#c28b2c', tension: .28, pointRadius: 2 },
+        { label: '经营贡献', data: model.rows.map(row => row.contribution), borderColor: '#233c31', backgroundColor: '#233c31', tension: .28, pointRadius: 2 }
+      ] },
+      options: commonOptions
+    }));
+    if (definitionCanvas) this._trendCharts.push(new Chart(definitionCanvas.getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [
+        { label: '1.0净收入', data: model.rows.map(row => row.legacyRevenue), backgroundColor: 'rgba(116,126,120,.45)', borderRadius: 3 },
+        { label: '2.0净收入', data: model.rows.map(row => row.revenue), backgroundColor: 'rgba(36,96,68,.72)', borderRadius: 3 },
+        { type: 'line', label: '口径差异', data: model.rows.map(row => row.difference), borderColor: '#c28b2c', backgroundColor: '#c28b2c', tension: .2, pointRadius: 2 }
+      ] },
+      options: commonOptions
+    }));
+  },
+
+  _setTrendState(label, state) {
+    const indicator = document.getElementById('operations-trend-state');
+    if (!indicator) return;
+    indicator.className = `operations-state-pill ${state}`;
+    indicator.textContent = label;
+  },
+
+  async _loadTrend() {
+    const target = document.getElementById('operations-trend-content');
+    if (!target) return false;
+    const loadId = ++this._trendLoadId;
+    this._destroyTrendCharts();
+    this._setTrendState('加载中', 'loading');
+    target.innerHTML = this._loadingHtml('月度趋势');
+    const year = this._period.year;
+    try {
+      const [summaryRows, legacyRows] = await Promise.all([
+        Store._request('GET', `/rest/v1/business_layer_summary_v2?period_month=gte.${year}-01&period_month=lte.${year}-12&order=period_month.asc&limit=48`),
+        Store._request('GET', `/rest/v1/revenue_facts?date=gte.${year}-01-01&date=lte.${year}-12-31&order=date.asc&limit=5000`)
+      ]);
+      if (loadId !== this._trendLoadId) return false;
+      const model = this._buildTrendModel(year, summaryRows || [], legacyRows || []);
+      target.innerHTML = this._trendHtml(model);
+      this._renderTrendCharts(model);
+      this._setTrendState(model.hasData ? '数据已就绪' : '空年度', model.hasData ? 'ready' : 'empty');
+      return true;
+    } catch (error) {
+      if (loadId !== this._trendLoadId) return false;
+      this._destroyTrendCharts();
+      this._setTrendState('加载失败', 'error');
+      target.innerHTML = '<div class="operations-error-state"><strong>月度趋势加载失败</strong><span>无法读取当前年份的经营汇总或 1.0 对照数据；总览和其他分区不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
+      return false;
+    }
+  },
+
+  async _loadAll(message = '正在加载') {
+    const loadId = ++this._loadAllId;
+    const refreshButton = document.getElementById('operations-refresh');
+    const status = document.getElementById('operations-refresh-status');
+    if (refreshButton) refreshButton.disabled = true;
+    if (status) status.textContent = `${message} · ${this._periodLabel()}`;
+    const [overviewOk, trendOk] = await Promise.all([this._loadOverview(), this._loadTrend()]);
+    if (loadId !== this._loadAllId) return;
+    if (status) status.textContent = `${overviewOk && trendOk ? '已更新' : overviewOk || trendOk ? '部分数据加载失败' : '加载失败'} · ${this._periodLabel()}`;
+    if (refreshButton) refreshButton.disabled = false;
+  },
+
   _setOverviewState(label, state) {
     const indicator = document.getElementById('operations-overview-state');
     if (!indicator) return;
@@ -160,8 +370,6 @@ const OperationsDashboard = {
     const layers = document.getElementById('operations-layers-content');
     if (!overview || !layers) return;
     const loadId = ++this._overviewLoadId;
-    const refreshButton = document.getElementById('operations-refresh');
-    if (refreshButton) refreshButton.disabled = true;
     this._setOverviewState('加载中', 'loading');
     overview.innerHTML = this._loadingHtml('经营总览');
     layers.innerHTML = this._loadingHtml('四层经营矩阵');
@@ -176,17 +384,13 @@ const OperationsDashboard = {
       overview.innerHTML = this._overviewHtml(model);
       layers.innerHTML = this._layersHtml(model);
       this._setOverviewState(model.hasBusinessValues ? '数据已就绪' : '空期间', model.hasBusinessValues ? 'ready' : 'empty');
-      const status = document.getElementById('operations-refresh-status');
-      if (status) status.textContent = `已更新 · ${this._periodLabel()}`;
+      return true;
     } catch (error) {
       if (loadId !== this._overviewLoadId) return;
       this._setOverviewState('加载失败', 'error');
       overview.innerHTML = '<div class="operations-error-state"><strong>经营总览加载失败</strong><span>无法读取当前期间的只读经营汇总，请稍后重试。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>';
       layers.innerHTML = '<div class="operations-error-state"><strong>四层矩阵暂不可用</strong><span>其他运营管理分区仍可继续查看。</span></div>';
-      const status = document.getElementById('operations-refresh-status');
-      if (status) status.textContent = `加载失败 · ${this._periodLabel()}`;
-    } finally {
-      if (loadId === this._overviewLoadId && refreshButton) refreshButton.disabled = false;
+      return false;
     }
   },
 
@@ -253,8 +457,8 @@ const OperationsDashboard = {
         </section>
 
         <section id="operations-trend" class="card operations-section" tabindex="-1">
-          <div class="operations-section-heading"><div><span>03</span><h3>趋势与口径比较</h3></div><p>月度经营变化及 1.0/2.0 差异</p></div>
-          <div class="operations-empty-panel"><span aria-hidden="true">↗</span><div><strong>趋势区域已预留</strong><p>后续将在同一期间条件下展示收入、成本、毛利和经营贡献趋势。</p></div></div>
+          <div class="operations-section-heading"><div><span>03</span><h3>趋势与口径比较</h3><em id="operations-trend-state" class="operations-state-pill loading">加载中</em></div><p>月度经营变化及 1.0/2.0 差异</p></div>
+          <div id="operations-trend-content">${this._loadingHtml('月度趋势')}</div>
         </section>
 
         <section id="operations-governance" class="card operations-section" tabindex="-1">
@@ -274,7 +478,7 @@ const OperationsDashboard = {
           <div class="operations-empty-panel"><span aria-hidden="true">⇩</span><div><strong>明细能力已预留</strong><p>明细将保留来源表、来源 ID、明细键和治理状态。</p></div></div>
         </section>
       </div>`;
-    await this._loadOverview();
+    await this._loadAll('正在加载');
   },
 
   async setPeriod(year, month) {
@@ -284,9 +488,7 @@ const OperationsDashboard = {
     if (shell) shell.dataset.period = `${this._period.year}-${this._period.month}`;
     const label = document.getElementById('operations-period-label');
     if (label) label.textContent = this._periodLabel();
-    const status = document.getElementById('operations-refresh-status');
-    if (status) status.textContent = `正在加载 · ${this._periodLabel()}`;
-    await this._loadOverview();
+    await this._loadAll('正在加载');
   },
 
   focusSection(id, button) {
@@ -299,9 +501,7 @@ const OperationsDashboard = {
   },
 
   async refresh() {
-    const status = document.getElementById('operations-refresh-status');
-    if (status) status.textContent = `正在刷新 · ${this._periodLabel()}`;
-    await this._loadOverview();
+    await this._loadAll('正在刷新');
   }
 };
 
