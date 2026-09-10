@@ -4,6 +4,7 @@ const OperationsDashboard = {
   _overviewLoadId: 0,
   _trendLoadId: 0,
   _governanceLoadId: 0,
+  _modelLoadId: 0,
   _loadAllId: 0,
   _trendCharts: [],
 
@@ -430,6 +431,128 @@ const OperationsDashboard = {
       </div>`;
   },
 
+  _businessDimensionDefinitions() {
+    return [
+      { key: 'business_layer', label: '业务层', purpose: '经营组合', note: '固定四层经营结构，承接收入、成本和经营结果。' },
+      { key: 'business_type', label: '业务类型', purpose: '收入与活动来源', note: '通过 parent_code 归入业务层；未归类收入保留为治理项。' },
+      { key: 'cost_type', label: '成本类型', purpose: '资源用途', note: '说明资源花在什么地方，不替代销售成本与期间成本口径。' },
+      { key: 'capability_axis', label: '能力轴', purpose: '长期能力', note: '标记内容、观众和商业合作能力投入，不单独形成利润层。' }
+    ];
+  },
+
+  _buildBusinessModel(rows = []) {
+    const layerOrder = new Map(this._layerDefinitions().map(([code], index) => [code, index]));
+    const normalized = rows.map(row => ({
+      type: String(row.dimensionType || ''),
+      code: String(row.code || ''),
+      name: String(row.name || row.code || ''),
+      parentCode: String(row.parentCode || ''),
+      sortOrder: this._number(row.sortOrder),
+      active: row.isActive !== false,
+      notes: String(row.notes || '')
+    })).filter(row => row.type && row.code);
+    const layers = normalized.filter(row => row.type === 'business_layer');
+    const layerNames = new Map(layers.map(row => [row.code, row.name]));
+    const definitions = this._businessDimensionDefinitions();
+    const groups = definitions.map(definition => {
+      const items = normalized.filter(row => row.type === definition.key).sort((a, b) => {
+        if (definition.key === 'business_layer') {
+          const left = layerOrder.has(a.code) ? layerOrder.get(a.code) : 99;
+          const right = layerOrder.has(b.code) ? layerOrder.get(b.code) : 99;
+          if (left !== right) return left - right;
+        }
+        return a.sortOrder - b.sortOrder || a.code.localeCompare(b.code);
+      }).map(row => ({ ...row, parentName: layerNames.get(row.parentCode) || '' }));
+      return {
+        ...definition,
+        items,
+        activeCount: items.filter(item => item.active).length,
+        inactiveCount: items.filter(item => !item.active).length
+      };
+    });
+    return {
+      groups,
+      totalCount: normalized.length,
+      activeCount: normalized.filter(row => row.active).length,
+      inactiveCount: normalized.filter(row => !row.active).length,
+      hasRows: normalized.length > 0
+    };
+  },
+
+  _businessModelHtml(model) {
+    const dictionaries = model.hasRows ? `<div class="operations-dimension-grid">${model.groups.map(group => `<article class="operations-dimension-card" data-dimension-type="${group.key}">
+      <header><div><span>${group.label}</span><strong>${group.purpose}</strong></div><em>${group.activeCount} 启用${group.inactiveCount ? ` · ${group.inactiveCount} 停用` : ''}</em></header>
+      <p>${group.note}</p>
+      <div class="operations-dimension-items">${group.items.map(item => `<div class="${item.active ? '' : 'inactive'}" data-dimension-code="${this._escapeTrendText(item.code)}">
+        <div><strong>${this._escapeTrendText(item.name)}</strong><code>${this._escapeTrendText(item.code)}</code></div>
+        ${item.parentName ? `<small>归属：${this._escapeTrendText(item.parentName)}</small>` : ''}
+        ${item.notes ? `<span>${this._escapeTrendText(item.notes)}</span>` : ''}
+        ${item.active ? '' : '<em>已停用</em>'}
+      </div>`).join('')}</div>
+    </article>`).join('')}</div>` : '<div class="operations-data-notice" role="note"><strong>业务维度字典暂无记录</strong><span>事实链和指标来源仍可查看；这里不会用前端默认值伪造字典。</span></div>';
+    const metrics = [
+      ['净收入', 'business_layer_summary_v2.revenue_amount', 'business_revenue_facts_v2.net_amount', '四层已归类收入'],
+      ['销售成本', 'business_layer_summary_v2.sales_cost_amount', 'business_cost_facts_v2.cost_amount', '仅 sold_cogs / gallery_settlement'],
+      ['期间成本', 'business_layer_summary_v2.period_cost_amount', 'business_cost_facts_v2.cost_amount', '明确归属的非销售成本'],
+      ['总成本', 'business_layer_summary_v2.total_cost_amount', '汇总视图字段', '销售成本 + 期间成本'],
+      ['销售毛利', 'business_layer_summary_v2.gross_profit', '汇总视图字段', '净收入 − 销售成本'],
+      ['毛利率', 'business_layer_summary_v2.gross_margin', '汇总视图字段', '净收入为零时显示“—”'],
+      ['经营贡献', 'business_layer_summary_v2.operating_contribution', '汇总视图字段', '销售毛利 − 期间成本'],
+      ['待归类影响', 'data_governance_baseline_v2.affected_amount', '治理基线', '单独展示，不并入四层'],
+      ['1.0 / 2.0 差异', 'revenue_facts ↔ business_layer_summary_v2', '同年度净收入', '2.0 减 1.0，仅用于口径核对']
+    ];
+    return `<div class="operations-model-summary" aria-label="业务模型字典摘要">
+        <div><span>维度类型</span><strong>4</strong><small>冻结类型</small></div>
+        <div><span>字典项</span><strong>${model.totalCount}</strong><small>${model.activeCount} 启用 · ${model.inactiveCount} 停用</small></div>
+        <div><span>筛选关系</span><strong>全局</strong><small>不随年月变化</small></div>
+        <div><span>页面权限</span><strong>只读</strong><small>不提供字典写动作</small></div>
+      </div>
+      ${dictionaries}
+      <article class="operations-model-panel operations-fact-panel">
+        <header><div><span>01</span><strong>经营事实链</strong></div><small>从来源事实到页面展示</small></header>
+        <div class="operations-fact-chain">
+          <div><span>原始业务记录</span><strong>收入、支出、零售、画廊、工坊、空间</strong><small>保留来源表与来源 ID</small></div><b aria-hidden="true">→</b>
+          <div><span>2.0 只读事实</span><strong>收入事实 + 成本事实</strong><small><code>business_revenue_facts_v2</code> · <code>business_cost_facts_v2</code></small></div><b aria-hidden="true">→</b>
+          <div><span>利润与月度汇总</span><strong>利润事实 + 四层汇总</strong><small><code>business_profit_facts_v2</code> · <code>business_layer_summary_v2</code></small></div><b aria-hidden="true">→</b>
+          <div><span>运营管理页面</span><strong>总览、矩阵、趋势、治理</strong><small>显示视图字段，不重算另一套口径</small></div>
+        </div>
+      </article>
+      <article class="operations-model-panel">
+        <header><div><span>02</span><strong>页面指标映射</strong></div><small>字段来源与显示边界</small></header>
+        <div class="operations-model-table-wrap"><table class="operations-model-table"><thead><tr><th>页面指标</th><th>页面直接读取</th><th>事实来源</th><th>显示规则</th></tr></thead><tbody>${metrics.map(([label, display, source, rule]) => `<tr data-model-metric="${label}"><th scope="row">${label}</th><td><code>${display}</code></td><td><code>${source}</code></td><td>${rule}</td></tr>`).join('')}</tbody></table></div>
+      </article>
+      <p class="operations-method-note">业务字典读取自 <code>business_dimensions</code>。本区是全局模型说明，不随当前年月筛选变化；页面只展示冻结维度和事实来源，不修改原始事实、维度字典或 M4 治理结果。</p>`;
+  },
+
+  _setModelState(label, state) {
+    const indicator = document.getElementById('operations-model-state');
+    if (!indicator) return;
+    indicator.className = `operations-state-pill ${state}`;
+    indicator.textContent = label;
+  },
+
+  async _loadBusinessModel() {
+    const target = document.getElementById('operations-model-content');
+    if (!target) return false;
+    const loadId = ++this._modelLoadId;
+    this._setModelState('加载中', 'loading');
+    target.innerHTML = this._loadingHtml('业务模型');
+    try {
+      const rows = await Store._request('GET', '/rest/v1/business_dimensions?order=sort_order.asc&limit=500');
+      if (loadId !== this._modelLoadId) return false;
+      const model = this._buildBusinessModel(rows || []);
+      target.innerHTML = this._businessModelHtml(model);
+      this._setModelState(model.hasRows ? '数据已就绪' : '字典为空', model.hasRows ? 'ready' : 'empty');
+      return true;
+    } catch (error) {
+      if (loadId !== this._modelLoadId) return false;
+      this._setModelState('加载失败', 'error');
+      const model = this._buildBusinessModel([]);
+      target.innerHTML = `<div class="operations-error-state"><strong>业务维度字典加载失败</strong><span>无法读取冻结字典；经营总览、趋势和治理工作台不受影响。</span><button type="button" class="btn btn-sm btn-secondary" onclick="OperationsDashboard.refresh()">重新加载</button></div>${this._businessModelHtml(model)}`;
+      return false;
+    }
+  },
+
   _setGovernanceState(label, state) {
     const indicator = document.getElementById('operations-governance-state');
     if (!indicator) return;
@@ -587,9 +710,9 @@ const OperationsDashboard = {
     const status = document.getElementById('operations-refresh-status');
     if (refreshButton) refreshButton.disabled = true;
     if (status) status.textContent = `${message} · ${this._periodLabel()}`;
-    const [overviewOk, trendOk, governanceOk] = await Promise.all([this._loadOverview(), this._loadTrend(), this._loadGovernance()]);
+    const [overviewOk, trendOk, governanceOk, modelOk] = await Promise.all([this._loadOverview(), this._loadTrend(), this._loadGovernance(), this._loadBusinessModel()]);
     if (loadId !== this._loadAllId) return;
-    const results = [overviewOk, trendOk, governanceOk];
+    const results = [overviewOk, trendOk, governanceOk, modelOk];
     if (status) status.textContent = `${results.every(Boolean) ? '已更新' : results.some(Boolean) ? '部分数据加载失败' : '加载失败'} · ${this._periodLabel()}`;
     if (refreshButton) refreshButton.disabled = false;
   },
@@ -703,10 +826,8 @@ const OperationsDashboard = {
         </section>
 
         <section id="operations-model" class="card operations-section" tabindex="-1">
-          <div class="operations-section-heading"><div><span>05</span><h3>业务模型对应</h3></div><p>页面数字如何进入 2.0 经营结构</p></div>
-          <div class="operations-model-grid">
-            ${[['业务层','经营组合'],['业务类型','收入来源'],['成本类型','资源用途'],['能力轴','长期能力']].map(([name, desc]) => `<div><span>${name}</span><strong>${desc}</strong></div>`).join('')}
-          </div>
+          <div class="operations-section-heading"><div><span>05</span><h3>业务模型对应</h3><em id="operations-model-state" class="operations-state-pill loading">加载中</em></div><p>四类维度、事实来源和页面指标映射</p></div>
+          <div id="operations-model-content">${this._loadingHtml('业务模型')}</div>
         </section>
 
         <section id="operations-detail" class="card operations-section" tabindex="-1">
