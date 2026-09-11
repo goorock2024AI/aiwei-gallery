@@ -68,7 +68,9 @@
     "check:m5-stage-review": "node scripts/check-m5-stage-review.js",
     "check:m6-migrations": "node scripts/m6-02-fresh-database-rehearsal.js",
     "check:m6-core": "node scripts/check-m6-core-permissions.js",
-    "check:m6-reconciliation": "node scripts/check-m6-reconciliation.js"
+    "check:m6-reconciliation": "node scripts/check-m6-reconciliation.js",
+    "check:m6-rollout": "node scripts/check-m6-rollout-integration.js",
+    "check:m6-rollout-browser": "node scripts/check-m6-rollout-browser.js"
   },
   "dependencies": {
     "pdfkit": "^0.17.2",

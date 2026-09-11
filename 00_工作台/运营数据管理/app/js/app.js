@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-const APP_VERSION = '2.0.0-dev.m6-04.1';
-  const LAST_UPDATE = '2026-09-10';
+const APP_VERSION = '2.0.0-dev.m6-05.1';
+  const LAST_UPDATE = '2026-09-11';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
     const icpEl = document.getElementById('sidebar-icp');
@@ -31,6 +31,10 @@ const APP_VERSION = '2.0.0-dev.m6-04.1';
 
     // 未登录不允许切换
     if (!Auth.isLoggedIn) { return; }
+    if (!Auth.hasModuleAccess(tab)) {
+      if (tab === 'operations') UI.toast('运营管理入口当前未对该账号开放', 'error');
+      return;
+    }
 
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
@@ -89,7 +93,7 @@ const APP_VERSION = '2.0.0-dev.m6-04.1';
           $('#login-overlay').style.display = 'none';
           $('#change-pwd-overlay').style.display = 'flex';
         } else {
-          _enterApp();
+          await _enterApp();
         }
       } catch (err) {
         if (errEl) errEl.textContent = err.message;
@@ -112,7 +116,7 @@ const APP_VERSION = '2.0.0-dev.m6-04.1';
         await Auth.changePassword(pwd);
         UI.toast('密码修改成功');
         $('#change-pwd-overlay').style.display = 'none';
-        _enterApp();
+        await _enterApp();
       } catch (err) {
         if (errEl) errEl.textContent = err.message;
       } finally {
@@ -155,20 +159,36 @@ const APP_VERSION = '2.0.0-dev.m6-04.1';
   });
   document.getElementById('sidebar-toggle')?.addEventListener('click', _toggleSidebar);
 
+  function _applyModuleAccess() {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      const tab = btn.dataset.tab;
+      if (tab) btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
+    });
+    const operationsButton = document.querySelector('.tab-btn[data-tab="operations"]');
+    if (operationsButton) {
+      operationsButton.querySelector('.operations-rollout-badge')?.remove();
+      if (Auth.canAccessOperations()) {
+        const badge = document.createElement('span');
+        badge.className = 'operations-rollout-badge';
+        badge.textContent = Auth.operationsMode === 'admin' ? '管理员试运行' : '内部试运行';
+        operationsButton.appendChild(badge);
+        operationsButton.title = `2.0 运营管理 · ${badge.textContent}`;
+      } else {
+        operationsButton.removeAttribute('title');
+      }
+    }
+  }
+  window.refreshModuleAccess = _applyModuleAccess;
+
   // 进入主应用
-  function _enterApp() {
+  async function _enterApp() {
     $('#login-overlay').style.display = 'none';
     $('#change-pwd-overlay').style.display = 'none';
     $('#app').style.display = '';
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    // 角色权限控制：各 tab 按 hasModuleAccess 显示/隐藏
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      const tab = btn.dataset.tab;
-      if (tab) {
-        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
-      }
-    });
+    await Auth.loadOperationsRollout();
+    _applyModuleAccess();
     // 正常初始化
     _initApp();
   }
@@ -194,17 +214,11 @@ const APP_VERSION = '2.0.0-dev.m6-04.1';
     // 已登录
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      const tab = btn.dataset.tab;
-      if (tab) {
-        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
-      }
-    });
     if (Auth.currentUser.needPasswordChange) {
       $('#login-overlay').style.display = 'none';
       $('#change-pwd-overlay').style.display = 'flex';
       return;
     }
-    _enterApp();
+    await _enterApp();
   });
 })();

@@ -1265,6 +1265,9 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
+          if (dbTable === 'app_config' && data.key === 'operations_rollout') {
+            return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+          }
           if (!data.created_at) data.created_at = new Date().toISOString();
           data = normalizeTimestamps(data);
           const guard = guardEditorWrite(requester, dbTable, method, data);
@@ -1304,6 +1307,9 @@ async function handleREST(req, res, urlInfo) {
       } else {
         return sendError(res, 400, 'Missing id filter');
       }
+      if (dbTable === 'app_config' && filterVal === 'operations_rollout') {
+        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      }
 
       let body = '';
       req.on('data', chunk => body += chunk.toString('utf8'));
@@ -1311,6 +1317,9 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
+          if (dbTable === 'app_config' && data.key === 'operations_rollout') {
+            return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+          }
           data = normalizeTimestamps(data);
           const guard = guardEditorWrite(requester, dbTable, method, data);
           if (!guard.ok) return sendError(res, 403, guard.message);
@@ -1340,6 +1349,9 @@ async function handleREST(req, res, urlInfo) {
     // --- DELETE /rest/v1/table?id=eq.xxx ---
     else if (method === 'DELETE') {
       if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可删除数据');
+      if (dbTable === 'app_config' && (parts[3] === 'operations_rollout' || query.key === 'eq.operations_rollout')) {
+        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      }
       let idVal;
       if (query.id && query.id.startsWith('eq.')) {
         idVal = query.id.slice(3);
@@ -1353,6 +1365,9 @@ async function handleREST(req, res, urlInfo) {
           return sendJSON(res, 200, []);
         }
         return sendError(res, 400, 'Missing id filter');
+      }
+      if (dbTable === 'app_config' && (idVal === 'operations_rollout' || query.key === 'eq.operations_rollout')) {
+        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
       }
 
       await pool.query(`DELETE FROM "${dbTable}" WHERE "id" = $1`, [idVal]);
@@ -1427,6 +1442,93 @@ async function handleOperationLog(req, res) {
   });
 }
 
+const OPERATIONS_ROLLOUT_MODES = new Set(['off', 'admin', 'staff']);
+
+function rolloutModeFromValue(value) {
+  const mode = typeof value === 'string' ? value : value?.mode;
+  return OPERATIONS_ROLLOUT_MODES.has(mode) ? mode : 'off';
+}
+
+function rolloutEnabledForRole(mode, role) {
+  if (mode === 'staff') return role === 'admin' || role === 'editor';
+  if (mode === 'admin') return role === 'admin';
+  return false;
+}
+
+async function readOperationsRollout(client = pool) {
+  const result = await client.query("SELECT value,updated_at FROM app_config WHERE key='operations_rollout'");
+  const row = result.rows[0];
+  return { mode: rolloutModeFromValue(row?.value), updatedAt: row?.updated_at || null };
+}
+
+async function handleOperationsRollout(req, res) {
+  const requester = await getRequester(req);
+  if (!requester) return sendError(res, 401, '未登录或登录已过期');
+
+  if (req.method === 'GET') {
+    try {
+      const rollout = await readOperationsRollout();
+      return sendJSON(res, 200, {
+        ...rollout,
+        enabled: rolloutEnabledForRole(rollout.mode, requester.role),
+        role: requester.role
+      });
+    } catch (error) {
+      return sendError(res, 500, '读取运营管理灰度状态失败：' + error.message);
+    }
+  }
+
+  if (req.method !== 'POST') return sendError(res, 405, '仅支持 GET 和 POST');
+  if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可变更运营管理灰度范围');
+
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', async () => {
+    let client;
+    try {
+      const input = JSON.parse(body || '{}');
+      const mode = String(input.mode || '').trim();
+      const reason = String(input.reason || '').trim();
+      if (!OPERATIONS_ROLLOUT_MODES.has(mode)) return sendError(res, 400, '灰度模式必须为 off、admin 或 staff');
+      if (reason.length < 4 || reason.length > 300) return sendError(res, 400, '变更原因须为 4–300 个字符');
+
+      client = await pool.connect();
+      await client.query('BEGIN');
+      await client.query(`INSERT INTO app_config(key,value,updated_at)
+        VALUES('operations_rollout','{"mode":"off"}'::jsonb,NOW()) ON CONFLICT(key) DO NOTHING`);
+      const locked = await client.query("SELECT value FROM app_config WHERE key='operations_rollout' FOR UPDATE");
+      const oldMode = rolloutModeFromValue(locked.rows[0]?.value);
+      if (oldMode === mode) {
+        await client.query('ROLLBACK');
+        return sendError(res, 409, '灰度模式没有变化');
+      }
+      const changedAt = new Date().toISOString();
+      await client.query(`INSERT INTO app_config(key,value,updated_at)
+        VALUES('operations_rollout',$1,$2)
+        ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`,
+      [JSON.stringify({ mode }), changedAt]);
+      const logId = `log_rollout_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      await client.query(`INSERT INTO operation_logs(id,user_id,action,table_name,record_id,details,created_at)
+        VALUES($1,$2,'operations_rollout_change','app_config','operations_rollout',$3,$4)`,
+      [logId, requester.id, JSON.stringify({ oldMode, newMode: mode, reason }), changedAt]);
+      await client.query('COMMIT');
+      sendJSON(res, 200, {
+        mode,
+        previousMode: oldMode,
+        enabled: rolloutEnabledForRole(mode, requester.role),
+        role: requester.role,
+        reason,
+        updatedAt: changedAt
+      });
+    } catch (error) {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      sendError(res, 400, error.message);
+    } finally {
+      client?.release();
+    }
+  });
+}
+
 // --- Static file server ---
 function serveStatic(req, res, pathname) {
   let filePath = path.join(STATIC_DIR, pathname === '/' ? '/index.html' : pathname);
@@ -1477,6 +1579,8 @@ const server = http.createServer((req, res) => {
   if (parts[0] === 'rest' && parts[1] === 'v1') {
     if (parts[2] === 'operation-log') {
       handleOperationLog(req, res);
+    } else if (parts[2] === 'operations-rollout') {
+      handleOperationsRollout(req, res);
     } else if (parts[2] === 'expense-entry') {
       handleExpenseEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'gallery-entry') {

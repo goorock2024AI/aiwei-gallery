@@ -1091,7 +1091,7 @@ const OperationsDashboard = {
     const page = document.getElementById('page-operations');
     if (!page) return;
     if (!Auth.hasModuleAccess('operations')) {
-      page.innerHTML = '<div class="card"><div class="empty-state">当前账号无权查看运营管理信息</div></div>';
+      page.innerHTML = '<div class="card"><div class="empty-state">运营管理当前未对该账号开放</div></div>';
       return;
     }
     this._period ||= this._defaultPeriod();
@@ -1100,7 +1100,7 @@ const OperationsDashboard = {
       <div class="operations-shell" data-period="${this._period.year}-${this._period.month}">
         <header class="operations-hero">
           <div>
-            <div class="operations-eyebrow">AIWEI · OPERATIONS 2.0</div>
+            <div class="operations-eyebrow">AIWEI · OPERATIONS 2.0 <span class="operations-trial-badge">${this._escapeTrendText(Auth.operationsRolloutLabel)}</span></div>
             <h2>美术馆运营管理</h2>
             <p>从四大业务层理解经营结果，同时保留口径差异和数据治理问题。</p>
           </div>

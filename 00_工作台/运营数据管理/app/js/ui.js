@@ -6130,6 +6130,29 @@ const UI = {
       </div>`;
   },
 
+  _operationsRolloutCardHtml() {
+    const mode = Auth.operationsMode;
+    const updatedAt = Auth.operationsRolloutUpdatedAt;
+    const updatedLabel = updatedAt ? String(updatedAt).slice(0, 19).replace('T', ' ') : '尚无变更记录';
+    return `<div class="card manage-section operations-rollout-card" id="operations-rollout-card">
+        <h3>🚦 2.0 运营管理灰度开关 <span class="tag tag-info">${this._escHtml(Auth.operationsRolloutLabel)}</span></h3>
+        <p class="manage-desc">控制“运营管理”入口和页面访问范围。关闭时不影响收入、支出、空间、画廊等 1.0 功能；运营敏感接口仍按服务端角色权限校验。</p>
+        <div class="operations-rollout-status">
+          <strong>当前范围：${this._escHtml(Auth.operationsRolloutLabel)}</strong>
+          <span>最近更新时间：${this._escHtml(updatedLabel)}</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label for="operations-rollout-mode">开放范围</label><select id="operations-rollout-mode">
+            <option value="off"${mode === 'off' ? ' selected' : ''}>关闭（所有账号隐藏）</option>
+            <option value="admin"${mode === 'admin' ? ' selected' : ''}>管理员试运行</option>
+            <option value="staff"${mode === 'staff' ? ' selected' : ''}>内部试运行（管理员与编辑）</option>
+          </select></div>
+          <div class="form-group"><label for="operations-rollout-reason">变更原因</label><input id="operations-rollout-reason" maxlength="300" placeholder="至少 4 个字，将写入审计日志"></div>
+          <div class="form-actions full"><button type="button" class="btn btn-primary" onclick="UI._saveOperationsRollout()">保存灰度范围</button></div>
+        </div>
+      </div>`;
+  },
+
   async renderManagePage() {
     const page = $('#page-manage');
     if (!Auth.hasModuleAccess('manage')) { this._noAccess(page); return; }
@@ -6139,7 +6162,7 @@ const UI = {
       await this._loadGovernanceBatches();
       return;
     }
-    html(page, `${governanceCard}
+    html(page, `${this._operationsRolloutCardHtml()}${governanceCard}
 <div class="card manage-section">
         <h3>📤 导出数据</h3>
         <p class="manage-desc">选择导出时间范围（留空为全部数据）：</p>
@@ -6183,6 +6206,25 @@ const UI = {
     await this._updateManageStats();
     await this._loadGovernanceBatches();
     this._checkDBStatus();
+  },
+
+  async _saveOperationsRollout() {
+    if (!Auth.isAdmin) return this.toast('仅管理员可变更运营管理灰度范围', 'error');
+    const mode = $('#operations-rollout-mode')?.value || '';
+    const reason = $('#operations-rollout-reason')?.value.trim() || '';
+    if (reason.length < 4) return this.toast('请填写至少 4 个字的变更原因', 'error');
+    try {
+      await Auth.updateOperationsRollout(mode, reason);
+      window.refreshModuleAccess?.();
+      const operationsPage = $('#page-operations');
+      if (operationsPage?.classList.contains('active') && !Auth.canAccessOperations()) {
+        document.querySelector('.tab-btn[data-tab="revenue"]')?.click();
+      }
+      this.toast(`运营管理已切换为“${Auth.operationsRolloutLabel}”`);
+      await this.renderManagePage();
+    } catch (error) {
+      this.toast('灰度范围保存失败：' + (error.message || error), 'error');
+    }
   },
 
   async _createGovernanceBatch() {

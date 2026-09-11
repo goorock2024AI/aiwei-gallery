@@ -64,8 +64,8 @@ function targetConfig(adminConfig, database) {
 
 function verifyManifest(manifest) {
   assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.forward.length, 18, 'Forward chain must contain the 1.0 approval prerequisite and M3-02 through M4-09');
-  assert.equal(manifest.rollback.length, 14, 'Rollback chain must contain the supported reverse path');
+  assert.equal(manifest.forward.length, 19, 'Forward chain must contain the 1.0 approval prerequisite and M3-02 through M6-05');
+  assert.equal(manifest.rollback.length, 15, 'Rollback chain must contain the supported reverse path');
   const entries = [manifest.baseline, ...manifest.forward, ...manifest.rollback];
   const seen = new Set();
   for (const entry of entries) {
@@ -159,6 +159,8 @@ async function validateForwardState(client) {
   assert.equal(Number(facts.classified_revenue), 50, 'Classified v2 revenue must exclude the pending other amount');
   assert.ok(facts.issues >= 1, 'Pending legacy facts must remain visible in governance');
   assert.equal(facts.summary_rows, 4, 'Each populated month must preserve four business layers');
+  const rolloutMode = (await client.query("SELECT value->>'mode' mode FROM app_config WHERE key='operations_rollout'")).rows[0]?.mode;
+  assert.equal(rolloutMode, 'off', 'Fresh databases must default the operations module to off');
   return { dimensions: 28, requiredTables: requiredTables.length, requiredViews: requiredViews.length };
 }
 
@@ -174,6 +176,8 @@ async function validateRollbackState(client) {
     WHERE n.nspname='public' AND c.relname=ANY($1) AND c.relkind='r'`,
   [['governance_batches', 'governance_batch_items', 'governance_batch_events']])).rows[0].count;
   assert.equal(auditTables, 3, 'M4 audit tables must be retained even when their summary view is disabled');
+  const rolloutRows = (await client.query("SELECT COUNT(*)::INTEGER count FROM app_config WHERE key='operations_rollout'")).rows[0].count;
+  assert.equal(rolloutRows, 0, 'M6-05 rollback must remove the rollout configuration');
 }
 
 async function applyEntries(client, entries, phase, timings) {

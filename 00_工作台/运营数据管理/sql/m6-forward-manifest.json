@@ -78,9 +78,17 @@
     {
       "path": "sql/20260909_m4_09_governance_batches.sql",
       "sha256": "8c363572b720ea2f66d92dc9aeddb1f1d09d6db3391b5bf9d4a1f56181add78c"
+    },
+    {
+      "path": "sql/20260911_m6_05_operations_rollout.sql",
+      "sha256": "4c716dcfaca83458302000cbe44beb5a1f02bb3f1efdd0760a6fcc6ba47bd6d2"
     }
   ],
   "rollback": [
+    {
+      "path": "sql/20260911_m6_05_rollback.sql",
+      "sha256": "b6dc5e0cc42f3bcf5f20407db3e2487d3f3f9700c8af0db0c9b51ac3363de053"
+    },
     {
       "path": "sql/20260909_m4_09_rollback.sql",
       "sha256": "bf4c51d24a3c7d321609186b9a6ecb4fe38d2853bdb021205469d2dc8aa08f52"

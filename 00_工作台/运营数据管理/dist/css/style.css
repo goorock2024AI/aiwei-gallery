@@ -815,6 +815,10 @@ table.data-table .tag {
 /* 数据管理 */
 .manage-section { margin-bottom: 20px; }
 .manage-section h3 { font-size: 14px; color: var(--gray-700); margin-bottom: 10px; }
+.operations-rollout-status { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px 14px; margin:12px 0 16px; border:1px solid #d8e7dd; border-radius:var(--radius-sm); background:#f4faf6; color:#335b43; font-size:13px; }
+.operations-rollout-status span { color:var(--gray-600); }
+.operations-rollout-badge { margin-left:auto; padding:2px 6px; border-radius:999px; background:rgba(255,255,255,.16); color:inherit; font-size:10px; line-height:1.4; white-space:nowrap; }
+.operations-trial-badge { display:inline-flex; margin-left:7px; padding:3px 8px; border:1px solid rgba(255,255,255,.36); border-radius:999px; background:rgba(255,255,255,.12); color:#fff; font-size:11px; font-weight:600; letter-spacing:.04em; vertical-align:middle; }
 
 /* 空状态 */
 .empty-state {

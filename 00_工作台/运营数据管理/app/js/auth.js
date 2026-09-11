@@ -1,6 +1,7 @@
 // auth.js — 用户认证（通过自有 REST API）
 const Auth = {
   _currentUser: null,
+  _operationsRollout: { mode: 'off', enabled: false, updatedAt: null },
 
   init() {
     try {
@@ -72,6 +73,32 @@ const Auth = {
     }
     user.needPasswordChange = false;
     sessionStorage.setItem('aiwei_user', JSON.stringify(user));
+  },
+
+  async loadOperationsRollout() {
+    try {
+      const rollout = await this._fetch('GET', '/rest/v1/operations-rollout');
+      this._operationsRollout = {
+        mode: ['off', 'admin', 'staff'].includes(rollout?.mode) ? rollout.mode : 'off',
+        enabled: rollout?.enabled === true,
+        updatedAt: rollout?.updatedAt || null
+      };
+    } catch (error) {
+      console.error('加载运营管理灰度状态失败：', error);
+      this._operationsRollout = { mode: 'off', enabled: false, updatedAt: null };
+    }
+    return this._operationsRollout;
+  },
+
+  async updateOperationsRollout(mode, reason) {
+    if (!this.isAdmin) throw new Error('仅管理员可变更运营管理灰度范围');
+    const rollout = await this._fetch('POST', '/rest/v1/operations-rollout', { mode, reason });
+    this._operationsRollout = {
+      mode: rollout.mode,
+      enabled: rollout.enabled === true,
+      updatedAt: rollout.updatedAt || null
+    };
+    return rollout;
   },
 
   async addUser(data) {
@@ -178,6 +205,17 @@ const Auth = {
     return map[this._currentUser?.role] || '未知';
   },
   get currentUser() { return this._currentUser; },
+  get operationsMode() { return this._operationsRollout?.mode || 'off'; },
+  get operationsRolloutUpdatedAt() { return this._operationsRollout?.updatedAt || null; },
+  get operationsRolloutLabel() {
+    return { off: '已关闭', admin: '管理员试运行', staff: '内部试运行' }[this.operationsMode] || '已关闭';
+  },
+
+  canAccessOperations() {
+    if (!this._currentUser || this.operationsMode === 'off') return false;
+    if (this.operationsMode === 'admin') return this.isAdmin;
+    return this.isAdmin || this.isEditor;
+  },
 
   authHeaders() {
     const token = this._currentUser?.token;
@@ -215,6 +253,7 @@ const Auth = {
 
   hasModuleAccess(moduleKey) {
     if (!this._currentUser) return false;
+    if (moduleKey === 'operations') return this.canAccessOperations();
     const role = this._currentUser.role;
     const accessMap = {
       revenue:  ['admin', 'editor', 'viewer'],
@@ -223,7 +262,6 @@ const Auth = {
       space:    ['admin', 'editor', 'viewer'],
       'daily-closing': ['admin', 'editor', 'viewer'],
       'project-list': ['admin', 'editor', 'viewer'],
-      operations: ['admin', 'editor'],
       reports:  ['admin', 'editor', 'viewer'],
       manage:   ['admin', 'editor'],
       products: ['admin', 'editor'],
