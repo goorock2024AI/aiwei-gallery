@@ -40,30 +40,22 @@ echo " Server: $SERVER_IP"
 echo "=============================================="
 
 info "1/6 Packaging deployment files..."
-for f in Dockerfile docker-compose.yml nginx.conf server.js trial-observability.js VERSION package.json app/index.html sql/m6-forward-manifest.json; do
+for f in Dockerfile docker-compose.yml nginx.conf server.js expense-entry.js gallery-entry.js space-entry.js governance-batches.js trial-observability.js VERSION package.json app/index.html app/js/supabase-config.js scripts/build-version.js scripts/backup-db.sh sql/m6-forward-manifest.json sql/m6-07-baseline.sql; do
   if [ ! -f "$f" ]; then
     error "Missing required file: $f"
     exit 1
   fi
 done
 
-if grep -q "122.51.56.50" app/js/supabase-config.js; then
-  info "  supabase-config.js API URL is correct"
-else
-  info "  Updating supabase-config.js API URL..."
-  sed -i "s|url:.*|url: 'http://$SERVER_IP',|" app/js/supabase-config.js
-fi
-
-node scripts/build-version.js
-
 rm -rf deploy-pkg
 mkdir -p deploy-pkg
 cp Dockerfile docker-compose.yml nginx.conf server.js expense-entry.js gallery-entry.js space-entry.js governance-batches.js trial-observability.js VERSION package.json deploy-pkg/
 cp -r app deploy-pkg/app
 cp -r scripts deploy-pkg/scripts
-mkdir -p deploy-pkg/sql
-cp sql/m6-forward-manifest.json deploy-pkg/sql/
+cp -r sql deploy-pkg/sql
 rm -f deploy-pkg/app/lib/supabase.umd.min.js
+sed -i "s|url:.*|url: 'http://$SERVER_IP',|" deploy-pkg/app/js/supabase-config.js
+node scripts/build-version.js
 printf "DB_PASSWORD=%s\n" "$DB_PASSWORD" > deploy-pkg/.env
 
 tar czf "$PACKAGE" -C deploy-pkg .
@@ -114,23 +106,35 @@ docker compose build
 docker compose up -d
 
 info "Checking PostgreSQL..."
+db_ready=0
 for i in $(seq 1 30); do
   if docker compose exec -T db pg_isready -U postgres >/dev/null 2>&1; then
     info "PostgreSQL is ready"
+    db_ready=1
     break
   fi
   sleep 2
 done
+if [ "$db_ready" -ne 1 ]; then
+  echo "[ERROR] PostgreSQL readiness check failed"
+  exit 1
+fi
 
 info "Checking API..."
 sleep 3
+api_ready=0
 for i in $(seq 1 15); do
-  if docker compose exec -T api wget -qO- http://localhost:3000/rest/v1/revenue?limit=1 >/dev/null 2>&1; then
+  if docker compose exec -T api wget -qO- http://localhost:3000/healthz >/dev/null 2>&1; then
     info "API is ready"
+    api_ready=1
     break
   fi
   sleep 2
 done
+if [ "$api_ready" -ne 1 ]; then
+  echo "[ERROR] API readiness check failed"
+  exit 1
+fi
 
 info "Checking Nginx..."
 sleep 2

@@ -48,9 +48,13 @@ try {
   $localDump = Join-Path $LocalBackupDir $backupName
   $localManifest = "$localDump.manifest"
   $localSha = "$localDump.sha256"
+  $localBaseline = "$localDump.baseline.json"
+  $localBaselineSha = "$localBaseline.sha256"
   $remoteDump = "$RemoteAppDir/$remoteRelative"
   $remoteManifest = "$remoteDump.manifest"
   $remoteSha = "$remoteDump.sha256"
+  $remoteBaseline = "$remoteDump.baseline.json"
+  $remoteBaselineSha = "$remoteBaseline.sha256"
 
   Write-BackupLog "downloading $remoteDump"
   & scp.exe -o ConnectTimeout=20 "$User@$Server`:$remoteDump" "$localDump" | Out-Null
@@ -58,6 +62,9 @@ try {
 
   & scp.exe -o ConnectTimeout=20 "$User@$Server`:$remoteManifest" "$localManifest" | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "scp manifest failed" }
+
+  & scp.exe -o ConnectTimeout=20 "$User@$Server`:$remoteBaseline" "$localBaseline" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "scp baseline failed" }
 
   $remoteShaText = (& ssh.exe -o ConnectTimeout=20 "$User@$Server" "cat $remoteSha" 2>&1)
   if ($LASTEXITCODE -ne 0) { throw "read remote sha256 failed: $remoteShaText" }
@@ -67,11 +74,22 @@ try {
     throw "sha256 mismatch: remote=$remoteHash local=$localHash"
   }
 
+  $remoteBaselineShaText = (& ssh.exe -o ConnectTimeout=20 "$User@$Server" "cat $remoteBaselineSha" 2>&1)
+  if ($LASTEXITCODE -ne 0) { throw "read remote baseline sha256 failed: $remoteBaselineShaText" }
+  $remoteBaselineHash = (($remoteBaselineShaText | Select-Object -First 1) -split "\s+")[0].ToLowerInvariant()
+  $localBaselineHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $localBaseline).Hash.ToLowerInvariant()
+  if ($remoteBaselineHash -ne $localBaselineHash) {
+    throw "baseline sha256 mismatch: remote=$remoteBaselineHash local=$localBaselineHash"
+  }
+
   "$localHash  $localDump" | Set-Content -LiteralPath $localSha -Encoding ASCII
+  "$localBaselineHash  $localBaseline" | Set-Content -LiteralPath $localBaselineSha -Encoding ASCII
   Add-Content -LiteralPath $localManifest -Encoding UTF8 -Value @(
     "local_downloaded_at=$(Get-Date -Format o)",
     "local_file=$localDump",
     "local_sha256=$localHash",
+    "local_baseline_file=$localBaseline",
+    "local_baseline_sha256=$localBaselineHash",
     "local_retention_days=$RetentionDays"
   )
 
@@ -83,6 +101,8 @@ try {
       Remove-Item -LiteralPath $base -Force
       Remove-Item -LiteralPath "$base.sha256" -Force -ErrorAction SilentlyContinue
       Remove-Item -LiteralPath "$base.manifest" -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath "$base.baseline.json" -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath "$base.baseline.json.sha256" -Force -ErrorAction SilentlyContinue
       Write-BackupLog "removed expired backup $base"
     }
 

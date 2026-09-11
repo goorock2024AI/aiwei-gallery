@@ -1571,6 +1571,13 @@ const server = http.createServer((req, res) => {
   const urlInfo = parsePath(req.url);
   const { pathname, parts } = urlInfo;
 
+  if (req.method === 'GET' && pathname === '/healthz') {
+    pool.query('SELECT 1')
+      .then(() => sendJSON(res, 200, { status: 'ok' }))
+      .catch(() => sendJSON(res, 503, { status: 'down' }));
+    return;
+  }
+
   // CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {

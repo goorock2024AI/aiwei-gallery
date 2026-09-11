@@ -28,6 +28,10 @@ function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
+function canonicalSqlBytes(buffer) {
+  return Buffer.from(buffer.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+}
+
 function quotedIdentifier(value) {
   assert.match(value, /^aiwei_m6_[a-z0-9_]+$/, 'Database name must use the aiwei_m6_ prefix');
   return `"${value}"`;
@@ -72,7 +76,7 @@ function verifyManifest(manifest) {
   for (const entry of entries) {
     const absolutePath = path.join(projectDir, entry.path);
     assert.ok(fs.existsSync(absolutePath), `Missing manifest file: ${entry.path}`);
-    const actual = sha256(fs.readFileSync(absolutePath));
+    const actual = sha256(canonicalSqlBytes(fs.readFileSync(absolutePath)));
     assert.equal(actual, entry.sha256, `Checksum mismatch: ${entry.path}`);
     assert.ok(!seen.has(entry.path), `Duplicate manifest path: ${entry.path}`);
     seen.add(entry.path);

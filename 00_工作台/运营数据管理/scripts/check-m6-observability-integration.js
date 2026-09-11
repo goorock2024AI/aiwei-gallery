@@ -5,6 +5,7 @@ const { Client } = require('pg');
 const cfg = JSON.parse(fs.readFileSync('tmp/m3-05-test.json', 'utf8'));
 if (cfg.host !== '127.0.0.1' || cfg.port !== 55435 || cfg.database !== 'aiwei_m3_05_test') throw new Error('Requires the dedicated local M6 database');
 const base = process.env.M6_API_BASE || 'http://127.0.0.1:3132/rest/v1';
+const expectedVersion = fs.readFileSync('VERSION', 'utf8').trim();
 const tokens = {};
 let checks = 0;
 
@@ -37,7 +38,7 @@ async function request(path, { method = 'GET', body, role = 'admin', expected = 
     await request('runtime-observability', { role: 'none', expected: 401 });
     await request('runtime-observability', { role: 'viewer', expected: 403 });
     const baseline = await request('runtime-observability', { role: 'editor' });
-    assert.equal(baseline.application.version, '2.0.0-dev.m6-06.1');
+    assert.equal(baseline.application.version, expectedVersion);
     assert.equal(baseline.database.ok, true);
     assert.equal(baseline.migration.forwardFiles, 20);
     assert.equal(baseline.migration.rollbackFiles, 16);

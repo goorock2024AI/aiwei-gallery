@@ -31,6 +31,11 @@ services:
       UPLOAD_DIR: /uploads
     volumes:
       - uploads-data:/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/healthz >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     networks:
       - aiwei-net
 
@@ -45,7 +50,8 @@ services:
       - ./app:/usr/share/nginx/html:ro
       - uploads-data:/var/cache/nginx/uploads:ro
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - aiwei-net
 

@@ -72,7 +72,9 @@
     "check:m6-rollout": "node scripts/check-m6-rollout-integration.js",
     "check:m6-rollout-browser": "node scripts/check-m6-rollout-browser.js",
     "check:m6-observability": "node scripts/check-m6-observability-integration.js",
-    "check:m6-observability-browser": "node scripts/check-m6-observability-browser.js"
+    "check:m6-observability-browser": "node scripts/check-m6-observability-browser.js",
+    "check:m6-restore": "node scripts/m6-07-restore-rehearsal.js",
+    "check:m6-release": "node scripts/m6-07-release-preflight.js"
   },
   "dependencies": {
     "pdfkit": "^0.17.2",
