@@ -9,6 +9,7 @@ SERVER_IP="${SERVER_IP:-122.51.56.50}"
 SERVER_USER="${SERVER_USER:-root}"
 APP_DIR="${APP_DIR:-/opt/aiwei}"
 PACKAGE="${PACKAGE:-aiwei-deploy.tar.gz}"
+AIWEI_HTTP_PORT="${AIWEI_HTTP_PORT:-8081}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -56,7 +57,7 @@ cp -r sql deploy-pkg/sql
 rm -f deploy-pkg/app/lib/supabase.umd.min.js
 sed -i "s|url:.*|url: 'http://$SERVER_IP',|" deploy-pkg/app/js/supabase-config.js
 node scripts/build-version.js
-printf "DB_PASSWORD=%s\n" "$DB_PASSWORD" > deploy-pkg/.env
+printf "DB_PASSWORD=%s\nAIWEI_HTTP_PORT=%s\n" "$DB_PASSWORD" "$AIWEI_HTTP_PORT" > deploy-pkg/.env
 
 tar czf "$PACKAGE" -C deploy-pkg .
 rm -rf deploy-pkg
@@ -124,7 +125,7 @@ info "Checking API..."
 sleep 3
 api_ready=0
 for i in $(seq 1 15); do
-  if docker compose exec -T api wget -qO- http://localhost:3000/healthz >/dev/null 2>&1; then
+  if docker compose exec -T api wget -qO- http://127.0.0.1:3000/healthz >/dev/null 2>&1; then
     info "API is ready"
     api_ready=1
     break
