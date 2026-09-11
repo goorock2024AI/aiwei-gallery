@@ -82,9 +82,17 @@
     {
       "path": "sql/20260911_m6_05_operations_rollout.sql",
       "sha256": "4c716dcfaca83458302000cbe44beb5a1f02bb3f1efdd0760a6fcc6ba47bd6d2"
+    },
+    {
+      "path": "sql/20260911_m6_06_trial_observability.sql",
+      "sha256": "5da57205bdc7a76ee1a39e5ba316d4fe53d415c68c25dbc0ca001d27d5fd1917"
     }
   ],
   "rollback": [
+    {
+      "path": "sql/20260911_m6_06_rollback.sql",
+      "sha256": "9785c824fd2d0d91c633b6cd30ac640997167d28ab17d86c050fd43c7f13aca7"
+    },
     {
       "path": "sql/20260911_m6_05_rollback.sql",
       "sha256": "b6dc5e0cc42f3bcf5f20407db3e2487d3f3f9700c8af0db0c9b51ac3363de053"

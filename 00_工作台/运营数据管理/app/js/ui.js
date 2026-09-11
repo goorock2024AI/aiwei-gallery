@@ -6153,16 +6153,37 @@ const UI = {
       </div>`;
   },
 
+  _trialObservabilityCardHtml() {
+    return `<div class="card manage-section trial-observability-card" id="trial-observability-card">
+        <h3>🩺 2.0 试运行观测与问题闭环 <span id="trial-gate-tag" class="tag tag-info">检查中</span></h3>
+        <p class="manage-desc">集中检查版本、数据库、迁移、灰度、API 错误和耗时。P0/P1 必须完成修正并由管理员复验，才可通过 G0。</p>
+        <div id="trial-runtime-summary"><div class="empty-state">正在读取运行状态...</div></div>
+        <details class="trial-issue-form"><summary>登记试运行问题</summary>
+          <div class="form-grid" style="margin-top:14px">
+            <div class="form-group"><label for="trial-issue-severity">级别</label><select id="trial-issue-severity"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></div>
+            <div class="form-group"><label for="trial-issue-title">问题标题</label><input id="trial-issue-title" maxlength="160" placeholder="明确描述触发条件和异常"></div>
+            <div class="form-group"><label for="trial-issue-owner">负责人</label><input id="trial-issue-owner" maxlength="120" placeholder="姓名或角色"></div>
+            <div class="form-group"><label for="trial-issue-due">截止日期</label><input id="trial-issue-due" type="date"></div>
+            <div class="form-group full"><label for="trial-issue-evidence">证据</label><textarea id="trial-issue-evidence" rows="2" maxlength="2000" placeholder="错误时间、接口、来源 ID、截图或日志位置"></textarea></div>
+            <div class="form-group full"><label for="trial-issue-impact">影响</label><textarea id="trial-issue-impact" rows="2" maxlength="1000" placeholder="影响范围、金额、角色或业务流程"></textarea></div>
+            <div class="form-actions full"><button type="button" class="btn btn-primary" onclick="UI._createTrialIssue()">登记问题</button></div>
+          </div>
+        </details>
+        <div id="trial-issues-list"><div class="empty-state">正在加载问题台账...</div></div>
+      </div>`;
+  },
+
   async renderManagePage() {
     const page = $('#page-manage');
     if (!Auth.hasModuleAccess('manage')) { this._noAccess(page); return; }
     const governanceCard = this._governanceBatchCardHtml();
+    const observabilityCard = this._trialObservabilityCardHtml();
     if (!Auth.isAdmin) {
-      html(page, governanceCard);
-      await this._loadGovernanceBatches();
+      html(page, `${observabilityCard}${governanceCard}`);
+      await Promise.all([this._loadTrialRunConsole(), this._loadGovernanceBatches()]);
       return;
     }
-    html(page, `${this._operationsRolloutCardHtml()}${governanceCard}
+    html(page, `${this._operationsRolloutCardHtml()}${observabilityCard}${governanceCard}
 <div class="card manage-section">
         <h3>📤 导出数据</h3>
         <p class="manage-desc">选择导出时间范围（留空为全部数据）：</p>
@@ -6204,8 +6225,102 @@ const UI = {
       </div>
           `);
     await this._updateManageStats();
-    await this._loadGovernanceBatches();
+    await Promise.all([this._loadTrialRunConsole(), this._loadGovernanceBatches()]);
     this._checkDBStatus();
+  },
+
+  async _loadTrialRunConsole() {
+    const summaryTarget = $('#trial-runtime-summary');
+    const issueTarget = $('#trial-issues-list');
+    if (!summaryTarget || !issueTarget) return;
+    try {
+      const [runtime, issues] = await Promise.all([
+        Store._request('GET', '/rest/v1/runtime-observability'),
+        Store._request('GET', '/rest/v1/trial-run-issues')
+      ]);
+      this._trialRunIssues = issues || [];
+      const gate = runtime.gate || {};
+      const gateTag = $('#trial-gate-tag');
+      if (gateTag) {
+        gateTag.className = `tag ${gate.ready ? 'tag-success' : 'tag-warning'}`;
+        gateTag.textContent = gate.ready ? 'G0 可通过' : 'G0 已阻断';
+      }
+      const requests = runtime.requests || {};
+      const migration = runtime.migration || {};
+      summaryTarget.innerHTML = `<div class="trial-runtime-grid">
+        <article><span>应用版本</span><strong>${this._escHtml(runtime.application?.version || 'unknown')}</strong><small>运行 ${Math.floor((runtime.application?.uptimeSeconds || 0) / 60)} 分钟</small></article>
+        <article><span>数据库</span><strong>${runtime.database?.ok ? '正常' : '异常'}</strong><small>${this._fmt(runtime.database?.latencyMs || 0)} ms</small></article>
+        <article><span>迁移结构</span><strong>${migration.presentRelations || 0}/${migration.requiredRelations || 0}</strong><small>${migration.missingRelations?.length ? `缺少 ${migration.missingRelations.length} 项` : `${migration.forwardFiles || 0} 正向 · ${migration.rollbackFiles || 0} 回滚`}</small></article>
+        <article><span>灰度状态</span><strong>${this._escHtml(runtime.rollout?.mode || 'off')}</strong><small>2.0 入口范围</small></article>
+        <article><span>API 错误</span><strong>${requests.serverErrors || 0}</strong><small>窗口 ${requests.windowSize || 0} · 客户端错误 ${requests.clientErrors || 0}</small></article>
+        <article><span>P95 耗时</span><strong>${this._fmt(requests.p95Ms || 0)} ms</strong><small>慢请求 ${requests.slowRequests || 0} · 阈值 ${requests.slowThresholdMs || 0} ms</small></article>
+      </div>
+      ${gate.blockers?.length ? `<div class="trial-gate-blockers"><strong>G0 阻断项</strong>${gate.blockers.map(item => `<span>${this._escHtml(item)}</span>`).join('')}</div>` : '<div class="trial-gate-ready">数据库结构完整，当前没有未复验的 P0/P1。</div>'}
+      <details><summary>最近错误与慢请求</summary><div class="trial-request-events">${[...(requests.recentErrors || []), ...(requests.recentSlow || [])].slice(0, 12).map(row => `<code>${this._escHtml(row.at)} · ${this._escHtml(row.method)} ${this._escHtml(row.path)} · ${row.status} · ${this._fmt(row.durationMs)} ms</code>`).join('') || '<span class="form-hint">当前观测窗口没有记录</span>'}</div></details>`;
+      this._renderTrialIssues(issueTarget, issues || []);
+    } catch (error) {
+      summaryTarget.innerHTML = `<div class="empty-state">运行状态加载失败：${this._escHtml(error.message || error)}</div>`;
+      issueTarget.innerHTML = '<div class="empty-state">问题台账暂不可用</div>';
+    }
+  },
+
+  _renderTrialIssues(target, issues) {
+    if (!issues.length) {
+      target.innerHTML = '<div class="empty-state">当前没有试运行问题</div>';
+      return;
+    }
+    const statusLabels = { open: '待处理', fixing: '修正中', fixed: '待复验', verified: '已复验' };
+    target.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>级别/状态</th><th>问题与证据</th><th>负责人</th><th>修正与复验</th><th>操作</th></tr></thead><tbody>${issues.map(issue => {
+      const actions = [];
+      if (['open','fixing'].includes(issue.status)) actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','assign')">指派</button><button class="btn btn-sm btn-primary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','fix')">提交修正</button>`);
+      if (issue.status === 'fixed' && Auth.isAdmin) actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','verify')">完成复验</button>`);
+      if (['fixed','verified'].includes(issue.status)) actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','reopen')">重开</button>`);
+      return `<tr><td><span class="operations-priority ${String(issue.severity).toLowerCase()}">${this._escHtml(issue.severity)}</span><div class="form-hint">${this._escHtml(statusLabels[issue.status] || issue.status)}</div></td><td><strong>${this._escHtml(issue.title)}</strong><div class="form-hint">证据：${this._escHtml(issue.evidence)}</div><div class="form-hint">影响：${this._escHtml(issue.impact)}</div></td><td>${this._escHtml(issue.owner)}<div class="form-hint">${issue.dueDate || '未设截止日期'}</div></td><td>${issue.fixVersion ? `<strong>${this._escHtml(issue.fixVersion)}</strong><div class="form-hint">${this._escHtml(issue.fixNotes)}</div>` : '尚未修正'}${issue.verificationResult ? `<div class="form-hint">复验：${this._escHtml(issue.verificationResult)}</div>` : ''}<details><summary>${issue.eventCount || 0} 个事件</summary><div class="form-hint">${(issue.events || []).map(event => `${this._escHtml(event.action)} · ${this._escHtml(event.actorName || event.actorId)} · ${this._escHtml(String(event.createdAt || '').slice(0,19).replace('T',' '))}`).join('<br>')}</div></details></td><td><div class="row-actions">${actions.join('') || '—'}</div></td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  },
+
+  async _createTrialIssue() {
+    const payload = {
+      severity: $('#trial-issue-severity')?.value,
+      title: $('#trial-issue-title')?.value.trim(),
+      evidence: $('#trial-issue-evidence')?.value.trim(),
+      impact: $('#trial-issue-impact')?.value.trim(),
+      owner: $('#trial-issue-owner')?.value.trim(),
+      dueDate: $('#trial-issue-due')?.value || null
+    };
+    if (!payload.title || !payload.evidence || !payload.impact || !payload.owner) return this.toast('请完整填写标题、证据、影响和负责人', 'error');
+    try {
+      await Store._request('POST', '/rest/v1/trial-run-issues', payload);
+      this.toast('试运行问题已登记');
+      for (const id of ['trial-issue-title','trial-issue-evidence','trial-issue-impact']) if ($('#' + id)) $('#' + id).value = '';
+      await this._loadTrialRunConsole();
+    } catch (error) { this.toast('问题登记失败：' + (error.message || error), 'error'); }
+  },
+
+  async _trialIssueAction(id, action) {
+    const issue = (this._trialRunIssues || []).find(row => row.id === id);
+    if (!issue) return this.toast('问题记录不存在', 'error');
+    let payload = {};
+    if (action === 'assign') {
+      const owner = prompt('负责人：', issue.owner || ''); if (owner === null) return;
+      const dueDate = prompt('截止日期（YYYY-MM-DD，可留空）：', issue.dueDate || ''); if (dueDate === null) return;
+      payload = { owner, dueDate: dueDate || null };
+    } else if (action === 'fix') {
+      const fixVersion = prompt('修正版本：', issue.fixVersion || ''); if (fixVersion === null) return;
+      const fixNotes = prompt('修正说明与证据：', issue.fixNotes || ''); if (fixNotes === null) return;
+      payload = { fixVersion, fixNotes };
+    } else if (action === 'verify') {
+      const verificationResult = prompt('复验范围与结果：', '复验通过：'); if (verificationResult === null) return;
+      payload = { verificationResult };
+    } else if (action === 'reopen') {
+      const reason = prompt('重开原因：', '复验发现问题仍存在：'); if (reason === null) return;
+      payload = { reason };
+    }
+    try {
+      await Store._request('POST', `/rest/v1/trial-run-issues?id=${encodeURIComponent(id)}&action=${encodeURIComponent(action)}`, payload);
+      this.toast('问题状态已更新');
+      await this._loadTrialRunConsole();
+    } catch (error) { this.toast('问题更新失败：' + (error.message || error), 'error'); }
   },
 
   async _saveOperationsRollout() {

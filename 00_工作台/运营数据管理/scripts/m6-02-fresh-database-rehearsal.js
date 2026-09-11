@@ -11,7 +11,8 @@ const keepDatabase = process.argv.includes('--keep-database');
 const localHosts = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 const requiredTables = [
   'business_dimensions', 'business_mapping_rules', 'product_aliases', 'record_business_links',
-  'governance_batches', 'governance_batch_items', 'governance_batch_events'
+  'governance_batches', 'governance_batch_items', 'governance_batch_events',
+  'trial_run_issues', 'trial_run_issue_events'
 ];
 const requiredViews = [
   'business_revenue_facts_v2', 'business_cost_facts_v2', 'business_profit_facts_v2',
@@ -20,7 +21,7 @@ const requiredViews = [
   'product_alias_candidates_v2', 'product_cost_evidence_v2', 'product_master_governance_v2',
   'revenue_attribution_candidates_v2', 'cost_attribution_candidates_v2',
   'gallery_link_candidates_v2', 'workshop_link_candidates_v2',
-  'space_classification_candidates_v2', 'governance_batch_summary_v2'
+  'space_classification_candidates_v2', 'governance_batch_summary_v2', 'trial_run_issue_register_v2'
 ];
 
 function sha256(buffer) {
@@ -64,8 +65,8 @@ function targetConfig(adminConfig, database) {
 
 function verifyManifest(manifest) {
   assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.forward.length, 19, 'Forward chain must contain the 1.0 approval prerequisite and M3-02 through M6-05');
-  assert.equal(manifest.rollback.length, 15, 'Rollback chain must contain the supported reverse path');
+  assert.equal(manifest.forward.length, 20, 'Forward chain must contain the 1.0 approval prerequisite and M3-02 through M6-06');
+  assert.equal(manifest.rollback.length, 16, 'Rollback chain must contain the supported reverse path');
   const entries = [manifest.baseline, ...manifest.forward, ...manifest.rollback];
   const seen = new Set();
   for (const entry of entries) {
@@ -178,6 +179,9 @@ async function validateRollbackState(client) {
   assert.equal(auditTables, 3, 'M4 audit tables must be retained even when their summary view is disabled');
   const rolloutRows = (await client.query("SELECT COUNT(*)::INTEGER count FROM app_config WHERE key='operations_rollout'")).rows[0].count;
   assert.equal(rolloutRows, 0, 'M6-05 rollback must remove the rollout configuration');
+  const trialRelations = (await client.query(`SELECT COUNT(*)::INTEGER count FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relname=ANY($1)`, [['trial_run_issues','trial_run_issue_events','trial_run_issue_register_v2']])).rows[0].count;
+  assert.equal(trialRelations, 0, 'M6-06 rollback must remove the trial-run register');
 }
 
 async function applyEntries(client, entries, phase, timings) {

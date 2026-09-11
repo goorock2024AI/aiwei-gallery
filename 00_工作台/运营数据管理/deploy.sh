@@ -40,7 +40,7 @@ echo " Server: $SERVER_IP"
 echo "=============================================="
 
 info "1/6 Packaging deployment files..."
-for f in Dockerfile docker-compose.yml nginx.conf server.js package.json app/index.html; do
+for f in Dockerfile docker-compose.yml nginx.conf server.js trial-observability.js VERSION package.json app/index.html sql/m6-forward-manifest.json; do
   if [ ! -f "$f" ]; then
     error "Missing required file: $f"
     exit 1
@@ -58,9 +58,11 @@ node scripts/build-version.js
 
 rm -rf deploy-pkg
 mkdir -p deploy-pkg
-cp Dockerfile docker-compose.yml nginx.conf server.js package.json deploy-pkg/
+cp Dockerfile docker-compose.yml nginx.conf server.js expense-entry.js gallery-entry.js space-entry.js governance-batches.js trial-observability.js VERSION package.json deploy-pkg/
 cp -r app deploy-pkg/app
 cp -r scripts deploy-pkg/scripts
+mkdir -p deploy-pkg/sql
+cp sql/m6-forward-manifest.json deploy-pkg/sql/
 rm -f deploy-pkg/app/lib/supabase.umd.min.js
 printf "DB_PASSWORD=%s\n" "$DB_PASSWORD" > deploy-pkg/.env
 

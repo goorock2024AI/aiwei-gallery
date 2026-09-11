@@ -819,6 +819,17 @@ table.data-table .tag {
 .operations-rollout-status span { color:var(--gray-600); }
 .operations-rollout-badge { margin-left:auto; padding:2px 6px; border-radius:999px; background:rgba(255,255,255,.16); color:inherit; font-size:10px; line-height:1.4; white-space:nowrap; }
 .operations-trial-badge { display:inline-flex; margin-left:7px; padding:3px 8px; border:1px solid rgba(255,255,255,.36); border-radius:999px; background:rgba(255,255,255,.12); color:#fff; font-size:11px; font-weight:600; letter-spacing:.04em; vertical-align:middle; }
+.trial-runtime-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:14px 0; }
+.trial-runtime-grid article { display:flex; flex-direction:column; gap:4px; padding:13px; border:1px solid var(--gray-200); border-radius:var(--radius-sm); background:var(--gray-50); }
+.trial-runtime-grid article span,.trial-runtime-grid article small { color:var(--gray-600); font-size:12px; }
+.trial-runtime-grid article strong { color:var(--gray-800); font-size:17px; overflow-wrap:anywhere; }
+.trial-gate-ready,.trial-gate-blockers { display:flex; gap:8px; flex-wrap:wrap; padding:10px 12px; margin-bottom:12px; border-radius:var(--radius-sm); font-size:13px; }
+.trial-gate-ready { background:#edf8f0; color:#25633d; }
+.trial-gate-blockers { flex-direction:column; background:#fff5e8; color:#8a4b0f; }
+.trial-request-events { display:flex; flex-direction:column; gap:5px; padding:10px 0; max-height:180px; overflow:auto; }
+.trial-request-events code { white-space:normal; overflow-wrap:anywhere; }
+.trial-issue-form { margin:16px 0; padding:12px 14px; border:1px solid var(--gray-200); border-radius:var(--radius-sm); }
+@media (max-width: 720px) { .trial-runtime-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 
 /* 空状态 */
 .empty-state {

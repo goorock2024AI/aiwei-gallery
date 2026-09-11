@@ -1559,9 +1559,15 @@ const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensu
 const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGovernanceBatches = require('./governance-batches')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
+const trialObservability = require('./trial-observability')({
+  pool, getRequester, ensureRole, sendJSON, sendError,
+  versionPath: path.join(__dirname, 'VERSION'),
+  manifestPath: path.join(__dirname, 'sql', 'm6-forward-manifest.json')
+});
 
 // --- Main request handler ---
 const server = http.createServer((req, res) => {
+  trialObservability.observeRequest(req, res);
   const urlInfo = parsePath(req.url);
   const { pathname, parts } = urlInfo;
 
@@ -1579,6 +1585,10 @@ const server = http.createServer((req, res) => {
   if (parts[0] === 'rest' && parts[1] === 'v1') {
     if (parts[2] === 'operation-log') {
       handleOperationLog(req, res);
+    } else if (parts[2] === 'runtime-observability') {
+      trialObservability.handleRuntimeObservability(req, res);
+    } else if (parts[2] === 'trial-run-issues') {
+      trialObservability.handleTrialRunIssues(req, res, urlInfo.query);
     } else if (parts[2] === 'operations-rollout') {
       handleOperationsRollout(req, res);
     } else if (parts[2] === 'expense-entry') {
