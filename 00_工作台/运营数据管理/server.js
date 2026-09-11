@@ -2,7 +2,6 @@ const http = require('http');
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
-const url = require('url');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 
@@ -445,9 +444,15 @@ function guardEditorWrite(user, table, method, data) {
 }
 
 function parsePath(reqUrl) {
-  let p = url.parse(reqUrl, true);
-  let pathname = p.pathname.replace(/\/+$/, '');
-  return { pathname, query: p.query, parts: pathname.split('/').filter(Boolean) };
+  const parsed = new URL(reqUrl, 'http://localhost');
+  const query = {};
+  for (const [key, value] of parsed.searchParams) {
+    if (!(key in query)) query[key] = value;
+    else if (Array.isArray(query[key])) query[key].push(value);
+    else query[key] = [query[key], value];
+  }
+  const pathname = parsed.pathname.replace(/\/+$/, '');
+  return { pathname, query, parts: pathname.split('/').filter(Boolean) };
 }
 
 function sendJSON(res, status, data, count) {

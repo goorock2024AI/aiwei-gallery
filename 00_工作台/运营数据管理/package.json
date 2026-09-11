@@ -66,7 +66,8 @@
     "check:workshop-migration": "node scripts/check-workshop-projects-migration.js",
     "check:workshop-browser": "node scripts/check-workshop-projects-browser.js",
     "check:m5-stage-review": "node scripts/check-m5-stage-review.js",
-    "check:m6-migrations": "node scripts/m6-02-fresh-database-rehearsal.js"
+    "check:m6-migrations": "node scripts/m6-02-fresh-database-rehearsal.js",
+    "check:m6-core": "node scripts/check-m6-core-permissions.js"
   },
   "dependencies": {
     "pdfkit": "^0.17.2",

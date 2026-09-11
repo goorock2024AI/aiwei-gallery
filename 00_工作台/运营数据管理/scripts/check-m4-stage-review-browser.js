@@ -5,6 +5,7 @@ const { chromium } = require('playwright');
 
 const cfg = JSON.parse(fs.readFileSync('tmp/m3-05-test.json', 'utf8'));
 const base = process.env.M4_BROWSER_BASE || 'http://127.0.0.1:3119';
+const expectedVersion = `v${fs.readFileSync('VERSION', 'utf8').trim()}`;
 
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: 'msedge' });
@@ -16,7 +17,7 @@ const base = process.env.M4_BROWSER_BASE || 'http://127.0.0.1:3119';
     await page.locator('#login-username').fill('m305-admin');
     await page.locator('#login-password').fill(cfg.password);
     await page.locator('#login-form button').click();
-    await page.locator('#sidebar-version').filter({ hasText: 'v2.0.0-dev.m4-10.1' }).waitFor();
+    await page.locator('#sidebar-version').filter({ hasText: expectedVersion }).waitFor();
 
     await page.locator('[data-tab="reports"]').click();
     for (const id of [
