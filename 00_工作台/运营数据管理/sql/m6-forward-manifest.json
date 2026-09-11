@@ -73,7 +73,7 @@
     },
     {
       "path": "sql/20260909_m4_08_space_classification_candidates.sql",
-      "sha256": "bb944003e29ead59a19ea95cdc38d4c3e5d4ce5a2ac92cd70ecdcee0b827ed8a"
+      "sha256": "eb8ebb53132fa29babf3b349529fdb7bd1de93d1651fa04057ec98c8ece15c06"
     },
     {
       "path": "sql/20260909_m4_09_governance_batches.sql",

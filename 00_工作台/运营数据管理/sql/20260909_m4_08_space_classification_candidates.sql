@@ -24,7 +24,7 @@ contract_counts AS (
 base AS (
   SELECT s.*,
     COALESCE(p.payment_count,0) AS payment_count,
-    COALESCE(p.received_amount,0)::NUMERIC AS received_amount,
+    COALESCE(p.received_amount,0)::NUMERIC AS payment_received_amount,
     p.first_payment_date,p.latest_payment_date,
     COALESCE(c.contract_usage_count,0) AS contract_usage_count,
     CASE
@@ -112,8 +112,8 @@ SELECT
   'space_usage'::TEXT AS source_table,id AS source_id,'space_project'::TEXT AS source_line_key,
   date AS business_date,NULLIF(end_date,'') AS end_date,space,project_name,type AS execution_type,
   client,status AS execution_status,rental_type,project_owner,notes,created_at,
-  receivable_amount,received_amount,
-  GREATEST(0,receivable_amount-received_amount)::NUMERIC AS outstanding_amount,
+  receivable_amount,payment_received_amount AS received_amount,
+  GREATEST(0,receivable_amount-payment_received_amount)::NUMERIC AS outstanding_amount,
   payment_count,first_payment_date,latest_payment_date,
   business_layer_code AS original_business_layer_code,
   business_type_code AS original_business_type_code,
@@ -140,7 +140,7 @@ SELECT
   END::TEXT AS review_priority,
   JSONB_BUILD_OBJECT(
     'executionType',type,'executionStatus',status,'rentalType',rental_type,
-    'receivableAmount',receivable_amount,'receivedAmount',received_amount,
+    'receivableAmount',receivable_amount,'receivedAmount',payment_received_amount,
     'paymentCount',payment_count,'contractUsageCount',contract_usage_count
   ) AS evidence,
   CONCAT_WS('；',
