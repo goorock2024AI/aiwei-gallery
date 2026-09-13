@@ -98,6 +98,7 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 cd "$APP_DIR"
+chmod 755 scripts/*.sh 2>/dev/null || true
 set -a
 . "$APP_DIR/.env"
 set +a
