@@ -19,6 +19,10 @@ const UI = {
   _productSearch: { ticket: '', coffee: '', creative: '', workshop: '', gallery: '' },
   _artworks: [],
   _creativeProducts: [],
+  _creativePOSProducts: null,
+  _creativePOSProductsPromise: null,
+  _retailSuggestionToken: 0,
+  _retailSuggestionHideTimer: null,
   _cpFilterSupplier: '',
   _cpPage: 0,
   _CP_PAGE_SIZE: 40,
@@ -285,7 +289,11 @@ const UI = {
                   <div class="pos-input-row">
                     <div class="form-group"><label>单价</label><input type="number" id="rt-price" min="0" step="0.01" placeholder="0.00" style="width:80px"></div>
                     <div class="form-group"><label>数量</label><input type="number" id="rt-qty" min="1" value="1" style="width:60px"></div>
-                    <div class="form-group"><label>产品名</label><input type="text" id="rt-name" oninput="UI._selectedRetailProduct = null" placeholder="产品名称" style="width:120px"></div>
+                    <div class="form-group pos-retail-product-field">
+                      <label for="rt-name">产品名</label>
+                      <input type="text" id="rt-name" autocomplete="off" aria-autocomplete="list" aria-controls="rt-product-suggestions" aria-expanded="false" oninput="UI._onRetailProductInput(this.value)" onfocus="UI._onRetailProductInput(this.value)" onkeydown="UI._onRetailProductKeydown(event)" onblur="UI._hideRetailProductSuggestions(150)" placeholder="输入名称自动检索">
+                      <div id="rt-product-suggestions" class="pos-retail-suggestions" role="listbox" aria-label="匹配的文创零售商品"></div>
+                    </div>
                     <button type="button" class="btn btn-sm btn-secondary" onclick="UI._selectCreativeFromPOS()" title="从产品库选择" style="margin-bottom:1px;font-size:16px">📋</button>
                     <button type="button" class="btn btn-sm btn-primary" onclick="UI._addRetailItem()" style="margin-bottom:1px">+ 添加</button>
                   </div>
@@ -369,6 +377,7 @@ const UI = {
     }
 
     this._updatePOS();
+    this._prepareCreativePOSAutocomplete();
     this._loadSpaceRentReminder();
     this._loadTodayStats();
     this._loadCounterCashPanel();
@@ -463,27 +472,192 @@ const UI = {
   },
 
   // —— 从文创产品库选择 ——
-  async _selectCreativeFromPOS() {
-    const products = (await Store.getAll('creativeProducts') || []).filter(p => this._isListed(p));
-    if (!products.length) { this.toast('暂无已上架文创产品，请先由管理员确认上架', 'error'); return; }
-    const normalized = products.map(p => ({
-      ...p,
-      _stock: Number(p.stock ?? 0) || 0,
-      _retailPrice: Number(p.retailPrice ?? p.retail_price ?? 0) || 0,
-      _supplier: p.supplier || '',
-      _unit: p.unit || '个'
-    })).sort((a, b) => {
-      const aReady = a._retailPrice > 0 ? 0 : 1;
-      const bReady = b._retailPrice > 0 ? 0 : 1;
-      if (aReady !== bReady) return aReady - bReady;
-      return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
-    });
-    try {
-      const aliases = await Store._request('GET', '/rest/v1/product_aliases?is_active=eq.true&limit=5000');
-      normalized.forEach(p => { p._aliases = (aliases || []).filter(a => a.standardProductId === p.id).map(a => a.aliasName).join(' '); });
-    } catch (error) {
-      this.toast('别名检索暂不可用，可按商品名称选择', 'error');
+  async _loadCreativePOSProducts(force = false) {
+    if (force) {
+      this._creativePOSProducts = null;
+      this._creativePOSProductsPromise = null;
     }
+    if (this._creativePOSProducts) return this._creativePOSProducts;
+    if (this._creativePOSProductsPromise) return this._creativePOSProductsPromise;
+
+    this._creativePOSProductsPromise = (async () => {
+      const products = (await Store.getAll('creativeProducts') || []).filter(p => this._isListed(p));
+      const normalized = products.map(p => ({
+        ...p,
+        _stock: Number(p.stock ?? 0) || 0,
+        _retailPrice: Number(p.retailPrice ?? p.retail_price ?? 0) || 0,
+        _supplier: p.supplier || '',
+        _unit: p.unit || '个',
+        _aliases: ''
+      })).sort((a, b) => {
+        const aReady = a._retailPrice > 0 ? 0 : 1;
+        const bReady = b._retailPrice > 0 ? 0 : 1;
+        if (aReady !== bReady) return aReady - bReady;
+        return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
+      });
+      try {
+        const aliases = await Store._request('GET', '/rest/v1/product_aliases?is_active=eq.true&limit=5000');
+        normalized.forEach(p => {
+          p._aliases = (aliases || []).filter(a => a.standardProductId === p.id).map(a => a.aliasName).join(' ');
+        });
+      } catch (error) {
+        console.warn('Failed to load creative product aliases', error);
+      }
+      this._creativePOSProducts = normalized;
+      return normalized;
+    })();
+
+    try {
+      return await this._creativePOSProductsPromise;
+    } catch (error) {
+      this._creativePOSProductsPromise = null;
+      throw error;
+    }
+  },
+
+  async _prepareCreativePOSAutocomplete() {
+    try {
+      await this._loadCreativePOSProducts();
+    } catch (error) {
+      console.warn('Failed to prepare creative POS autocomplete', error);
+    }
+  },
+
+  _normalizeCreativePOSSearch(value) {
+    return String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+  },
+
+  _isCreativePOSSubsequence(query, value) {
+    let index = 0;
+    for (const char of value) {
+      if (char === query[index]) index += 1;
+      if (index === query.length) return true;
+    }
+    return false;
+  },
+
+  _creativePOSMatchScore(product, keyword) {
+    const query = this._normalizeCreativePOSSearch(keyword);
+    if (!query) return 0;
+    const fields = [product.name, product.standardName, product.packageSpec, product.barcode, product._aliases, product.sku, product.supplier];
+    let best = Number.POSITIVE_INFINITY;
+    fields.forEach(raw => {
+      const value = this._normalizeCreativePOSSearch(raw);
+      if (!value) return;
+      if (value === query) best = Math.min(best, 0);
+      else if (value.startsWith(query)) best = Math.min(best, 10 + value.length - query.length);
+      else if (value.includes(query)) best = Math.min(best, 20 + value.indexOf(query));
+      else if (this._isCreativePOSSubsequence(query, value)) best = Math.min(best, 40 + value.length - query.length);
+    });
+    return best;
+  },
+
+  _filterCreativePOSProducts(products, keyword) {
+    const query = this._normalizeCreativePOSSearch(keyword);
+    if (!query) return products.slice();
+    return products
+      .map(product => ({ product, score: this._creativePOSMatchScore(product, query) }))
+      .filter(item => Number.isFinite(item.score))
+      .sort((a, b) => a.score - b.score || Number(b.product._retailPrice > 0) - Number(a.product._retailPrice > 0) || String(a.product.name || '').localeCompare(String(b.product.name || ''), 'zh-CN'))
+      .map(item => item.product);
+  },
+
+  async _onRetailProductInput(value) {
+    if (this._retailSuggestionHideTimer) {
+      clearTimeout(this._retailSuggestionHideTimer);
+      this._retailSuggestionHideTimer = null;
+    }
+    this._selectedRetailProduct = null;
+    const input = document.getElementById('rt-name');
+    const listEl = document.getElementById('rt-product-suggestions');
+    const query = String(value || '').trim();
+    const token = ++this._retailSuggestionToken;
+    if (!input || !listEl || !query) {
+      this._hideRetailProductSuggestions();
+      return;
+    }
+
+    listEl.style.display = 'block';
+    listEl.innerHTML = '<div class="pos-retail-suggestion-state">正在检索…</div>';
+    input.setAttribute('aria-expanded', 'true');
+    try {
+      const products = await this._loadCreativePOSProducts();
+      if (token !== this._retailSuggestionToken || input.value.trim() !== query) return;
+      const matches = this._filterCreativePOSProducts(products, query).slice(0, 8);
+      if (!matches.length) {
+        listEl.innerHTML = '<div class="pos-retail-suggestion-state">没有匹配商品，可继续手动输入</div>';
+        return;
+      }
+      listEl.innerHTML = matches.map(p => {
+        const canSelect = p._retailPrice > 0;
+        const detail = [p.standardName && p.standardName !== p.name ? p.standardName : '', p.packageSpec, p._aliases, p.sku].filter(Boolean).join(' · ');
+        return `<button type="button" role="option" class="pos-retail-suggestion ${canSelect ? '' : 'is-disabled'}" data-product-id="${this._escHtml(p.id)}" ${canSelect ? `onmousedown="event.preventDefault()" onclick="UI._selectRetailProductSuggestion('${p.id}')"` : 'disabled'}>
+          <span><strong>${this._escHtml(p.name || '-')}</strong>${detail ? `<small>${this._escHtml(detail)}</small>` : ''}</span>
+          <span class="pos-retail-suggestion-meta"><strong>¥${p._retailPrice.toFixed(2)}</strong><small>${canSelect ? (this._cpBool(p.isCountableStock ?? p.is_countable_stock, true) ? '库存 ' + p._stock + this._escHtml(p._unit) : '不计库存') : '无零售价'}</small></span>
+        </button>`;
+      }).join('');
+    } catch (error) {
+      if (token !== this._retailSuggestionToken) return;
+      listEl.innerHTML = '<div class="pos-retail-suggestion-state">商品检索暂不可用，可继续手动输入</div>';
+    }
+  },
+
+  _selectRetailProductSuggestion(id) {
+    const product = (this._creativePOSProducts || []).find(item => item.id === id);
+    if (!product || product._retailPrice <= 0) return;
+    this._selectedRetailProduct = { ...product };
+    const nameInput = document.getElementById('rt-name');
+    const priceInput = document.getElementById('rt-price');
+    const qtyInput = document.getElementById('rt-qty');
+    if (nameInput) nameInput.value = product.name;
+    if (priceInput) priceInput.value = product._retailPrice;
+    if (qtyInput) {
+      qtyInput.value = 1;
+      qtyInput.focus();
+      qtyInput.select();
+    }
+    this._hideRetailProductSuggestions();
+  },
+
+  _onRetailProductKeydown(event) {
+    if (event.key === 'Escape') {
+      this._hideRetailProductSuggestions();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    const first = document.querySelector('#rt-product-suggestions .pos-retail-suggestion:not([disabled])');
+    if (!first) return;
+    event.preventDefault();
+    this._selectRetailProductSuggestion(first.dataset.productId || '');
+  },
+
+  _hideRetailProductSuggestions(delay = 0) {
+    if (this._retailSuggestionHideTimer) {
+      clearTimeout(this._retailSuggestionHideTimer);
+      this._retailSuggestionHideTimer = null;
+    }
+    const hide = () => {
+      const listEl = document.getElementById('rt-product-suggestions');
+      const input = document.getElementById('rt-name');
+      if (listEl) {
+        listEl.style.display = 'none';
+        listEl.innerHTML = '';
+      }
+      if (input) input.setAttribute('aria-expanded', 'false');
+      this._retailSuggestionHideTimer = null;
+    };
+    if (delay) this._retailSuggestionHideTimer = setTimeout(hide, delay);
+    else hide();
+  },
+
+  async _selectCreativeFromPOS() {
+    try {
+      var normalized = await this._loadCreativePOSProducts(true);
+    } catch (error) {
+      this.toast('文创产品加载失败，请稍后重试', 'error');
+      return;
+    }
+    if (!normalized.length) { this.toast('暂无已上架文创产品，请先由管理员确认上架', 'error'); return; }
     const hotKeywords = await this._getCreativePOSHotKeywords(normalized);
 
     const overlay = document.createElement('div');
@@ -576,7 +750,7 @@ const UI = {
     let list = overlay._cpList;
     if (supplier) list = list.filter(p => p._supplier === supplier);
     if (q) {
-      list = list.filter(p => [p.name, p.standardName, p.packageSpec, p.barcode, p._aliases, p.sku, p.supplier, p.notes].some(v => String(v || '').toLowerCase().includes(q)));
+      list = this._filterCreativePOSProducts(list, q);
     }
     if (!list.length) {
       listEl.innerHTML = '<div class="empty-state" style="padding:24px"><div class="icon">📦</div>没有匹配的产品</div>';
@@ -633,6 +807,7 @@ const UI = {
     priceInput.value = '';
     qtyInput.value = 1;
     nameInput.value = '';
+    this._hideRetailProductSuggestions();
     this._updatePOS();
   },
 

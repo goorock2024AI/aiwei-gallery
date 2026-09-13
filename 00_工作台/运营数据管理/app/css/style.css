@@ -1653,6 +1653,76 @@ input.invalid:focus {
   padding: 6px 8px;
   font-size: 12px;
 }
+.pos-retail-area .pos-input-row .pos-retail-product-field {
+  position: relative;
+  flex: 1 1 180px;
+  min-width: 180px;
+}
+.pos-retail-product-field #rt-name {
+  width: 100%;
+}
+.pos-retail-suggestions {
+  display: none;
+  position: absolute;
+  z-index: 120;
+  top: calc(100% + 4px);
+  left: 0;
+  width: max(100%, 300px);
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  box-shadow: 0 10px 24px rgba(34, 48, 40, 0.16);
+}
+.pos-retail-suggestion {
+  width: 100%;
+  min-height: 48px;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--gray-100);
+  background: var(--white);
+  color: var(--gray-800);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  text-align: left;
+}
+.pos-retail-suggestion:last-child { border-bottom: 0; }
+.pos-retail-suggestion:hover,
+.pos-retail-suggestion:focus { background: var(--green-100); outline: none; }
+.pos-retail-suggestion.is-disabled { cursor: not-allowed; opacity: 0.58; }
+.pos-retail-suggestion > span:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pos-retail-suggestion strong,
+.pos-retail-suggestion small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pos-retail-suggestion small {
+  color: var(--gray-500);
+  font-size: 11px;
+}
+.pos-retail-suggestion-meta {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.pos-retail-suggestion-meta strong { color: var(--green-700); }
+.pos-retail-suggestion-state {
+  padding: 12px;
+  color: var(--gray-500);
+  font-size: 12px;
+}
 
 /* 已添加列表 */
 .pos-item-list {
@@ -2357,6 +2427,11 @@ table.data-table tr[data-artwork-id]:hover { background: rgba(201, 162, 39, 0.04
   .pos-ticket-btn { min-width: 100px; padding: 14px 12px; }
   .pos-payment-btn { min-width: 80px; padding: 12px 10px; font-size: 14px; }
   .pos-fixed-bottom { margin: 0 -12px; padding: 12px; }
+  .pos-retail-suggestions {
+    left: auto;
+    right: 0;
+    width: min(300px, calc(100vw - 24px));
+  }
 
   /* 甘特图紧凑 */
   .gantt-grid { grid-template-columns: 90px repeat(var(--days), 14px) !important; }
