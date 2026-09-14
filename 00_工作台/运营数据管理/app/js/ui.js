@@ -259,7 +259,7 @@ const UI = {
                 <div class="pos-section-title">🎫 票务</div>
                 <div class="pos-ticket-area" id="pos-ticket-btns">
                   ${(MODELS.ticketProducts || []).map((p, i) =>
-                    this._renderTicketBtn(p.name, p.price, 'tkt-' + i)
+                    this._renderTicketBtn(p.name, p.price, 'tkt-' + i, true)
                   ).join('')}
                 </div>
 
@@ -386,17 +386,18 @@ const UI = {
   },
 
   // —— 票务按钮辅助渲染 ——
-  _renderTicketBtn(name, price, id) {
+  _renderTicketBtn(name, price, id, allowDirectEntry = false) {
     return `
       <div class="pos-ticket-btn">
         <div class="pos-ticket-name">${name}</div>
         <div class="pos-ticket-price">¥${price}</div>
         <div class="pos-ticket-qty-row">
           <button type="button" class="pos-qty-btn" onclick="UI._adjustTicket('${id}', ${price}, -1)">−</button>
-          <span class="pos-qty-num" id="${id}-display">0</span>
+          ${allowDirectEntry
+            ? `<input type="number" class="pos-qty-num pos-qty-input" id="${id}" value="0" min="0" step="1" inputmode="numeric" aria-label="${this._escHtml(name)}数量" onfocus="this.select()" oninput="UI._setTicketQty('${id}', ${price}, this.value)">`
+            : `<span class="pos-qty-num" id="${id}-display">0</span><input type="hidden" id="${id}" value="0">`}
           <button type="button" class="pos-qty-btn" onclick="UI._adjustTicket('${id}', ${price}, 1)">+</button>
         </div>
-        <input type="hidden" id="${id}" value="0">
         <div class="pos-ticket-subtotal" id="${id}-sub">¥0.00</div>
       </div>`;
   },
@@ -405,8 +406,14 @@ const UI = {
   _adjustTicket(id, price, delta) {
     const input = document.getElementById(id);
     if (!input) return;
-    let qty = +input.value + delta;
-    if (qty < 0) qty = 0;
+    const qty = Math.max(0, (Number.parseInt(input.value, 10) || 0) + delta);
+    this._setTicketQty(id, price, qty);
+  },
+
+  _setTicketQty(id, price, value) {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const qty = Math.max(0, Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0);
     input.value = qty;
     const display = document.getElementById(id + '-display');
     if (display) display.textContent = qty;
@@ -1080,20 +1087,14 @@ const UI = {
     (r.ticketItems || []).forEach((item, i) => {
       const idx = (MODELS.ticketProducts || []).findIndex(p => p.name === item.name);
       if (idx >= 0) {
-        const el = document.getElementById('tkt-' + idx);
-        if (el) { el.value = item.qty || 0; }
-        const disp = document.getElementById('tkt-' + idx + '-display');
-        if (disp) disp.textContent = item.qty || 0;
+        this._setTicketQty('tkt-' + idx, MODELS.ticketProducts[idx].price, item.qty || 0);
       }
     });
     // 咖啡（动态）
     (r.coffeeItems || []).forEach((item, i) => {
       const idx = (MODELS.coffeeProducts || []).findIndex(p => p.name === item.name);
       if (idx >= 0) {
-        const el = document.getElementById('cof-' + idx);
-        if (el) { el.value = item.qty || 0; }
-        const disp = document.getElementById('cof-' + idx + '-display');
-        if (disp) disp.textContent = item.qty || 0;
+        this._setTicketQty('cof-' + idx, MODELS.coffeeProducts[idx].price, item.qty || 0);
       }
     });
 

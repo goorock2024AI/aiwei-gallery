@@ -1620,6 +1620,22 @@ input.invalid:focus {
   font-size: 18px; font-weight: 700;
   min-width: 24px; text-align: center;
 }
+.pos-ticket-btn .pos-qty-input {
+  width: 54px;
+  height: 32px;
+  min-width: 54px;
+  padding: 3px 4px;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--gray-900);
+  line-height: 1;
+}
+.pos-ticket-btn .pos-qty-input:focus {
+  border-color: var(--green-500);
+  box-shadow: 0 0 0 2px var(--green-100);
+  outline: none;
+}
 .pos-ticket-btn .pos-ticket-subtotal {
   font-size: 12px; color: var(--gray-500); margin-top: 4px;
 }
