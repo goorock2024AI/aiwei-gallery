@@ -1,6 +1,6 @@
 # M6-10 业务验收与正式切换清单
 
-日期：2026-09-13
+日期：2026-09-14
 
 当前生产范围：`staff` 内部灰度，admin/editor 可用，viewer 排除
 
@@ -20,10 +20,12 @@
 
 ## 运维复核
 
-- [ ] 2026-09-14 03:17 权限修复后的首次自动备份生成 dump、dump SHA、baseline、baseline SHA 和 manifest。
-- [ ] 自动备份两个 SHA 通过，`pg_restore --list` 可列举对象。
-- [ ] 生产仍无未复验 P0/P1，运行观测无新增 5xx 或营业级性能问题。
-- [ ] 灰度仍为 `staff`，一键切回 `off` 和回退文件路径可用。
+> 2026-09-14 复核：03:17 自动生成 `aiwei-postgres-20260914-031701.dump` 五件套；dump 与 baseline SHA256 通过，使用 PostgreSQL 17.10 数据库容器执行 `pg_restore --list` 通过。生产未复验 P0/P1 为 0，API 本轮日志无 5xx/脚本错误，灰度为 `staff`。
+
+- [x] 2026-09-14 03:17 权限修复后的首次自动备份生成 dump、dump SHA、baseline、baseline SHA 和 manifest。
+- [x] 自动备份两个 SHA 通过，`pg_restore --list` 可列举对象。
+- [x] 生产仍无未复验 P0/P1，运行观测无新增 5xx 或营业级性能问题。
+- [x] 灰度仍为 `staff`，一键切回 `off` 和回退文件路径可用。
 
 ## 馆长决策
 
