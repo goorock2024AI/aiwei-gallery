@@ -44,8 +44,8 @@ for (const relative of requiredFiles) {
 
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 assert.equal(manifest.schemaVersion, 1);
-assert.equal(manifest.forward.length, 20, 'Expected 20 forward migrations through M6-06');
-assert.equal(manifest.rollback.length, 16, 'Expected 16 supported rollback migrations');
+assert.equal(manifest.forward.length, 21, 'Expected 21 forward migrations including configured-sale costs');
+assert.equal(manifest.rollback.length, 17, 'Expected 17 supported rollback migrations');
 for (const entry of [manifest.baseline, ...manifest.forward, ...manifest.rollback]) {
   const file = path.join(root, entry.path);
   assert.ok(fs.existsSync(file), `Missing manifest file: ${entry.path}`);

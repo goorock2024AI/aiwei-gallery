@@ -430,6 +430,7 @@ const UI = {
 
   // —— 添加工坊项目 ——
   _workshopItems: [],
+  _editingConfiguredSaleItems: { ticket: new Map(), coffee: new Map() },
   _addWorkshopItem() {
     const sel = document.getElementById('ws-product-select');
     const qtyInput = document.getElementById('ws-qty');
@@ -437,14 +438,15 @@ const UI = {
     if (!sel || !sel.value) { this.toast('请选择工坊项目', 'error'); return; }
     const projectName = document.getElementById('ws-project')?.value.trim() || '';
     if (!projectName) { this.toast('请输入活动项目名称', 'error'); return; }
-    const [name, priceStr] = sel.value.split(':');
-    const price = +priceStr;
+    const product = MODELS.WORKSHOP_PRODUCTS[sel.selectedIndex - 1];
+    if (!product) { this.toast('工坊产品不存在，请刷新后重试', 'error'); return; }
+    const price = Number(product.price);
     const qty = Number(qtyInput.value);
     const discount = +discInput.value || 0;
     if (!Number.isInteger(qty) || qty <= 0) { this.toast('参与人数必须为正整数', 'error'); return; }
     if (discount < 0 || discount > qty * price) { this.toast('优惠额不能超过原价', 'error'); return; }
 
-    this._workshopItems.push(createWorkshopSaleItem({ name, price }, projectName, document.getElementById('ws-type')?.value, qty, discount));
+    this._workshopItems.push(createWorkshopSaleItem(product, projectName, document.getElementById('ws-type')?.value, qty, discount));
     this._renderWorkshopList();
     qtyInput.value = 1;
     discInput.value = 0;
@@ -847,7 +849,8 @@ const UI = {
     const items = [];
     (MODELS.ticketProducts || []).forEach((p, i) => {
       const qty = +(document.getElementById('tkt-' + i)?.value || 0);
-      if (qty > 0) items.push({ name: p.name, qty, price: p.price, amount: qty * p.price });
+      const prior = this._editingId ? (this._editingConfiguredSaleItems.ticket.get(p.name) || {}) : null;
+      if (qty > 0) items.push(createConfiguredSaleItem(p, qty, prior));
     });
     return items;
   },
@@ -855,7 +858,8 @@ const UI = {
     const items = [];
     (MODELS.coffeeProducts || []).forEach((p, i) => {
       const qty = +(document.getElementById('cof-' + i)?.value || 0);
-      if (qty > 0) items.push({ name: p.name, qty, price: p.price, amount: qty * p.price });
+      const prior = this._editingId ? (this._editingConfiguredSaleItems.coffee.get(p.name) || {}) : null;
+      if (qty > 0) items.push(createConfiguredSaleItem(p, qty, prior));
     });
     return items;
   },
@@ -1064,6 +1068,7 @@ const UI = {
     document.getElementById('rev-other-desc').value = '';
     document.getElementById('rev-notes').value = '';
     this._workshopItems = [];
+    this._editingConfiguredSaleItems = { ticket: new Map(), coffee: new Map() };
     const workshopProject = document.getElementById('ws-project');
     if (workshopProject) workshopProject.value = '';
     const workshopType = document.getElementById('ws-type');
@@ -1081,6 +1086,10 @@ const UI = {
     this._selectedRetailProduct = null;
     const r = await Store.getById('revenue', id);
     if (!r) return;
+    this._editingConfiguredSaleItems = {
+      ticket: new Map((Array.isArray(r.ticketItems) ? r.ticketItems : []).map(item => [item.name, item])),
+      coffee: new Map((Array.isArray(r.coffeeItems) ? r.coffeeItems : []).map(item => [item.name, item]))
+    };
     document.getElementById('rev-date').value = r.date || todayStr();
 
     // 票务（动态）
@@ -3729,9 +3738,9 @@ const UI = {
 
   /** 二级 tab 内容渲染 */
   _renderProductTabContent(tab) {
-    if (tab === 'ticket')      return this._renderSimpleConfigTab('ticket', '门票', ['名称', '单价'], ['name', 'price']);
-    if (tab === 'coffee')      return this._renderSimpleConfigTab('coffee', '咖啡', ['名称', '单价'], ['name', 'price']);
-    if (tab === 'workshop')    return this._renderSimpleConfigTab('workshop', '工坊', ['名称', '单价'], ['name', 'price']);
+    if (tab === 'ticket')      return this._renderSimpleConfigTab('ticket', '门票', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
+    if (tab === 'coffee')      return this._renderSimpleConfigTab('coffee', '咖啡', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
+    if (tab === 'workshop')    return this._renderSimpleConfigTab('workshop', '工坊', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
     if (tab === 'creative')    return this._renderCreativeTab();
     if (tab === 'gallery')     return this._renderArtworkTab();
     return '';
@@ -3796,7 +3805,7 @@ const UI = {
         const realIdx = allItems.indexOf(item);
         const tds = fields.map(f => {
           const v = item[f];
-          if (f === 'price') return `<td>¥${this._fmt(v)}</td>`;
+          if (f === 'price' || f === 'costPrice') return `<td>¥${this._fmt(v)}</td>`;
           return `<td>${escaped(v)}</td>`;
         }).join('');
         rows += `<tr>${tds}<td class="row-actions">
@@ -4491,11 +4500,13 @@ const UI = {
     overlay.className = 'modal-overlay';
     overlay.style.display = 'flex';
     const d = item || {};
+    const supportsCost = ['ticket', 'coffee', 'workshop'].includes(type);
     overlay.innerHTML = `
       <div class="modal-card modal-card-sm">
         <div class="modal-title">${isEdit ? '编辑' + label : '新增' + label}</div>
         <div class="form-grid">
           <div class="form-group full"><label>名称 *</label><input type="text" id="cfg-name" value="${this._escHtml(d.name || '')}" placeholder="如 普通票 / 手冲咖啡 / 果壳风铃" autofocus></div>
+          ${supportsCost ? `<div class="form-group full"><label>成本价（元）</label><input type="number" id="cfg-cost" min="0" step="0.01" value="${d.costPrice ?? 0}" placeholder="0.00"></div>` : ''}
           <div class="form-group full"><label>单价（元）*</label><input type="number" id="cfg-price" min="0" step="0.01" value="${d.price || ''}" placeholder="0.00"></div>
         </div>
         <div class="modal-actions">
@@ -4509,9 +4520,12 @@ const UI = {
       if (saveBtn?.disabled) return;
       const name = overlay.querySelector('#cfg-name').value.trim();
       const price = parseFloat(overlay.querySelector('#cfg-price').value);
+      const costInput = overlay.querySelector('#cfg-cost');
+      const costPrice = costInput ? parseFloat(costInput.value || '0') : 0;
       if (!name) { UI.toast('请输入名称', 'error'); return; }
       if (isNaN(price) || price < 0) { UI.toast('请输入有效单价', 'error'); return; }
-      const newItem = { name, price };
+      if (supportsCost && (isNaN(costPrice) || costPrice < 0)) { UI.toast('请输入有效成本价', 'error'); return; }
+      const newItem = supportsCost ? { name, costPrice, price } : { name, price };
       const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' };
       const dbKeyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products' };
       const listKey = listKeyMap[type];

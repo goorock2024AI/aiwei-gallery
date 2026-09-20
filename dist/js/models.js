@@ -4,8 +4,8 @@ const MODELS = {
   COMBO_PRICE: 25,
   COFFEE_PRICE: 15,
   // 动态配置（从数据库加载后覆盖）
-  ticketProducts: [{name:'普通票',price:10},{name:'套票',price:25}],
-  coffeeProducts: [{name:'手冲咖啡',price:15}],
+  ticketProducts: [{name:'普通票',costPrice:0,price:10},{name:'套票',costPrice:0,price:25}],
+  coffeeProducts: [{name:'手冲咖啡',costPrice:0,price:15}],
   spaceDetails: [],
   STORAGE_KEYS: {
     revenue: 'aiwei_revenue',
@@ -21,13 +21,13 @@ const MODELS = {
   INVOICE_STATUSES: ['有发票','无发票','不需要','待补'],
   RECEIPT_STATUSES: ['有凭证','无凭证','不需要','待补'],
   WORKSHOP_PRODUCTS: [
-    { name: '果壳风铃', price: 128 },
-    { name: '豆荚娃娃', price: 118 },
-    { name: '迷你冰箱贴', price: 35 },
-    { name: '木刻杯垫', price: 88 },
-    { name: 'A5木刻', price: 168 },
-    { name: 'A4木刻', price: 198 },
-    { name: '拓印体验', price: 38 }
+    { name: '果壳风铃', costPrice: 0, price: 128 },
+    { name: '豆荚娃娃', costPrice: 0, price: 118 },
+    { name: '迷你冰箱贴', costPrice: 0, price: 35 },
+    { name: '木刻杯垫', costPrice: 0, price: 88 },
+    { name: 'A5木刻', costPrice: 0, price: 168 },
+    { name: 'A4木刻', costPrice: 0, price: 198 },
+    { name: '拓印体验', costPrice: 0, price: 38 }
   ]
 };
 
@@ -118,6 +118,26 @@ function createRetailSaleItem(name, qty, unitPrice, product = null) {
     costPriceSnapshot: p.costPrice, sku: p.sku || '', barcode: p.barcode || '' };
 }
 
+// 门票、咖啡等配置型商品在成交时冻结成本。编辑已有流水时传入原明细，
+// 只沿用原成本证据；旧流水没有成本快照时保持为 0，不用当前成本倒推历史。
+function createConfiguredSaleItem(product, qty, existingLine = null) {
+  const safeQty = Number(qty);
+  const unitPrice = Number(product?.price);
+  const prior = existingLine && typeof existingLine === 'object' ? existingLine : null;
+  const priorCost = prior?.costPriceSnapshot ?? prior?.cost_price_snapshot;
+  const rawCost = prior ? (priorCost ?? 0) : (product?.costPrice ?? product?.cost_price ?? 0);
+  const costPriceSnapshot = Number(rawCost);
+  return {
+    name: String(product?.name || '').trim(),
+    qty: safeQty,
+    price: unitPrice,
+    amount: safeQty * unitPrice,
+    costPriceSnapshot: Number.isFinite(costPriceSnapshot) && costPriceSnapshot >= 0 ? costPriceSnapshot : 0,
+    snapshotVersion: Number(prior?.snapshotVersion ?? prior?.snapshot_version ?? 1),
+    snapshotAt: prior?.snapshotAt ?? prior?.snapshot_at ?? new Date().toISOString()
+  };
+}
+
 function createWorkshopSaleItem(product, projectName, activityTypeCode, participants, discount = 0) {
   const qty = Number(participants);
   const unitPrice = Number(product?.price);
@@ -129,6 +149,7 @@ function createWorkshopSaleItem(product, projectName, activityTypeCode, particip
     participantCount: qty,
     qty,
     unitPrice,
+    costPriceSnapshot: Math.max(0, Number(product?.costPrice ?? product?.cost_price ?? 0) || 0),
     discount: safeDiscount,
     amount: Math.max(0, qty * unitPrice - safeDiscount),
     snapshotVersion: 1,
@@ -145,6 +166,7 @@ function normalizeWorkshopSaleItem(item) {
   line.qty = Number(line.participantCount ?? line.qty ?? line.quantity ?? 0);
   line.participantCount = line.qty;
   line.unitPrice = Number(line.unitPrice ?? line.price ?? 0);
+  if (line.costPriceSnapshot != null) line.costPriceSnapshot = Math.max(0, Number(line.costPriceSnapshot) || 0);
   line.discount = Number(line.discount ?? 0);
   line.amount = Number(line.amount ?? Math.max(0, line.qty * line.unitPrice - line.discount));
   return line;
