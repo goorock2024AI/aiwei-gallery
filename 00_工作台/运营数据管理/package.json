@@ -10,6 +10,7 @@
     "check:product-config-cost-browser": "node scripts/check-product-config-cost-browser.js",
     "check:configured-sales-cost": "node scripts/check-configured-sales-cost.js",
     "check:configured-sales-cost-integration": "node scripts/check-configured-sales-cost-integration.js",
+    "check:historical-configured-costs": "node scripts/check-historical-configured-cost-periods.js",
     "check:revenue-comparison-chart": "node scripts/check-revenue-comparison-chart.js",
     "m3:preflight": "powershell -ExecutionPolicy Bypass -File scripts/m3-03-preflight-check.ps1",
     "m3:rehearsal": "node scripts/m3-03-node-migration-rehearsal.js",

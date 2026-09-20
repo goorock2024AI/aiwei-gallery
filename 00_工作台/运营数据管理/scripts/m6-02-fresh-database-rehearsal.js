@@ -69,8 +69,8 @@ function targetConfig(adminConfig, database) {
 
 function verifyManifest(manifest) {
   assert.equal(manifest.schemaVersion, 1);
-  assert.equal(manifest.forward.length, 21, 'Forward chain must contain the 1.0 prerequisite, M3-M6, and configured-sale cost migration');
-  assert.equal(manifest.rollback.length, 17, 'Rollback chain must contain the supported reverse path');
+  assert.equal(manifest.forward.length, 22, 'Forward chain must contain the 1.0 prerequisite, M3-M6, configured-sale costs, and historical cost periods');
+  assert.equal(manifest.rollback.length, 18, 'Rollback chain must contain the supported reverse path');
   const entries = [manifest.baseline, ...manifest.forward, ...manifest.rollback];
   const seen = new Set();
   for (const entry of entries) {

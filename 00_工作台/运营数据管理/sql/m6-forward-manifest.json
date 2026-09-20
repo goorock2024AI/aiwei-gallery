@@ -90,9 +90,17 @@
     {
       "path": "sql/20260920_configured_sale_cost_snapshots.sql",
       "sha256": "1419464e57efc9e1c175b4c883581ab0bef3e1492a552f383e9f555b0d489c87"
+    },
+    {
+      "path": "sql/20260920_historical_configured_cost_periods.sql",
+      "sha256": "4c29310e9fe3eca4c2f42ee8107ddd3bb9964fc17c9e017da0c581d2ddf5ff0a"
     }
   ],
   "rollback": [
+    {
+      "path": "sql/20260920_historical_configured_cost_periods_rollback.sql",
+      "sha256": "b47522fcde4800c1182da594bdbe8f6e64d612a36dcac0015387e48cbd729935"
+    },
     {
       "path": "sql/20260920_configured_sale_cost_snapshots_rollback.sql",
       "sha256": "3807c20f3d4e7fd69b64ac1541f7f1d1bf6960b0c8685e7e777ee020bb8d4346"
