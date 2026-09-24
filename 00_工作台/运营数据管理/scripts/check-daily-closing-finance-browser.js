@@ -1,0 +1,105 @@
+const assert = require('assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
+const root = path.resolve(__dirname, '..');
+const serverSource = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+const authSource = fs.readFileSync(path.join(root, 'app/js/auth.js'), 'utf8');
+const viewerReadTables = serverSource.match(/viewer:\s*new Set\(\[([\s\S]*?)\]\)/)?.[1] || '';
+const writeTables = serverSource.match(/const writeTables = \{([\s\S]*?)\n\s*\};/)?.[1] || '';
+assert.match(viewerReadTables, /'cash_movements'/, 'viewer must have read-only access to cash movements for financial reconciliation');
+assert.match(authSource, /viewer:\s*\{[\s\S]*?export:\s*\['daily-closing'\]/, 'viewer must have daily-closing export permission');
+assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write access to any table');
+
+(async () => {
+  const browser = await chromium.launch({ headless: true, channel: 'msedge' });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.route('http://aiwei.test/daily-closing-finance', route => route.fulfill({
+      contentType: 'text/html',
+      body: '<main><div id="page-daily-closing"></div><div id="toast-container"></div></main>'
+    }));
+    await page.goto('http://aiwei.test/daily-closing-finance');
+    await page.addStyleTag({ content: fs.readFileSync(path.join(root, 'app/css/style.css'), 'utf8') });
+    await page.evaluate(() => {
+      window.$ = selector => selector.startsWith('#') ? document.getElementById(selector.slice(1)) : document.querySelector(selector);
+      window.html = (element, content) => {
+        if (typeof element === 'string') element = document.querySelector(element) || document.getElementById(element);
+        if (element) element.innerHTML = content;
+      };
+      window.Auth = {
+        hasModuleAccess: key => key === 'daily-closing',
+        can: (action, scope) => action === 'export' && scope === 'daily-closing',
+        isAdmin: false,
+        currentUser: { role: 'viewer', displayName: '财务测试' }
+      };
+      const facts = [{ date: '2026-09-24', category: '门票', paymentMethod: '现金', source: 'pos', netAmount: 100 }];
+      const closings = [{
+        id: 'closing-1', date: '2026-09-24', status: '已复核', systemNetAmount: 100,
+        confirmedAmount: 100, differenceAmount: 0, closerName: '前台', reviewerName: '财务'
+      }];
+      const cash = [
+        { date: '2026-09-23', type: 'cash_payment', amount: 50 },
+        { date: '2026-09-24', type: 'cash_payment', amount: 100 },
+        { date: '2026-09-24', type: 'cash_deposit', amount: -80 }
+      ];
+      window.Store = {
+        getByDateRange: async type => type === 'revenueFacts' ? facts : type === 'dailyClosings' ? closings : [],
+        getAll: async type => type === 'cashMovements' ? cash : []
+      };
+      window.__xlsxCapture = {};
+      window.XLSX = {
+        utils: {
+          json_to_sheet: rows => { window.__xlsxCapture.rows = rows; return {}; },
+          book_new: () => ({}),
+          book_append_sheet: (book, sheet, name) => { window.__xlsxCapture.sheetName = name; }
+        },
+        writeFile: (book, filename) => { window.__xlsxCapture.filename = filename; }
+      };
+    });
+    await page.addScriptTag({ content: fs.readFileSync(path.join(root, 'app/js/models.js'), 'utf8') });
+    await page.addScriptTag({ content: `${fs.readFileSync(path.join(root, 'app/js/ui.js'), 'utf8')}\n;window.__dailyClosingTest = UI;` });
+    await page.evaluate(async () => {
+      window.__dailyClosingTest._dailyClosingDate = '2026-09-24';
+      await window.__dailyClosingTest.renderDailyClosingPage();
+    });
+
+    assert.equal(await page.getByRole('button', { name: '导出本月日结' }).count(), 1);
+    const row = page.locator('#daily-closing-month-list tbody tr').filter({ hasText: '2026-09-24' });
+    assert.match(await row.innerText(), /¥80\.00/);
+    assert.equal(await page.locator('#daily-closing-detail-modal').count(), 0, 'detail should not occupy the page bottom');
+
+    await row.getByRole('button', { name: '查看' }).click();
+    const modal = page.locator('#daily-closing-detail-modal');
+    await modal.waitFor();
+    assert.match(await modal.innerText(), /2026-09-24 日结明细/);
+    assert.match(await modal.innerText(), /存现金[\s\S]*¥80\.00/);
+
+    await modal.getByRole('button', { name: '关闭日结明细' }).click();
+    assert.equal(await modal.count(), 0);
+    await page.getByRole('button', { name: '导出本月日结' }).click();
+    const exported = await page.evaluate(() => window.__xlsxCapture);
+    const exportedDay = exported.rows.find(item => item['日期'] === '2026-09-24');
+    assert.ok(exportedDay);
+    assert.equal(exportedDay['柜台现金期初'], 50);
+    assert.equal(exportedDay['现金收款'], 100);
+    assert.equal(exportedDay['存现金'], 80);
+    assert.equal(exportedDay['柜台现金期末'], 70);
+    assert.equal(exported.filename, '艾维美术馆_2026-09_日结报表.xlsx');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await row.getByRole('button', { name: '查看' }).click();
+    const box = await page.locator('.daily-closing-detail-modal').boundingBox();
+    assert.ok(box && box.width <= 390, 'daily closing modal should fit mobile viewport');
+    assert.deepEqual(errors, []);
+    console.log('PASS daily closing finance browser: deposit visibility, modal detail, viewer export and mobile layout');
+  } finally {
+    await browser.close();
+  }
+})().catch(error => {
+  console.error(error);
+  process.exit(1);
+});

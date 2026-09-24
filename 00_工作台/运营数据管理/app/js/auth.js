@@ -233,7 +233,7 @@ const Auth = {
         edit: ['revenue','expense','gallery','space','daily-closing','project-list','creative-products','artworks'],
         approve: [],
         delete: [],
-        export: [],
+        export: ['daily-closing'],
         adjust: [],
         review: []
       },
@@ -243,7 +243,7 @@ const Auth = {
         edit: [],
         approve: [],
         delete: [],
-        export: [],
+        export: ['daily-closing'],
         adjust: [],
         review: []
       }

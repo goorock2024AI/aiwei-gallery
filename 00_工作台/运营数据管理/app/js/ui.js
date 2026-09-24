@@ -5442,10 +5442,10 @@ const UI = {
           <div class="form-group"><label>日结日期</label><input type="date" id="daily-close-date" value="${date}" onchange="UI._reloadDailyClosing()"></div>
           <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('daily-close-date').value='${todayStr()}'; UI._reloadDailyClosing()">今天</button>
           <button type="button" class="btn btn-sm btn-primary" onclick="UI._loadDailyClosing()">刷新</button>
+          ${Auth.can('export', 'daily-closing') ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingMonth()">导出本月日结</button>' : ''}
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="daily-close-status"></span>
         </div>
         <div id="daily-closing-month-list" style="margin-bottom:16px"></div>
-        <div id="daily-closing-body"><div class="loading-state" style="padding:40px"><div class="spinner"></div><span>加载日结数据...</span></div></div>
       </div>
     `);
     await this._loadDailyClosing();
@@ -5479,7 +5479,7 @@ const UI = {
     this._dailyClosingDate = date;
     const input = document.getElementById('daily-close-date');
     if (input) input.value = date;
-    await this._loadDailyClosing();
+    await this._loadDailyClosing(true);
   },
 
   _monthRangeFromDate(date) {
@@ -5512,9 +5512,15 @@ const UI = {
     `).join('');
   },
 
-  _renderDailyClosingMonthList(closings, selectedDate, ym, facts = []) {
+  _renderDailyClosingMonthList(closings, selectedDate, ym, facts = [], cashMovements = []) {
     const closingsByDate = new Map((closings || []).map(c => [c.date, c]));
     const factsByDate = (facts || []).reduce((acc, row) => {
+      if (!row.date) return acc;
+      if (!acc.has(row.date)) acc.set(row.date, []);
+      acc.get(row.date).push(row);
+      return acc;
+    }, new Map());
+    const cashByDate = (cashMovements || []).reduce((acc, row) => {
       if (!row.date) return acc;
       if (!acc.has(row.date)) acc.set(row.date, []);
       acc.get(row.date).push(row);
@@ -5523,6 +5529,7 @@ const UI = {
     const dates = [...new Set([
       ...this._monthLedgerDates(ym),
       ...factsByDate.keys(),
+      ...cashByDate.keys(),
       ...closingsByDate.keys()
     ])]
       .filter(d => String(d || '').startsWith(ym))
@@ -5532,6 +5539,7 @@ const UI = {
     const tableRows = dates.length ? dates.map(date => {
       const c = closingsByDate.get(date) || null;
       const dayFacts = factsByDate.get(date) || [];
+      const dayCashMovements = cashByDate.get(date) || [];
       const byCategory = dayFacts.length
         ? this._sumBy(dayFacts, 'category')
         : (c?.revenueSummary?.byCategory || c?.revenue_summary?.byCategory || {});
@@ -5543,6 +5551,7 @@ const UI = {
         : +(c?.systemNetAmount ?? c?.system_net_amount ?? 0);
       const confirmed = c ? +(c.confirmedAmount ?? c.confirmed_amount ?? 0) : null;
       const diff = c ? +(c.differenceAmount ?? c.difference_amount ?? ((confirmed || 0) - systemNet)) : null;
+      const cashDeposit = -this._sumCashMovements(dayCashMovements, m => m.type === 'cash_deposit');
       const active = date === selectedDate ? ' style="background:var(--green-50)"' : '';
       const status = c ? (c.status || '草稿') : '未结存';
       const canQuickClose = Auth.can('create', 'daily-closing') && status !== '已确认' && status !== '已复核';
@@ -5558,18 +5567,19 @@ const UI = {
           <td>${c ? `<strong style="color:${diffColor(diff)}">¥${this._fmt(diff)}</strong>` : '<span style="color:var(--gray-500)">-</span>'}</td>
           <td>${this._summaryInline(byCategory)}</td>
           <td>${this._summaryInline(byPayment)}</td>
+          <td><strong>¥${this._fmt(cashDeposit)}</strong></td>
           <td>${this._esc(c?.closerName || c?.closer_name || '-')}</td>
           <td><div class="row-actions">${quickCloseBtn}<button type="button" class="btn btn-sm btn-secondary" onclick="UI._openDailyClosingDate('${this._esc(date)}')">查看</button></div></td>
         </tr>
       `;
-    }).join('') : '<tr><td colspan="9" style="color:var(--gray-500)">本月暂无收入事实或日结记录</td></tr>';
+    }).join('') : '<tr><td colspan="10" style="color:var(--gray-500)">本月暂无收入事实、柜台现金流水或日结记录</td></tr>';
 
     return `
       <div class="card">
         <div class="card-title">${ym} 日结台账</div>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th>日期</th><th>结存状态</th><th>系统净收入</th><th>实收确认</th><th>差异</th><th>品类收入</th><th>收款方式</th><th>结账人</th><th>操作</th></tr></thead>
+            <thead><tr><th>日期</th><th>结存状态</th><th>系统净收入</th><th>实收确认</th><th>差异</th><th>品类收入</th><th>收款方式</th><th>存现金</th><th>结账人</th><th>操作</th></tr></thead>
             <tbody>${tableRows}</tbody>
           </table>
         </div>
@@ -5660,14 +5670,115 @@ const UI = {
     }
   },
 
-  async _loadDailyClosing() {
-    const body = $('#daily-closing-body');
-    if (!body) return;
+  _showDailyClosingModal(date, content) {
+    document.getElementById('daily-closing-detail-modal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'daily-closing-detail-modal';
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-card daily-closing-detail-modal" role="dialog" aria-modal="true" aria-labelledby="daily-closing-detail-title">
+        <div class="daily-closing-modal-header">
+          <div class="modal-title" id="daily-closing-detail-title">${this._esc(date)} 日结明细</div>
+          <button type="button" class="daily-closing-modal-close" aria-label="关闭日结明细" onclick="this.closest('.modal-overlay').remove()">×</button>
+        </div>
+        ${content}
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button></div>
+      </div>`;
+    overlay.addEventListener('click', event => { if (event.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  },
+
+  _dailyClosingSummaryText(obj, labelMap = {}) {
+    return Object.entries(obj || {})
+      .filter(([, value]) => Math.abs(+value || 0) > 0.0001)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+      .map(([label, value]) => `${labelMap[label] || label} ¥${(+value || 0).toFixed(2)}`)
+      .join('；');
+  },
+
+  async _exportDailyClosingMonth() {
+    if (!Auth.can('export', 'daily-closing')) {
+      this.toast('当前账号无权限导出日结报表', 'error');
+      return;
+    }
+    if (typeof XLSX === 'undefined') {
+      this.toast('缺少 Excel 导出组件', 'error');
+      return;
+    }
+    const date = document.getElementById('daily-close-date')?.value || this._dailyClosingDate || todayStr();
+    const range = this._monthRangeFromDate(date);
+    try {
+      const [facts, closings, cashMovements] = await Promise.all([
+        Store.getByDateRange('revenueFacts', range.start, range.end),
+        Store.getByDateRange('dailyClosings', range.start, range.end),
+        Store.getAll('cashMovements')
+      ]);
+      const factsByDate = (facts || []).reduce((map, row) => {
+        if (!map.has(row.date)) map.set(row.date, []);
+        map.get(row.date).push(row);
+        return map;
+      }, new Map());
+      const closingsByDate = new Map((closings || []).map(row => [row.date, row]));
+      const cashByDate = (cashMovements || []).reduce((map, row) => {
+        if (!map.has(row.date)) map.set(row.date, []);
+        map.get(row.date).push(row);
+        return map;
+      }, new Map());
+      const dates = [...new Set([
+        ...this._monthLedgerDates(range.ym),
+        ...factsByDate.keys(),
+        ...closingsByDate.keys(),
+        ...cashByDate.keys()
+      ])].filter(day => String(day || '').startsWith(range.ym)).sort();
+      const rows = dates.map(day => {
+        const dayFacts = factsByDate.get(day) || [];
+        const closing = closingsByDate.get(day) || null;
+        const dayCash = cashByDate.get(day) || [];
+        const systemNet = dayFacts.length
+          ? dayFacts.reduce((sum, row) => sum + (+row.netAmount || 0), 0)
+          : +(closing?.systemNetAmount ?? closing?.system_net_amount ?? 0);
+        const confirmed = closing ? +(closing.confirmedAmount ?? closing.confirmed_amount ?? 0) : '';
+        const cashOpening = this._sumCashMovements(cashMovements, movement => movement.date < day);
+        const cashIn = this._sumCashMovements(dayCash, movement => (+movement.amount || 0) > 0);
+        const cashDeposit = -this._sumCashMovements(dayCash, movement => movement.type === 'cash_deposit');
+        const cashOut = -this._sumCashMovements(dayCash, movement => (+movement.amount || 0) < 0 && movement.type !== 'cash_deposit');
+        return {
+          '日期': day,
+          '结存状态': closing?.status || '未结存',
+          '系统净收入': systemNet,
+          '实收确认': confirmed,
+          '差异': closing ? +(closing.differenceAmount ?? closing.difference_amount ?? ((+confirmed || 0) - systemNet)) : '',
+          '品类收入': this._dailyClosingSummaryText(dayFacts.length ? this._sumBy(dayFacts, 'category') : (closing?.revenueSummary?.byCategory || closing?.revenue_summary?.byCategory || {})),
+          '收款方式': this._dailyClosingSummaryText(dayFacts.length ? this._sumBy(dayFacts.filter(row => (+row.netAmount || 0) > 0), 'paymentMethod') : (closing?.paymentSummary || closing?.payment_summary || {})),
+          '柜台现金期初': cashOpening,
+          '现金收款': cashIn,
+          '存现金': cashDeposit,
+          '现金退款/冲销': cashOut,
+          '柜台现金期末': cashOpening + this._sumCashMovements(dayCash),
+          '结账人': closing?.closerName || closing?.closer_name || '',
+          '复核人': closing?.reviewerName || closing?.reviewer_name || '',
+          '备注': closing?.notes || ''
+        };
+      });
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet['!cols'] = [12, 12, 14, 14, 12, 32, 32, 16, 14, 14, 16, 16, 14, 14, 28].map(wch => ({ wch }));
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, `${range.ym}日结`);
+      XLSX.writeFile(workbook, `艾维美术馆_${range.ym}_日结报表.xlsx`);
+      this.toast(`已导出 ${range.ym} 日结报表（${rows.length} 天）`);
+    } catch (error) {
+      console.error('导出月度日结失败', error);
+      this.toast('导出日结报表失败：' + (error.message || error), 'error');
+    }
+  },
+
+  async _loadDailyClosing(openDetail = false) {
+    const monthListEl = $('#daily-closing-month-list');
+    if (!monthListEl) return;
     const date = document.getElementById('daily-close-date')?.value || this._dailyClosingDate || todayStr();
     this._dailyClosingDate = date;
     const statusEl = $('#daily-close-status');
     if (statusEl) statusEl.textContent = '加载中...';
-    const monthListEl = $('#daily-closing-month-list');
     const monthRange = this._monthRangeFromDate(date);
     if (monthListEl) monthListEl.innerHTML = '<div class="card"><div class="loading-state" style="padding:24px"><div class="spinner"></div><span>加载本月日结列表...</span></div></div>';
 
@@ -5676,10 +5787,14 @@ const UI = {
       Store.getByDateRange('revenueFacts', monthRange.start, monthRange.end),
       canEditDaily ? Store.getByDateRange('expense', date, date) : Promise.resolve([]),
       canEditDaily ? Store.getAll('transactionAdjustments') : Promise.resolve([]),
-      canEditDaily ? Store.getAll('cashMovements') : Promise.resolve([]),
+      Store.getAll('cashMovements'),
       Store.getByDateRange('dailyClosings', monthRange.start, monthRange.end)
     ]);
-    if (monthListEl) monthListEl.innerHTML = this._renderDailyClosingMonthList(monthClosings, date, monthRange.ym, monthFacts);
+    if (monthListEl) monthListEl.innerHTML = this._renderDailyClosingMonthList(monthClosings, date, monthRange.ym, monthFacts, cashMovements);
+    if (!openDetail) {
+      if (statusEl) statusEl.textContent = `已加载 ${monthRange.ym}`;
+      return;
+    }
 
     const dayFacts = (monthFacts || []).filter(r => r.date === date);
     const dayExpenses = (expenses || []).filter(r => r.date === date);
@@ -5725,7 +5840,7 @@ const UI = {
       </tr>
     `).join('') : '<tr><td colspan="6" style="color:var(--gray-500)">暂无退款/作废调整</td></tr>';
 
-    html(body, `
+    const detailContent = `
       <div class="stats-grid" style="margin-bottom:16px">
         <div class="stat-card"><div class="stat-label">系统净收入</div><div class="stat-value">¥${this._fmt(systemNet)}</div><div class="stat-sub">${dayFacts.length} 条收入事实</div></div>
         <div class="stat-card"><div class="stat-label">正向收入</div><div class="stat-value">¥${this._fmt(grossPositive)}</div><div class="stat-sub">退款前口径</div></div>
@@ -5782,7 +5897,8 @@ const UI = {
           <button type="button" class="btn btn-primary" onclick="UI._saveDailyClosing()">保存日结</button>
         </div>
       </div>` : ''}
-    `);
+    `;
+    this._showDailyClosingModal(date, detailContent);
 
     this._dailyClosingSnapshot = {
       existingId: closing?.id || '',
@@ -5838,7 +5954,7 @@ const UI = {
       this._dailyClosingSnapshot.existingId = saved.id;
       this.toast('日结已保存');
     }
-    await this._loadDailyClosing();
+    await this._loadDailyClosing(true);
   },
 
   // === 数据报表 ===

@@ -2102,6 +2102,23 @@ input.invalid:focus {
 .modal-card-md { --modal-width: 480px; }
 .modal-card-form { --modal-width: 520px; }
 .modal-card-wide { --modal-width: 720px; }
+.daily-closing-detail-modal { --modal-width: 1120px; }
+.daily-closing-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.daily-closing-modal-header .modal-title { margin-bottom: 0; }
+.daily-closing-modal-close {
+  border: 0;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  font-size: 28px;
+  line-height: 1;
+}
 /* 表单类弹窗：内容多时卡片本身太窄，给个最小宽度 */
 .modal-card:has(.form-grid) { --modal-width: 520px; }
 .modal-table-scroll { max-height: 50vh; overflow-y: auto; }

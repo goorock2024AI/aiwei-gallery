@@ -70,6 +70,7 @@ async function clean(db) {
       revenue: 200,
       expense: 403,
       daily_closings: 200,
+      cash_movements: 200,
       creative_products: 403,
       gallery_sales: 200,
       space_usage: 200

@@ -7,6 +7,7 @@
     "check:creative-pos-picker": "node scripts/check-creative-pos-picker.js",
     "check:pos-retail-autocomplete-browser": "node scripts/check-pos-retail-autocomplete-browser.js",
     "check:pos-ticket-quantity-browser": "node scripts/check-pos-ticket-quantity-browser.js",
+    "check:daily-closing-finance-browser": "node scripts/check-daily-closing-finance-browser.js",
     "check:product-config-cost-browser": "node scripts/check-product-config-cost-browser.js",
     "check:configured-sales-cost": "node scripts/check-configured-sales-cost.js",
     "check:configured-sales-cost-integration": "node scripts/check-configured-sales-cost-integration.js",

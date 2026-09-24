@@ -402,7 +402,7 @@ function canAccessTable(user, table, method) {
     ]),
     viewer: new Set([
       'revenue','space_usage','space_payments','space_usage_with_payments',
-      'gallery_sales','daily_closings','project_registry','artworks','revenue_facts','app_config',
+      'gallery_sales','daily_closings','cash_movements','project_registry','artworks','revenue_facts','app_config',
       'business_dimensions'
     ])
   };
