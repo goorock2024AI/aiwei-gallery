@@ -5435,14 +5435,18 @@ const UI = {
     const page = $('#page-daily-closing');
     if (!Auth.hasModuleAccess('daily-closing')) { this._noAccess(page); return; }
     const date = this._dailyClosingDate || todayStr();
+    const exportMonth = this._dailyClosingExportMonth || date.slice(0, 7);
     html(page, `
       <div>
         <div class="card-title">📋 日结报表</div>
         <div class="filter-bar">
-          <div class="form-group"><label>日结日期</label><input type="date" id="daily-close-date" value="${date}" onchange="UI._reloadDailyClosing()"></div>
+          <div class="form-group"><label for="daily-close-date">日结日期</label><input type="date" id="daily-close-date" value="${date}" onchange="UI._reloadDailyClosing()"></div>
           <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('daily-close-date').value='${todayStr()}'; UI._reloadDailyClosing()">今天</button>
           <button type="button" class="btn btn-sm btn-primary" onclick="UI._loadDailyClosing()">刷新</button>
-          ${Auth.can('export', 'daily-closing') ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingMonth()">导出本月日结</button>' : ''}
+          ${Auth.can('export', 'daily-closing') ? `
+            <div class="form-group"><label for="daily-export-month">历史导出月份</label><input type="month" id="daily-export-month" value="${exportMonth}" max="${todayStr().slice(0, 7)}" onchange="UI._dailyClosingExportMonth=this.value"></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingMonth()">导出所选月份</button>
+          ` : ''}
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="daily-close-status"></span>
         </div>
         <div id="daily-closing-month-list" style="margin-bottom:16px"></div>
@@ -5705,8 +5709,9 @@ const UI = {
       this.toast('缺少 Excel 导出组件', 'error');
       return;
     }
-    const date = document.getElementById('daily-close-date')?.value || this._dailyClosingDate || todayStr();
-    const range = this._monthRangeFromDate(date);
+    const selectedMonth = document.getElementById('daily-export-month')?.value || this._dailyClosingExportMonth || (this._dailyClosingDate || todayStr()).slice(0, 7);
+    this._dailyClosingExportMonth = selectedMonth;
+    const range = this._monthRangeFromDate(`${selectedMonth}-01`);
     try {
       const [facts, closings, cashMovements] = await Promise.all([
         Store.getByDateRange('revenueFacts', range.start, range.end),

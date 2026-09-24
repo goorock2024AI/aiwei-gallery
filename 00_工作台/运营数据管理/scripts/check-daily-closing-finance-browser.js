@@ -36,18 +36,32 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
         isAdmin: false,
         currentUser: { role: 'viewer', displayName: '财务测试' }
       };
-      const facts = [{ date: '2026-09-24', category: '门票', paymentMethod: '现金', source: 'pos', netAmount: 100 }];
+      const facts = [
+        { date: '2026-08-15', category: '衍生品', paymentMethod: '现金', source: 'pos', netAmount: 200 },
+        { date: '2026-09-24', category: '门票', paymentMethod: '现金', source: 'pos', netAmount: 100 }
+      ];
       const closings = [{
         id: 'closing-1', date: '2026-09-24', status: '已复核', systemNetAmount: 100,
         confirmedAmount: 100, differenceAmount: 0, closerName: '前台', reviewerName: '财务'
+      }, {
+        id: 'closing-history', date: '2026-08-15', status: '已复核', systemNetAmount: 200,
+        confirmedAmount: 200, differenceAmount: 0, closerName: '前台', reviewerName: '财务'
       }];
       const cash = [
+        { date: '2026-08-14', type: 'cash_payment', amount: 20 },
+        { date: '2026-08-15', type: 'cash_payment', amount: 200 },
+        { date: '2026-08-15', type: 'cash_deposit', amount: -150 },
         { date: '2026-09-23', type: 'cash_payment', amount: 50 },
         { date: '2026-09-24', type: 'cash_payment', amount: 100 },
         { date: '2026-09-24', type: 'cash_deposit', amount: -80 }
       ];
+      window.__rangeCalls = [];
       window.Store = {
-        getByDateRange: async type => type === 'revenueFacts' ? facts : type === 'dailyClosings' ? closings : [],
+        getByDateRange: async (type, start, end) => {
+          window.__rangeCalls.push({ type, start, end });
+          const rows = type === 'revenueFacts' ? facts : type === 'dailyClosings' ? closings : [];
+          return rows.filter(row => row.date >= start && row.date <= end);
+        },
         getAll: async type => type === 'cashMovements' ? cash : []
       };
       window.__xlsxCapture = {};
@@ -67,7 +81,8 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
       await window.__dailyClosingTest.renderDailyClosingPage();
     });
 
-    assert.equal(await page.getByRole('button', { name: '导出本月日结' }).count(), 1);
+    assert.equal(await page.getByLabel('历史导出月份').inputValue(), '2026-09');
+    assert.equal(await page.getByRole('button', { name: '导出所选月份' }).count(), 1);
     const row = page.locator('#daily-closing-month-list tbody tr').filter({ hasText: '2026-09-24' });
     assert.match(await row.innerText(), /¥80\.00/);
     assert.equal(await page.locator('#daily-closing-detail-modal').count(), 0, 'detail should not occupy the page bottom');
@@ -80,22 +95,26 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
 
     await modal.getByRole('button', { name: '关闭日结明细' }).click();
     assert.equal(await modal.count(), 0);
-    await page.getByRole('button', { name: '导出本月日结' }).click();
+    await page.getByLabel('历史导出月份').fill('2026-08');
+    await page.getByRole('button', { name: '导出所选月份' }).click();
     const exported = await page.evaluate(() => window.__xlsxCapture);
-    const exportedDay = exported.rows.find(item => item['日期'] === '2026-09-24');
+    const exportedDay = exported.rows.find(item => item['日期'] === '2026-08-15');
     assert.ok(exportedDay);
-    assert.equal(exportedDay['柜台现金期初'], 50);
-    assert.equal(exportedDay['现金收款'], 100);
-    assert.equal(exportedDay['存现金'], 80);
+    assert.equal(exportedDay['柜台现金期初'], 20);
+    assert.equal(exportedDay['现金收款'], 200);
+    assert.equal(exportedDay['存现金'], 150);
     assert.equal(exportedDay['柜台现金期末'], 70);
-    assert.equal(exported.filename, '艾维美术馆_2026-09_日结报表.xlsx');
+    assert.equal(exported.filename, '艾维美术馆_2026-08_日结报表.xlsx');
+    assert.ok(!exported.rows.some(item => item['日期'] === '2026-09-24'), 'historical export must not include the viewed month');
+    const rangeCalls = await page.evaluate(() => window.__rangeCalls);
+    assert.ok(rangeCalls.some(call => call.start === '2026-08-01' && call.end === '2026-08-31'), 'historical month range must drive export queries');
 
     await page.setViewportSize({ width: 390, height: 844 });
     await row.getByRole('button', { name: '查看' }).click();
     const box = await page.locator('.daily-closing-detail-modal').boundingBox();
     assert.ok(box && box.width <= 390, 'daily closing modal should fit mobile viewport');
     assert.deepEqual(errors, []);
-    console.log('PASS daily closing finance browser: deposit visibility, modal detail, viewer export and mobile layout');
+    console.log('PASS daily closing finance browser: deposit visibility, modal detail, independent historical export and mobile layout');
   } finally {
     await browser.close();
   }
