@@ -5446,6 +5446,7 @@ const UI = {
           ${Auth.can('export', 'daily-closing') ? `
             <div class="form-group"><label for="daily-export-month">历史导出月份</label><input type="month" id="daily-export-month" value="${exportMonth}" max="${todayStr().slice(0, 7)}" onchange="UI._dailyClosingExportMonth=this.value"></div>
             <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingMonth()">导出所选月份</button>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingRevenue()">导出收入明细</button>
           ` : ''}
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="daily-close-status"></span>
         </div>
@@ -5698,6 +5699,26 @@ const UI = {
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
       .map(([label, value]) => `${labelMap[label] || label} ¥${(+value || 0).toFixed(2)}`)
       .join('；');
+  },
+
+  async _exportDailyClosingRevenue() {
+    if (!Auth.can('export', 'daily-closing')) {
+      this.toast('当前账号无权限导出收入明细', 'error');
+      return;
+    }
+    if (typeof ImportExport === 'undefined') {
+      this.toast('缺少收入导出组件', 'error');
+      return;
+    }
+    const selectedMonth = document.getElementById('daily-export-month')?.value || this._dailyClosingExportMonth || (this._dailyClosingDate || todayStr()).slice(0, 7);
+    this._dailyClosingExportMonth = selectedMonth;
+    const range = this._monthRangeFromDate(`${selectedMonth}-01`);
+    try {
+      await ImportExport.exportRevenueCSV(range.start, range.end, 'daily-closing');
+    } catch (error) {
+      console.error('导出收入明细失败', error);
+      this.toast('导出收入明细失败：' + (error.message || error), 'error');
+    }
   },
 
   async _exportDailyClosingMonth() {

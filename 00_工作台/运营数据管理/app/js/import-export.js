@@ -22,8 +22,8 @@ const ImportExport = {
       return (!start || d >= start) && (!end || d <= end);
     });
   },
-  _suffix() {
-    const { start, end } = this._getExportDates();
+  _suffix(start, end) {
+    if (start === undefined && end === undefined) ({ start, end } = this._getExportDates());
     if (start && end) return '_' + start + '_' + end;
     if (start) return '_' + start + '_end';
     if (end) return '_begin_' + end;
@@ -38,7 +38,7 @@ const ImportExport = {
       }
       const { start, end } = this._getExportDates();
       if (type === 'revenue') {
-        await this._exportAllRevenueCSV(start, end);
+        await this.exportRevenueCSV(start, end, 'revenue');
         return;
       }
       const all = await Store.getAll(type);
@@ -89,6 +89,14 @@ const ImportExport = {
     } catch (e) { console.error('导出失败', e); UI.toast('导出失败：' + e.message, 'error'); }
   },
 
+  async exportRevenueCSV(start, end, permissionScope = 'revenue') {
+    if (!Auth.can('export', permissionScope)) {
+      UI.toast('当前账号无权限导出数据', 'error');
+      return;
+    }
+    await this._exportAllRevenueCSV(start, end);
+  },
+
   async _exportAllRevenueCSV(start, end) {
     const all = await this._loadAllRevenueFacts();
     const records = this._filterByFactDateRange(all, start, end);
@@ -116,7 +124,7 @@ const ImportExport = {
       r.recordId || r.id || '',
       r.createdAt || ''
     ]);
-    this._downloadCSV(headers, rows, '收入');
+    this._downloadCSV(headers, rows, '收入', start, end);
     UI.toast('收入数据已导出（含收银台、空间、画廊）');
   },
 
@@ -351,7 +359,7 @@ const ImportExport = {
     return String(name || '').trim().toLowerCase();
   },
 
-  _downloadCSV(headers, rows, label) {
+  _downloadCSV(headers, rows, label, start, end) {
     const csvContent = '﻿' + headers.join(',') + '\n' + rows.map(row => row.map(v => {
       const s = String(v !== undefined && v !== null ? v : '');
       return s.includes(',') || s.includes('"') || s.includes('\n') ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -359,7 +367,7 @@ const ImportExport = {
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `艾维美术馆_${label}${this._suffix()}.csv`;
+    link.download = `艾维美术馆_${label}${this._suffix(start, end)}.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
   },

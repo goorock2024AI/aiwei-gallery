@@ -37,8 +37,8 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
         currentUser: { role: 'viewer', displayName: '财务测试' }
       };
       const facts = [
-        { date: '2026-08-15', category: '衍生品', paymentMethod: '现金', source: 'pos', netAmount: 200 },
-        { date: '2026-09-24', category: '门票', paymentMethod: '现金', source: 'pos', netAmount: 100 }
+        { date: '2026-08-15', category: '衍生品', paymentMethod: '现金', source: 'pos', amount: 200, netAmount: 200 },
+        { date: '2026-09-24', category: '门票', paymentMethod: '现金', source: 'pos', amount: 100, netAmount: 100 }
       ];
       const closings = [{
         id: 'closing-1', date: '2026-09-24', status: '已复核', systemNetAmount: 100,
@@ -62,7 +62,7 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
           const rows = type === 'revenueFacts' ? facts : type === 'dailyClosings' ? closings : [];
           return rows.filter(row => row.date >= start && row.date <= end);
         },
-        getAll: async type => type === 'cashMovements' ? cash : []
+        getAll: async type => type === 'cashMovements' ? cash : type === 'revenueFacts' ? facts : []
       };
       window.__xlsxCapture = {};
       window.XLSX = {
@@ -75,6 +75,7 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
       };
     });
     await page.addScriptTag({ content: fs.readFileSync(path.join(root, 'app/js/models.js'), 'utf8') });
+    await page.addScriptTag({ content: fs.readFileSync(path.join(root, 'app/js/import-export.js'), 'utf8') });
     await page.addScriptTag({ content: `${fs.readFileSync(path.join(root, 'app/js/ui.js'), 'utf8')}\n;window.__dailyClosingTest = UI;` });
     await page.evaluate(async () => {
       window.__dailyClosingTest._dailyClosingDate = '2026-09-24';
@@ -83,6 +84,7 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
 
     assert.equal(await page.getByLabel('历史导出月份').inputValue(), '2026-09');
     assert.equal(await page.getByRole('button', { name: '导出所选月份' }).count(), 1);
+    assert.equal(await page.getByRole('button', { name: '导出收入明细' }).count(), 1);
     const row = page.locator('#daily-closing-month-list tbody tr').filter({ hasText: '2026-09-24' });
     assert.match(await row.innerText(), /¥80\.00/);
     assert.equal(await page.locator('#daily-closing-detail-modal').count(), 0, 'detail should not occupy the page bottom');
@@ -109,12 +111,21 @@ assert.doesNotMatch(writeTables, /viewer\s*:/, 'viewer must not gain write acces
     const rangeCalls = await page.evaluate(() => window.__rangeCalls);
     assert.ok(rangeCalls.some(call => call.start === '2026-08-01' && call.end === '2026-08-31'), 'historical month range must drive export queries');
 
+    const revenueDownloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出收入明细' }).click();
+    const revenueDownload = await revenueDownloadPromise;
+    assert.equal(revenueDownload.suggestedFilename(), '艾维美术馆_收入_2026-08-01_2026-08-31.csv');
+    const revenueCsv = fs.readFileSync(await revenueDownload.path(), 'utf8');
+    assert.match(revenueCsv, /日期,来源,分类,收入金额,净收入,收款方式,项目\/关联,经手人,原记录ID,创建时间/);
+    assert.match(revenueCsv, /2026-08-15,收银台,衍生品,200\.00,200\.00,现金/);
+    assert.doesNotMatch(revenueCsv, /2026-09-24/, 'income detail export must follow the selected historical month');
+
     await page.setViewportSize({ width: 390, height: 844 });
     await row.getByRole('button', { name: '查看' }).click();
     const box = await page.locator('.daily-closing-detail-modal').boundingBox();
     assert.ok(box && box.width <= 390, 'daily closing modal should fit mobile viewport');
     assert.deepEqual(errors, []);
-    console.log('PASS daily closing finance browser: deposit visibility, modal detail, independent historical export and mobile layout');
+    console.log('PASS daily closing finance browser: deposit visibility, modal detail, monthly closing export, matching income detail CSV and mobile layout');
   } finally {
     await browser.close();
   }
