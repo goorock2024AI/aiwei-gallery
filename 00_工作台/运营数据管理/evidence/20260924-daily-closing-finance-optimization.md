@@ -2,7 +2,7 @@
 
 ## 结论
 
-发布候选版本为 `2.0.0-rc.6`。本地功能验证通过，用户已明确授权生产发布；财务只读账号的权限扩大仅限读取柜台现金流水和导出日结，没有新增写入、复核、删除或现金操作权限。
+`2.0.0-rc.6` 已发布生产，状态为“已发布待观察”。财务只读账号的权限扩大仅限读取柜台现金流水和导出日结，没有新增写入、复核、删除或现金操作权限。
 
 ## 冻结口径
 
@@ -40,3 +40,13 @@
 ## 回滚
 
 恢复本次修改的 `server.js`、`app/js/auth.js`、`app/js/ui.js`、`app/css/style.css`、`app/index.html` 及对应静态镜像即可。无数据库迁移，无经营数据回滚。
+
+## 生产证据
+
+- 功能提交：`c47c4f78e406ebcb8750fcf65dc62b1214e88574`，已同步 GitHub `codex/operations-v2`。
+- 数据库备份：`/opt/aiwei/backups/postgres/aiwei-postgres-20260924-115553.dump`，405,039 bytes；双 SHA 与恢复列表检查通过。
+- 代码回滚：`/opt/aiwei/backups/daily-closing-finance-20260924-1156`。
+- 本地与生产七个发布文件 SHA-256 一致；生产版本 `2.0.0-rc.6`，API、数据库和 Nginx 容器正常，API healthy。
+- HTTPS 首页、CSS、app.js、auth.js、ui.js 和 `/healthz` 返回 200；未登录经营接口返回 401，API 错误日志为空。
+- 生产 viewer 冒烟：柜台现金未登录 401、viewer GET 200、viewer POST 403、日结已复核过滤通过；临时账号清理后为 0。
+- 发布前后基线在排除 `capturedAt` 后完全一致；核心记录数、金额、结构指纹、最新事实日期和灰度均未变化。

@@ -7,7 +7,7 @@
 ## 2026-09-24 财务日结核对优化：存现金、弹窗明细与月度导出
 
 **需求编号**：OPS-DAILY-20260924
-**状态**：待授权发布
+**状态**：已发布待观察
 
 **业务目标**
 
@@ -33,9 +33,18 @@
 
 **边界与回滚**
 
-- 未连接生产、未部署、未改数据库结构、未写入真实经营数据。
-- 回滚只需恢复本次前端、权限白名单、测试脚本和静态镜像文件；无数据回滚事项。
-- 用户已明确授权生产发布；财务只读能力按现有 viewer 角色发布。
+- 未改数据库结构，未改写收入、支出、日结或柜台现金经营事实。
+- 回滚只需从本次代码回滚目录恢复 `server.js`、`VERSION` 和五个静态文件并重建 API；无数据库回滚事项。
+
+**生产发布**
+
+- 发布版本：`2.0.0-rc.6`；功能提交 `c47c4f7` 已同步至 GitHub `codex/operations-v2`。
+- 数据库备份：`/opt/aiwei/backups/postgres/aiwei-postgres-20260924-115553.dump`，405,039 bytes；dump SHA、基线 SHA 和备份脚本内 `pg_restore --list` 均通过。
+- 代码回滚目录：`/opt/aiwei/backups/daily-closing-finance-20260924-1156`。
+- 生产上传 `index.html`、`style.css`、`app.js`、`auth.js`、`ui.js`、`server.js` 和 `VERSION`；本地与远端 SHA-256 全部一致，API 重建后 healthy。
+- HTTPS 首页及四个改动资源返回 200，首页命中 `2.0.0-rc.6-20260924`；`/healthz` 返回 200，未登录收入接口返回 401，API 日志无 SyntaxError、ReferenceError、Unhandled、FATAL 或 ERROR。
+- 生产临时 viewer 权限冒烟通过：未登录读取柜台现金 401，viewer 读取 200、写入 403，日结仍只返回已复核记录；临时账号删除后残留为 0。
+- 发布前后业务基线除采集时间外完全一致：表/视图结构指纹、核心记录数、经营金额、最新事实日期和 `staff` 灰度均未变化，未关闭 P0/P1 为 0。
 
 ---
 
