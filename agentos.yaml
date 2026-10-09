@@ -1,0 +1,24 @@
+schema_version: "agentos.project.v0.1"
+project:
+  id: "goorock2024AI--aiwei-gallery"
+  name: "艾维美术馆"
+  created_at: null
+intent:
+  what: "维护艾维美术馆的全馆资料与 Agent 工作入口，连接运营管理、展览活动、内容传播及商业合作。"
+  why: "建立可持续的营收体系，以真实经营数据和统一业务口径支持美术馆运营与管理判断。"
+  scope:
+    include:
+      - "全馆资料索引、项目注册表与既有 Agent 工作规则"
+      - "运营管理系统及其需求与交付资料"
+      - "展览活动、内容传播、空间、合作及运营行政资料"
+    exclude:
+      - "替代馆长确认业务验收、预算、对外承诺和正式上线决策"
+      - "将运营管理 2.0 的基础汇总提前扩展为 3.0 复杂经营分析驾驶舱"
+  success: "以可核验的项目事实和真实经营数据支撑展览、场租、活动与合作推进；运营管理具有统一业务口径，并保留既有生产经营事实。"
+current_state:
+  status: "持续维护；Agent OS 标准文件已补齐，First Sync 与 Contract Validation 尚待确认。"
+  current_focus: "完成原 Repo 的 Agent OS 接入准备；保留本地既有未提交工作和独立运营系统 2.0 开发入口。"
+  next_action: "等待 Agent OS 从 GitHub 默认分支完成首次同步与校验；取得 First Cross-Project Delta 后按实际采用事实回流。"
+  blockers:
+    - "尚未取得 Agent OS 提供的 First Cross-Project Delta。"
+outputs: []
