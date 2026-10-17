@@ -14,5 +14,9 @@ health_checks:
     status: 200
   - url: http://127.0.0.1:8081/
     status: 200
+  - url: http://127.0.0.1:8081/css/style.css
+    status: 200
+  - url: http://127.0.0.1:8081/js/app.js
+    status: 200
   - url: http://127.0.0.1:8081/rest/v1/revenue_facts?limit=1
     status: 401

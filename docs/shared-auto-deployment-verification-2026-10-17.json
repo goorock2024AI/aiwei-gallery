@@ -1,0 +1,40 @@
+{
+  "uploads_backup_files_unchanged": 53,
+  "sha": "5561b5c79e10e16e0450acad7f1078adcad487a2",
+  "status": "healthy",
+  "source_hashes": 40,
+  "public_static_hashes": 24,
+  "api": [
+    {
+      "endpoint": "/rest/v1/revenue_facts?limit=1",
+      "status": 200,
+      "same_response": true
+    },
+    {
+      "endpoint": "/rest/v1/expense?limit=1",
+      "status": 200,
+      "same_response": true
+    },
+    {
+      "endpoint": "/rest/v1/creative_products?limit=1",
+      "status": 200,
+      "same_response": true
+    },
+    {
+      "endpoint": "/rest/v1/daily_closings?limit=1",
+      "status": 200,
+      "same_response": true
+    }
+  ],
+  "anonymous_status": 401,
+  "data_table_fingerprints_unchanged": 30,
+  "original_rows_preserved": true,
+  "concurrent_new_rows": {
+    "revenue": 2
+  },
+  "database_container_unchanged": true,
+  "uploads_same_volume": true,
+  "upload_public_sample_verified": true,
+  "migration": "none",
+  "verified_at": 1792228678.1632578
+}
