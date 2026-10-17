@@ -1,0 +1,51 @@
+# Server settings.json must map this project to existing Compose project "aiwei".
+# Database is deliberately external: no new database or initialization is allowed.
+services:
+  api:
+    build:
+      context: ../00_工作台/运营数据管理
+    restart: always
+    environment:
+      DB_HOST: db
+      DB_PASS: ${DB_PASSWORD:?server production.env must contain DB_PASSWORD}
+      PORT: 3000
+      UPLOAD_DIR: /uploads
+    volumes:
+      - uploads-data:/uploads
+    healthcheck:
+      test: [CMD-SHELL, 'wget -qO- http://127.0.0.1:3000/healthz >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [aiwei-net]
+  nginx:
+    image: nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
+    restart: always
+    ports:
+      - '127.0.0.1:8081:80'
+    volumes:
+      - ./nginx.production.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../00_工作台/运营数据管理/app/index.html:/usr/share/nginx/html/index.html:ro
+      - ../00_工作台/运营数据管理/app/analysis.html:/usr/share/nginx/html/analysis.html:ro
+      - ../00_工作台/运营数据管理/app/operations-report.html:/usr/share/nginx/html/operations-report.html:ro
+      - ../00_工作台/运营数据管理/app/js:/usr/share/nginx/html/js:ro
+      - ../00_工作台/运营数据管理/app/css:/usr/share/nginx/html/css:ro
+      - ../00_工作台/运营数据管理/app/lib:/usr/share/nginx/html/lib:ro
+      - uploads-data:/var/cache/nginx/uploads:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'wget -qO- http://127.0.0.1/healthz >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [aiwei-net]
+networks:
+  aiwei-net:
+    external: true
+    name: aiwei_aiwei-net
+volumes:
+  uploads-data:
+    external: true
+    name: aiwei_uploads-data

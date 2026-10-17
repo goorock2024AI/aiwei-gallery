@@ -1,6 +1,14 @@
 // supabase-config.js — API 连接配置（指向自有后端，不再使用 Supabase）
+const AIWEI_API_BASE = (() => {
+  if (typeof window !== 'undefined' && window.location) {
+    const { protocol, origin } = window.location;
+    if (protocol === 'http:' || protocol === 'https:') return origin;
+  }
+  return '';
+})();
+
 const SUPABASE_CONFIG = {
-  url: 'http://122.51.56.50',
+  url: AIWEI_API_BASE,
   anonKey: 'aiwei_anon_key_public_2024'
 };
 
@@ -25,7 +33,8 @@ const TABLE_NAMES = {
   artworks: 'artworks',
   partners: 'partners',
   contentPosts: 'content_posts',
-  creativeProducts: 'creative_products'
+  creativeProducts: 'creative_products',
+  productAliases: 'product_aliases'
 };
 
 const CONFIG_TABLE = 'app_config';

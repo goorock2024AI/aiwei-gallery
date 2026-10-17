@@ -1,18 +1,25 @@
 // auth.js — 用户认证（通过自有 REST API）
 const Auth = {
   _currentUser: null,
+  _operationsRollout: { mode: 'off', enabled: false, updatedAt: null },
 
   init() {
     try {
       const saved = sessionStorage.getItem('aiwei_user');
-      if (saved) this._currentUser = JSON.parse(saved);
+      if (saved) {
+        this._currentUser = JSON.parse(saved);
+        if (!this._currentUser?.token) {
+          sessionStorage.removeItem('aiwei_user');
+          this._currentUser = null;
+        }
+      }
     } catch { this._currentUser = null; }
     return this._currentUser;
   },
 
   async _fetch(method, path, body) {
     const base = await Store._ensureClient();
-    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    const opts = { method, headers: { 'Content-Type': 'application/json', ...this.authHeaders() } };
     if (body !== undefined) opts.body = JSON.stringify(body);
     const res = await fetch(base + path, opts);
     if (!res.ok) {
@@ -42,7 +49,8 @@ const Auth = {
       username: data.username,
       displayName: data.displayName || data.username,
       role: data.role,
-      needPasswordChange: data.needPasswordChange
+      needPasswordChange: data.needPasswordChange,
+      token: data.token || ''
     };
     sessionStorage.setItem('aiwei_user', JSON.stringify(this._currentUser));
     return this._currentUser;
@@ -55,7 +63,7 @@ const Auth = {
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/change-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({ userId: user.id, newPassword: newPwd })
     });
     if (!res.ok) {
@@ -67,13 +75,39 @@ const Auth = {
     sessionStorage.setItem('aiwei_user', JSON.stringify(user));
   },
 
+  async loadOperationsRollout() {
+    try {
+      const rollout = await this._fetch('GET', '/rest/v1/operations-rollout');
+      this._operationsRollout = {
+        mode: ['off', 'admin', 'staff'].includes(rollout?.mode) ? rollout.mode : 'off',
+        enabled: rollout?.enabled === true,
+        updatedAt: rollout?.updatedAt || null
+      };
+    } catch (error) {
+      console.error('加载运营管理灰度状态失败：', error);
+      this._operationsRollout = { mode: 'off', enabled: false, updatedAt: null };
+    }
+    return this._operationsRollout;
+  },
+
+  async updateOperationsRollout(mode, reason) {
+    if (!this.isAdmin) throw new Error('仅管理员可变更运营管理灰度范围');
+    const rollout = await this._fetch('POST', '/rest/v1/operations-rollout', { mode, reason });
+    this._operationsRollout = {
+      mode: rollout.mode,
+      enabled: rollout.enabled === true,
+      updatedAt: rollout.updatedAt || null
+    };
+    return rollout;
+  },
+
   async addUser(data) {
     if (!this.isAdmin) throw new Error('无权限，仅管理员可创建用户');
     if (!data.username) throw new Error('请输入用户名');
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/users/create', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({
         username: data.username,
         displayName: data.displayName || data.username,
@@ -129,7 +163,7 @@ const Auth = {
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/change-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({ userId: user.id, oldPassword: oldPwd, newPassword: newPwd })
     });
     if (!res.ok) {
@@ -146,7 +180,7 @@ const Auth = {
     const base = await Store._ensureClient();
     const res = await fetch(base + '/rest/v1/users/reset-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify({ userId: id, password: '88888888' })
     });
     if (!res.ok) {
@@ -171,19 +205,70 @@ const Auth = {
     return map[this._currentUser?.role] || '未知';
   },
   get currentUser() { return this._currentUser; },
+  get operationsMode() { return this._operationsRollout?.mode || 'off'; },
+  get operationsRolloutUpdatedAt() { return this._operationsRollout?.updatedAt || null; },
+  get operationsRolloutLabel() {
+    return { off: '已关闭', admin: '管理员试运行', staff: '内部试运行' }[this.operationsMode] || '已关闭';
+  },
+
+  canAccessOperations() {
+    if (!this._currentUser || this.operationsMode === 'off') return false;
+    if (this.operationsMode === 'admin') return this.isAdmin;
+    return this.isAdmin || this.isEditor;
+  },
+
+  authHeaders() {
+    const token = this._currentUser?.token;
+    return token ? { Authorization: 'Bearer ' + token } : {};
+  },
+
+  canReadOperationsReports() {
+    return !!this._currentUser && !this._currentUser.needPasswordChange && ['admin','editor','viewer'].includes(this._currentUser.role);
+  },
+
+  can(action, scope = '') {
+    if (!this._currentUser) return false;
+    const role = this._currentUser.role;
+    if (role === 'admin') return true;
+    const matrix = {
+      editor: {
+        view: ['revenue','expense','gallery','space','daily-closing','project-list','operations','reports','manage','products','creative-products','artworks'],
+        create: ['revenue','expense','gallery','space','daily-closing','project-list','creative-products','artworks'],
+        edit: ['revenue','expense','gallery','space','daily-closing','project-list','creative-products','artworks'],
+        approve: [],
+        delete: [],
+        export: ['daily-closing'],
+        adjust: [],
+        review: []
+      },
+      viewer: {
+        view: ['revenue','gallery','space','daily-closing','project-list','reports'],
+        create: [],
+        edit: [],
+        approve: [],
+        delete: [],
+        export: ['daily-closing'],
+        adjust: [],
+        review: []
+      }
+    };
+    return (matrix[role]?.[action] || []).includes(scope);
+  },
 
   hasModuleAccess(moduleKey) {
     if (!this._currentUser) return false;
+    if (moduleKey === 'operations') return this.canReadOperationsReports();
     const role = this._currentUser.role;
     const accessMap = {
-      revenue:  ['admin', 'editor'],
+      revenue:  ['admin', 'editor', 'viewer'],
       expense:  ['admin', 'editor'],
-      gallery:  ['admin', 'editor'],
-      space:    ['admin', 'editor'],
-      'project-list': ['admin', 'editor'],
+      gallery:  ['admin', 'editor', 'viewer'],
+      space:    ['admin', 'editor', 'viewer'],
+      'daily-closing': ['admin', 'editor', 'viewer'],
+      'project-list': ['admin', 'editor', 'viewer'],
       reports:  ['admin', 'editor', 'viewer'],
-      manage:   ['admin'],
-      products: ['admin'],
+      manage:   ['admin', 'editor'],
+      products: ['admin', 'editor'],
       users:    ['admin'],
       logs:     ['admin'],
     };

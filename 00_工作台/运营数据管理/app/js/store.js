@@ -11,13 +11,18 @@ const Store = {
   },
 
   // ===== REST 请求封装 =====
-  async _request(method, path, body) {
+  async _request(method, path, body, options = {}) {
     const base = await this._ensureClient();
     const url = base + path;
     const opts = {
       method,
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...(typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {})
+      }
     };
+    if (options.signal) opts.signal = options.signal;
     if (body !== undefined) opts.body = JSON.stringify(body);
     const res = await fetch(url, opts);
     if (!res.ok) {
@@ -169,6 +174,7 @@ const Store = {
     fd.append('file', file);
     const res = await fetch(`${base}/rest/v1/expense_attachments/upload?type=${encodeURIComponent(attachmentType || 'invoice')}`, {
       method: 'POST',
+      headers: typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {},
       body: fd
     });
     if (!res.ok) {
@@ -179,11 +185,14 @@ const Store = {
     return await res.json();
   },
 
-  async generateExpensePdf(expenseIds, title = '') {
+  async generateExpensePdf(expenseIds, title = '', options = {}) {
     try {
       return await this._request('POST', '/rest/v1/expense_reimbursements/generate', {
         expenseIds,
         title,
+        regenerate: options.regenerate === true,
+        ...(options.revisionOf ? { revisionOf: options.revisionOf, revisionReason: options.revisionReason } : {}),
+        materialNote: options.materialNote || '',
         generatedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || ''
       });
     } catch (e) {
@@ -219,8 +228,14 @@ const Store = {
   async healthCheck() {
     try {
       const base = await this._ensureClient();
-      const res = await fetch(base + '/rest/v1/revenue?limit=1');
+      const headers = {
+        'Accept': 'application/json',
+        ...(typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {})
+      };
+      if (!headers.Authorization) return { ok: false, message: '登录已过期，请重新登录' };
+      const res = await fetch(base + '/rest/v1/revenue?limit=1', { headers });
       if (res.ok) return { ok: true, message: '数据库连接正常' };
+      if (res.status === 401) return { ok: false, message: '登录已过期，请重新登录' };
       return { ok: false, message: '数据库连接失败：状态码 ' + res.status };
     } catch (e) {
       return { ok: false, message: '数据库连接失败：' + (e.message || e) };

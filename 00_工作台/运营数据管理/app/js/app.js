@@ -10,9 +10,12 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-  const APP_VERSION = '1.3.3';
-  const LAST_UPDATE = '2026-07-21 12:50';
+const APP_VERSION = '2.0.0-rc.17';
+  const LAST_UPDATE = '2026-10-15';
+  const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
+    const icpEl = document.getElementById('sidebar-icp');
+    if (icpEl) icpEl.textContent = ICP_BEIAN;
     const el = document.getElementById('sidebar-version');
     if (el) el.textContent = 'v' + APP_VERSION;
     const upEl = document.getElementById('sidebar-updated');
@@ -28,6 +31,10 @@
 
     // 未登录不允许切换
     if (!Auth.isLoggedIn) { return; }
+    if (!Auth.hasModuleAccess(tab)) {
+      if (tab === 'operations') UI.toast('运营管理入口当前未对该账号开放', 'error');
+      return;
+    }
 
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
@@ -50,7 +57,9 @@
         case 'expense': await UI.renderExpensePage(); break;
         case 'gallery': await UI.renderGalleryPage(); break;
         case 'space': await UI.renderSpacePage(); break;
+        case 'daily-closing': await UI.renderDailyClosingPage(); break;
         case 'project-list': await UI.renderProjectListPage(); break;
+        case 'operations': await OperationsDashboard.render(); break;
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;
         case 'products': await UI.renderProductPage(); break;
@@ -84,7 +93,7 @@
           $('#login-overlay').style.display = 'none';
           $('#change-pwd-overlay').style.display = 'flex';
         } else {
-          _enterApp();
+          await _enterApp();
         }
       } catch (err) {
         if (errEl) errEl.textContent = err.message;
@@ -107,7 +116,7 @@
         await Auth.changePassword(pwd);
         UI.toast('密码修改成功');
         $('#change-pwd-overlay').style.display = 'none';
-        _enterApp();
+        await _enterApp();
       } catch (err) {
         if (errEl) errEl.textContent = err.message;
       } finally {
@@ -150,20 +159,28 @@
   });
   document.getElementById('sidebar-toggle')?.addEventListener('click', _toggleSidebar);
 
+  function _applyModuleAccess() {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      const tab = btn.dataset.tab;
+      if (tab) btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
+    });
+    const operationsButton = document.querySelector('.tab-btn[data-tab="operations"]');
+    if (operationsButton) {
+      operationsButton.querySelector('.operations-rollout-badge')?.remove();
+      operationsButton.title = '经营分析报告 · 月度与专项';
+    }
+  }
+  window.refreshModuleAccess = _applyModuleAccess;
+
   // 进入主应用
-  function _enterApp() {
+  async function _enterApp() {
     $('#login-overlay').style.display = 'none';
     $('#change-pwd-overlay').style.display = 'none';
     $('#app').style.display = '';
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    // 角色权限控制：各 tab 按 hasModuleAccess 显示/隐藏
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      const tab = btn.dataset.tab;
-      if (tab) {
-        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
-      }
-    });
+    await Auth.loadOperationsRollout();
+    _applyModuleAccess();
     // 正常初始化
     _initApp();
   }
@@ -189,16 +206,11 @@
     // 已登录
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      const tab = btn.dataset.tab;
-      if (tab) {
-        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
-      }
-    });
     if (Auth.currentUser.needPasswordChange) {
+      $('#login-overlay').style.display = 'none';
       $('#change-pwd-overlay').style.display = 'flex';
       return;
     }
-    await _initApp();
+    await _enterApp();
   });
 })();

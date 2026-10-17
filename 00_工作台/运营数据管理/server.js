@@ -2,7 +2,6 @@ const http = require('http');
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
-const url = require('url');
 const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 
@@ -17,24 +16,26 @@ try { fs.mkdirSync(EXPENSE_PDF_DIR, { recursive: true }); } catch (e) {}
 const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;  // 5MB
 const PDF_FONT_PATH = process.env.PDF_FONT_PATH || '';
-const EXPENSE_IMAGE_RETENTION_DAYS = parseInt(process.env.EXPENSE_IMAGE_RETENTION_DAYS || '60', 10);
-const EXPENSE_PDF_RETENTION_DAYS = parseInt(process.env.EXPENSE_PDF_RETENTION_DAYS || '365', 10);
 const RETENTION_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const DB_HOST = process.env.DB_HOST || '127.0.0.1';
+const DB_PORT = parseInt(process.env.DB_PORT || '5432', 10);
+const DB_NAME = process.env.DB_NAME || 'postgres';
 const DB_PASS = process.env.DB_PASS || process.env.DB_PASSWORD;
 if (!DB_PASS) {
   throw new Error('DB_PASS or DB_PASSWORD environment variable is required');
 }
+const AUTH_SECRET = process.env.AUTH_SECRET || DB_PASS;
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 const STATIC_DIR = process.env.STATIC_DIR || '/var/www/aiwei';
 
 const pool = new Pool({
   host: DB_HOST,
-  port: 5432,
+  port: DB_PORT,
   user: 'postgres',
   password: DB_PASS,
-  database: 'postgres',
+  database: DB_NAME,
   max: 10
 });
 
@@ -59,7 +60,9 @@ const TABLE_COLS = {
   // 空间使用重构 2026-07-10：去掉 received_amount（由子表聚合）
   space_usage: new Set([
     'id','date','end_date','space','project_name','type','client','status',
-    'rental_type','receivable_amount','expected_payment_date','notes','created_at'
+    'rental_type','receivable_amount','expected_payment_date','notes','created_at',
+    'business_layer_code','business_type_code','cooperation_mode','project_owner',
+    'contract_no','business_status'
   ]),
   space_payments: new Set([
     'id','space_usage_id','payment_date','amount','payment_method','notes','created_at'
@@ -68,6 +71,7 @@ const TABLE_COLS = {
   artworks: new Set([
     'id','artwork_no','title','artist','year','medium','dimensions','location','status',
     'image_url','settlement_price','retail_price','total_qty','sold_qty',
+    'approval_status','submitted_by','approved_by','approved_at',
     'notes','created_at','updated_at'
   ]),
   // ===== 2026-07-11 补全：以下表之前无白名单导致字段被静默丢弃 =====
@@ -80,12 +84,15 @@ const TABLE_COLS = {
     'mime_type','uploaded_by','created_at'
   ]),
   expense_reimbursements: new Set([
-    'id','expense_ids','title','total_amount','pdf_url','pdf_size','generated_by','created_at'
+    'id','expense_ids','title','total_amount','pdf_url','pdf_size','generated_by','created_at',
+    'supersedes_id','superseded_by_id','revision_reason','snapshot'
   ]),
   gallery_sales: new Set([
     'id','date','artwork_no','artwork_name','artist','price','commission','buyer_name',
     'payment_method','related_exhibition','status','handler','notes','sale_quantity',
-    'refund_amount','adjusted_at','adjusted_by','adjustment_reason','created_at'
+    'refund_amount','adjusted_at','adjusted_by','adjustment_reason','created_at',
+    'artwork_id','settlement_price_snapshot','retail_price_snapshot',
+    'gross_amount_snapshot','net_amount_snapshot','gallery_channel','business_type_code'
   ]),
   transaction_adjustments: new Set([
     'id','target_type','target_id','action','amount','reason',
@@ -117,7 +124,29 @@ const TABLE_COLS = {
   ]),
   creative_products: new Set([
     'id','name','sku','supplier','cost_price','retail_price','stock','unit',
-    'notes','created_at','updated_at'
+    'approval_status','submitted_by','approved_by','approved_at',
+    'notes','created_at','updated_at','standard_name','business_type_code',
+    'package_spec','barcode','is_beverage','is_countable_stock','is_active'
+  ]),
+  business_dimensions: new Set([
+    'id','dimension_type','code','name','parent_code','sort_order',
+    'is_active','notes','created_at','updated_at'
+  ]),
+  business_mapping_rules: new Set([
+    'id','source_table','source_field','match_type','match_value',
+    'business_layer_code','business_type_code','cost_type_code','capability_axis_code',
+    'priority','confidence','is_active','notes','created_at','updated_at'
+  ]),
+  record_business_links: new Set([
+    'id','source_table','source_id','source_line_key',
+    'business_layer_code','business_type_code','cost_type_code','capability_axis_code',
+    'product_id','product_alias_id','mapping_rule_id','override_reason',
+    'created_by','created_at','updated_at'
+  ]),
+  product_aliases: new Set([
+    'id','alias_name','standard_product_id','standard_name','business_type_code',
+    'package_spec','unit_price','cost_price_snapshot','is_beverage',
+    'confidence','is_active','notes','created_at','updated_at'
   ]),
   // users / app_config 不需要白名单：
   // - users 走独立路由（handleLogin / handleChangePassword）
@@ -125,7 +154,29 @@ const TABLE_COLS = {
 };
 
 // 只读视图/表（POST/PATCH/DELETE 拒绝）
-const READ_ONLY_TABLES = new Set(['space_usage_with_payments', 'revenue_facts']);
+const READ_ONLY_TABLES = new Set([
+  'expense_reimbursements',
+  'space_usage_with_payments',
+  'revenue_facts',
+  'business_revenue_facts_v2',
+  'business_cost_facts_v2',
+  'business_profit_facts_v2',
+  'workshop_project_performance_v2',
+  'gallery_transaction_performance_v2',
+  'space_project_performance_v2',
+  'business_layer_summary_v2',
+  'data_governance_issues_v2',
+  'data_governance_baseline_v2',
+  'product_alias_candidates_v2',
+  'product_cost_evidence_v2',
+  'product_master_governance_v2',
+  'revenue_attribution_candidates_v2',
+  'cost_attribution_candidates_v2',
+  'gallery_link_candidates_v2',
+  'workshop_link_candidates_v2',
+  'space_classification_candidates_v2',
+  'governance_batch_summary_v2'
+]);
 
 // snake_case to camelCase（NUMERIC 类型转数字）
 function toCamel(row) {
@@ -135,7 +186,14 @@ function toCamel(row) {
     'creative_amount','venue_amount','other_amount','cash_amount','account_amount',
     'retail_amount','price','commission','receivable_amount','received_amount',
     'amount','net_amount','refund_amount','system_net_amount','confirmed_amount','difference_amount',
-    'file_size','pdf_size','total_amount'
+    'file_size','pdf_size','total_amount','settlement_price_snapshot','retail_price_snapshot',
+    'gross_amount_snapshot','net_amount_snapshot','unit_price','quantity','unit_cost',
+    'gross_amount','cost_price_snapshot','confidence','cost_amount','revenue_amount',
+    'gross_profit','gross_margin','participant_count','direct_cost_amount',
+    'contribution_amount','contribution_margin','settlement_cost','realized_net_amount',
+    'outstanding_amount','payment_count','sales_cost_amount','period_cost_amount',
+    'total_cost_amount','operating_contribution','affected_amount','total_quantity',
+    'current_cost','snapshot_cost_min','snapshot_cost_max','suggested_historical_unit_cost'
   ]);
   const o = {};
   for (let k of Object.keys(row)) {
@@ -215,10 +273,10 @@ function beijingDateKey(date = new Date()) {
   return `${parts.year}${parts.month}${parts.day}`;
 }
 
-async function nextExpensePdfTitle() {
+async function nextExpensePdfTitle(client = pool) {
   const dateKey = beijingDateKey();
   const prefix = `运营支出报销凭证${dateKey}`;
-  const result = await pool.query(
+  const result = await client.query(
     `SELECT title
        FROM expense_reimbursements
       WHERE title LIKE $1
@@ -259,10 +317,142 @@ function sha256(s) {
   return crypto.createHash('sha256').update(s).digest('hex');
 }
 
+function base64url(input) {
+  return Buffer.from(input).toString('base64url');
+}
+
+function signPayload(payload) {
+  return crypto.createHmac('sha256', AUTH_SECRET).update(payload).digest('base64url');
+}
+
+function createAuthToken(user) {
+  const payload = base64url(JSON.stringify({
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
+  }));
+  return payload + '.' + signPayload(payload);
+}
+
+async function getRequester(req) {
+  const header = req.headers.authorization || '';
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  if (!m) return null;
+  const [payload, sig] = m[1].split('.');
+  if (!payload || !sig || signPayload(payload) !== sig) return null;
+  let data;
+  try {
+    data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!data.exp || data.exp < Math.floor(Date.now() / 1000)) return null;
+  const r = await pool.query('SELECT id, username, display_name, role, is_active FROM users WHERE id = $1', [data.id]);
+  const user = r.rows[0];
+  if (!user || !user.is_active) return null;
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.display_name || user.username,
+    role: user.role
+  };
+}
+
+function isAdmin(user) {
+  return user?.role === 'admin';
+}
+
+function isEditor(user) {
+  return user?.role === 'editor';
+}
+
+function isViewer(user) {
+  return user?.role === 'viewer';
+}
+
+function ensureRole(res, user, roles) {
+  if (!user) {
+    sendError(res, 401, '未登录或登录已过期');
+    return false;
+  }
+  if (!roles.includes(user.role)) {
+    sendError(res, 403, '无权限执行此操作');
+    return false;
+  }
+  return true;
+}
+
+function canAccessTable(user, table, method) {
+  if (!user) return false;
+  if (isAdmin(user)) return true;
+  const readTables = {
+    editor: new Set([
+      'revenue','expense','space_usage','space_payments','space_usage_with_payments',
+      'gallery_sales','daily_closings','project_registry','artworks','creative_products',
+      'cash_movements','expense_attachments','expense_reimbursements','revenue_facts','app_config',
+      'business_dimensions','business_mapping_rules','record_business_links','product_aliases',
+      'business_revenue_facts_v2','business_cost_facts_v2','business_profit_facts_v2',
+      'workshop_project_performance_v2','gallery_transaction_performance_v2','space_project_performance_v2',
+      'business_layer_summary_v2','data_governance_issues_v2','data_governance_baseline_v2',
+      'product_alias_candidates_v2','product_cost_evidence_v2','product_master_governance_v2',
+      'revenue_attribution_candidates_v2','cost_attribution_candidates_v2',
+      'gallery_link_candidates_v2','workshop_link_candidates_v2','space_classification_candidates_v2',
+      'governance_batch_summary_v2'
+    ]),
+    viewer: new Set([
+      'revenue','space_usage','space_payments','space_usage_with_payments',
+      'gallery_sales','daily_closings','cash_movements','project_registry','artworks','revenue_facts','app_config',
+      'business_dimensions'
+    ])
+  };
+  const writeTables = {
+    editor: new Set([
+      'revenue','expense','space_usage','space_payments','gallery_sales',
+      'daily_closings','project_registry','artworks','creative_products',
+      'cash_movements','expense_attachments','expense_reimbursements',
+      'record_business_links','product_aliases'
+    ])
+  };
+  if (method === 'GET') return !!readTables[user.role]?.has(table);
+  if (method === 'POST' || method === 'PATCH') return !!writeTables[user.role]?.has(table);
+  return false;
+}
+
+function guardEditorWrite(user, table, method, data) {
+  if (!isEditor(user)) return { ok: true };
+  if (method === 'DELETE') return { ok: false, message: '编辑者不能删除数据' };
+  if (table === 'revenue' || table === 'gallery_sales') {
+    const status = data?.status;
+    if (['已作废', '已退款', '部分退款'].includes(status)) {
+      return { ok: false, message: '编辑者不能退款或作废记录' };
+    }
+  }
+  if (table === 'daily_closings' && data?.status === '已复核') {
+    return { ok: false, message: '编辑者不能复核日结' };
+  }
+  if (table === 'artworks' || table === 'creative_products') {
+    if (data?.approval_status === '已上架' || data?.approval_status === '已下架') {
+      return { ok: false, message: '编辑者不能确认上架或下架' };
+    }
+    data.approval_status = data.approval_status || '待确认';
+    data.submitted_by = data.submitted_by || user.displayName || user.username;
+    delete data.approved_by;
+    delete data.approved_at;
+  }
+  return { ok: true };
+}
+
 function parsePath(reqUrl) {
-  let p = url.parse(reqUrl, true);
-  let pathname = p.pathname.replace(/\/+$/, '');
-  return { pathname, query: p.query, parts: pathname.split('/').filter(Boolean) };
+  const parsed = new URL(reqUrl, 'http://localhost');
+  const query = {};
+  for (const [key, value] of parsed.searchParams) {
+    if (!(key in query)) query[key] = value;
+    else if (Array.isArray(query[key])) query[key].push(value);
+    else query[key] = [query[key], value];
+  }
+  const pathname = parsed.pathname.replace(/\/+$/, '');
+  return { pathname, query, parts: pathname.split('/').filter(Boolean) };
 }
 
 function sendJSON(res, status, data, count) {
@@ -309,7 +499,8 @@ async function handleLogin(req, res) {
       sendJSON(res, 200, {
         id: user.id, username: user.username,
         displayName: user.display_name || user.username,
-        role: user.role, needPasswordChange: needChange
+        role: user.role, needPasswordChange: needChange,
+        token: createAuthToken(user)
       });
     } catch (e) { sendError(res, 400, e.message); }
   });
@@ -324,6 +515,10 @@ async function handleChangePassword(req, res) {
       const { userId, newPassword, oldPassword } = JSON.parse(body);
       if (!userId || !newPassword) return sendError(res, 400, '参数不完整');
       if (newPassword.length < 6) return sendError(res, 400, '密码长度至少 6 位');
+      const requester = await getRequester(req);
+      if (!requester || (requester.id !== userId && !isAdmin(requester))) {
+        return sendError(res, 403, '无权限修改该用户密码');
+      }
       if (oldPassword !== undefined && oldPassword !== null && oldPassword !== '') {
         const r = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
         if (r.rows.length === 0) return sendError(res, 404, '用户不存在');
@@ -344,6 +539,8 @@ async function handleCreateUser(req, res) {
   req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
+      const requester = await getRequester(req);
+      if (!ensureRole(res, requester, ['admin'])) return;
       const { username, displayName, role, password } = JSON.parse(body);
       if (!username) return sendError(res, 400, '请输入用户名');
       const pwd = password || '88888888';
@@ -369,6 +566,8 @@ async function handleResetPassword(req, res) {
   req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
+      const requester = await getRequester(req);
+      if (!ensureRole(res, requester, ['admin'])) return;
       const { userId, password } = JSON.parse(body);
       if (!userId) return sendError(res, 400, '缺少 userId');
       const pwd = password || '88888888';
@@ -385,7 +584,9 @@ async function handleResetPassword(req, res) {
 
 // --- POST /rest/v1/artworks/upload --- 作品图片上传（multipart/form-data）
 // 返回 { url: '/uploads/artworks/xxx.jpg' }
-function handleArtworkUpload(req, res) {
+async function handleArtworkUpload(req, res) {
+  const requester = await getRequester(req);
+  if (!ensureRole(res, requester, ['admin', 'editor'])) return;
   const contentType = req.headers['content-type'] || '';
   const boundaryValue = getMultipartBoundary(contentType);
   if (!/^multipart\/form-data/i.test(contentType) || !boundaryValue) {
@@ -437,7 +638,9 @@ function handleArtworkUpload(req, res) {
 
 // --- POST /rest/v1/expense_attachments/upload --- 支出票据图片上传
 // 返回 { url: '/uploads/expense/invoice/xxx.jpg', filename, size, mimeType, originalName }
-function handleExpenseAttachmentUpload(req, res, query) {
+async function handleExpenseAttachmentUpload(req, res, query) {
+  const requester = await getRequester(req);
+  if (!ensureRole(res, requester, ['admin', 'editor'])) return;
   const type = query.type === 'payment' ? 'payment' : 'invoice';
   const contentType = req.headers['content-type'] || '';
   const boundaryValue = getMultipartBoundary(contentType);
@@ -548,6 +751,8 @@ async function handleSpaceConflict(req, res) {
   req.on('data', chunk => body += chunk.toString('utf8'));
   req.on('end', async () => {
     try {
+      const requester = await getRequester(req);
+      if (!ensureRole(res, requester, ['admin', 'editor'])) return;
       const { space, date, endDate, excludeId } = JSON.parse(body);
       if (!space || !date) return sendError(res, 400, '缺少 space 或 date');
 
@@ -588,56 +793,10 @@ async function handleSpaceConflict(req, res) {
   });
 }
 
-async function handleExpensePdfGenerate(req, res) {
-  collectJSON(req, async (err, body) => {
-    if (err) return sendError(res, 400, 'JSON 格式不正确');
-    try {
-      const expenseIds = Array.isArray(body.expenseIds)
-        ? [...new Set(body.expenseIds.map(String).filter(Boolean))]
-        : [];
-      if (!expenseIds.length) return sendError(res, 400, '请选择至少一笔支出');
-      if (expenseIds.length > 50) return sendError(res, 400, '单个报销包最多支持 50 笔支出');
-
-      const expenseResult = await pool.query(
-        `SELECT * FROM expense WHERE id = ANY($1::text[]) ORDER BY date ASC, created_at ASC`,
-        [expenseIds]
-      );
-      const expenses = expenseResult.rows.map(r => ({ ...r, amount: moneyValue(r.amount) }));
-      if (!expenses.length) return sendError(res, 404, '未找到支出记录');
-
-      const attachmentResult = await pool.query(
-        `SELECT * FROM expense_attachments WHERE expense_id = ANY($1::text[]) ORDER BY expense_id ASC, attachment_type ASC, created_at ASC`,
-        [expenseIds]
-      );
-      const attachmentsByExpense = attachmentResult.rows.reduce((acc, row) => {
-        if (!acc[row.expense_id]) acc[row.expense_id] = [];
-        acc[row.expense_id].push(row);
-        return acc;
-      }, {});
-
-      const id = 'pdf_' + Date.now().toString(36) + '_' + crypto.randomBytes(2).toString('hex');
-      const title = await nextExpensePdfTitle();
-      const filename = title + '.pdf';
-      const outputPath = path.join(EXPENSE_PDF_DIR, filename);
-      await generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, { ...body, title });
-      const stat = fs.statSync(outputPath);
-      const pdfUrl = '/uploads/expense-pdfs/' + encodeURIComponent(filename);
-      const totalAmount = expenses.reduce((s, r) => s + moneyValue(r.amount), 0);
-      const generatedBy = body.generatedBy || '';
-
-      const saved = await pool.query(
-        `INSERT INTO expense_reimbursements
-          (id, expense_ids, title, total_amount, pdf_url, pdf_size, generated_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-         RETURNING *`,
-        [id, JSON.stringify(expenses.map(r => r.id)), title, totalAmount, pdfUrl, stat.size, generatedBy]
-      );
-      sendJSON(res, 201, toCamel(saved.rows[0]));
-    } catch (e) {
-      sendError(res, 500, '生成 PDF 失败：' + e.message);
-    }
-  });
-}
+const handleExpensePdfGenerate = require('./expense-pdf-entry')({
+  pool, collectJSON, getRequester, ensureRole, sendError, sendJSON, toCamel,
+  directory: EXPENSE_PDF_DIR, nextTitle: nextExpensePdfTitle, generateFile: generateExpensePdfFile
+});
 
 function generateExpensePdfFile(outputPath, expenses, attachmentsByExpense, options = {}) {
   return new Promise((resolve, reject) => {
@@ -702,7 +861,7 @@ function drawExpenseInfoBox(doc, r, x, y, w) {
     ['经手人', r.handler || '-'],
     ['发票状态', r.invoice_status || '-'],
     ['支付凭证状态', r.receipt_status || '-'],
-    ['报销状态', r.reimbursement_status || '-'],
+    ['材料进度', '已导出报销凭证 PDF'],
     ['关联活动', r.related_activity || '-'],
     ['支出说明', r.description || '-']
   ];
@@ -751,6 +910,13 @@ function drawPdfSummary(doc, expenses, options = {}) {
   doc.moveDown(0.8);
   doc.fontSize(10).fillColor('#555').text(`生成时间：${generatedAt}`);
   doc.text(`支出笔数：${expenses.length}    合计金额：¥${formatMoney(totalAmount)}`);
+  doc.text('本凭证用于提交财务，不代表已经报销付款。');
+  if (options.materialNote) doc.text('材料说明：' + options.materialNote);
+  if (options.supersedesTitle) {
+    doc.text('替代原凭证：' + options.supersedesTitle);
+    doc.text('修改原因：' + options.revisionReason);
+    doc.text('请使用本版本提交财务，原凭证已被替代。');
+  }
   doc.moveDown(1);
   doc.fillColor('#111').fontSize(12).text('汇总表');
   doc.moveDown(0.4);
@@ -830,13 +996,12 @@ function drawAttachmentNotice(doc, attachment, x, y, w, h) {
 }
 
 async function cleanupExpenseArtifacts(options = {}) {
-  const dryRun = options.dryRun !== false;
-  const imageDays = Number.isFinite(options.imageDays) ? options.imageDays : EXPENSE_IMAGE_RETENTION_DAYS;
-  const pdfDays = Number.isFinite(options.pdfDays) ? options.pdfDays : EXPENSE_PDF_RETENTION_DAYS;
-  const result = {
-    dryRun,
-    imageRetentionDays: imageDays,
-    pdfRetentionDays: pdfDays,
+  // Pending originals, exported attachments and PDFs remain available for processing,
+  // historical download and regeneration. Cleanup requires a separate archival policy.
+  return {
+    dryRun: options.dryRun !== false,
+    imageRetentionDays: null,
+    pdfRetentionDays: null,
     imageCandidates: 0,
     pdfCandidates: 0,
     imageRowsDeleted: 0,
@@ -845,60 +1010,6 @@ async function cleanupExpenseArtifacts(options = {}) {
     filesMissing: 0,
     fileErrors: []
   };
-
-  const imageRows = await pool.query(
-    `SELECT id, file_url
-       FROM expense_attachments
-      WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
-      ORDER BY created_at ASC
-      LIMIT 500`,
-    [imageDays]
-  );
-  result.imageCandidates = imageRows.rows.length;
-
-  const pdfRows = await pool.query(
-    `SELECT id, pdf_url
-       FROM expense_reimbursements
-      WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
-      ORDER BY created_at ASC
-      LIMIT 200`,
-    [pdfDays]
-  );
-  result.pdfCandidates = pdfRows.rows.length;
-
-  if (dryRun) return result;
-
-  const deleteFile = fileUrl => {
-    const filePath = uploadUrlToPath(fileUrl || '');
-    if (!filePath) return;
-    try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        result.filesDeleted += 1;
-      } else {
-        result.filesMissing += 1;
-      }
-    } catch (e) {
-      result.fileErrors.push({ fileUrl, message: e.message });
-    }
-  };
-
-  for (const row of imageRows.rows) deleteFile(row.file_url);
-  for (const row of pdfRows.rows) deleteFile(row.pdf_url);
-
-  if (imageRows.rows.length) {
-    const ids = imageRows.rows.map(r => r.id);
-    const deleted = await pool.query(`DELETE FROM expense_attachments WHERE id = ANY($1::text[])`, [ids]);
-    result.imageRowsDeleted = deleted.rowCount || 0;
-  }
-  if (pdfRows.rows.length) {
-    const ids = pdfRows.rows.map(r => r.id);
-    const deleted = await pool.query(`DELETE FROM expense_reimbursements WHERE id = ANY($1::text[])`, [ids]);
-    result.pdfRowsDeleted = deleted.rowCount || 0;
-  }
-
-  console.log('[expense-retention]', JSON.stringify(result));
-  return result;
 }
 
 function handleExpenseArtifactRetention(req, res, query) {
@@ -938,12 +1049,38 @@ async function handleREST(req, res, urlInfo) {
     'users': 'users', 'operation_logs': 'operation_logs',
     'project_registry': 'project_registry', 'inventory': 'inventory',
     'artworks': 'artworks', 'partners': 'partners', 'content_posts': 'content_posts',
-    'creative_products': 'creative_products'
+    'creative_products': 'creative_products',
+    'business_dimensions': 'business_dimensions',
+    'business_mapping_rules': 'business_mapping_rules',
+    'record_business_links': 'record_business_links',
+    'product_aliases': 'product_aliases',
+    'business_revenue_facts_v2': 'business_revenue_facts_v2',
+    'business_cost_facts_v2': 'business_cost_facts_v2',
+    'business_profit_facts_v2': 'business_profit_facts_v2',
+    'workshop_project_performance_v2': 'workshop_project_performance_v2',
+    'gallery_transaction_performance_v2': 'gallery_transaction_performance_v2',
+    'space_project_performance_v2': 'space_project_performance_v2',
+    'business_layer_summary_v2': 'business_layer_summary_v2',
+    'data_governance_issues_v2': 'data_governance_issues_v2',
+    'data_governance_baseline_v2': 'data_governance_baseline_v2',
+    'product_alias_candidates_v2': 'product_alias_candidates_v2',
+    'product_cost_evidence_v2': 'product_cost_evidence_v2',
+    'product_master_governance_v2': 'product_master_governance_v2',
+    'revenue_attribution_candidates_v2': 'revenue_attribution_candidates_v2',
+    'cost_attribution_candidates_v2': 'cost_attribution_candidates_v2',
+    'gallery_link_candidates_v2': 'gallery_link_candidates_v2',
+    'workshop_link_candidates_v2': 'workshop_link_candidates_v2',
+    'space_classification_candidates_v2': 'space_classification_candidates_v2',
+    'governance_batch_summary_v2': 'governance_batch_summary_v2'
   };
   const dbTable = tableMap[table];
   if (!dbTable) return sendError(res, 404, 'Table not found: ' + table);
 
   const method = req.method.toUpperCase();
+  const requester = await getRequester(req);
+  if (!canAccessTable(requester, dbTable, method)) {
+    return sendError(res, requester ? 403 : 401, requester ? '无权限访问该数据' : '未登录或登录已过期');
+  }
 
   // 只读视图/表拒绝写
   if (READ_ONLY_TABLES.has(dbTable) && method !== 'GET' && method !== 'OPTIONS') {
@@ -960,7 +1097,7 @@ async function handleREST(req, res, urlInfo) {
 
       // Handle id=eq.{id}
       for (let k of Object.keys(query)) {
-        if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset') continue;
+        if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset' || k === 'count') continue;
         let vals = query[k];
         if (!Array.isArray(vals)) vals = [vals];
         for (let v of vals) {
@@ -981,6 +1118,10 @@ async function handleREST(req, res, urlInfo) {
             params.push(v.slice(6));
           }
         }
+      }
+      if (isViewer(requester) && dbTable === 'daily_closings') {
+        conditions.push(`"status" = $${paramIdx++}`);
+        params.push('已复核');
       }
 
       if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
@@ -1009,11 +1150,13 @@ async function handleREST(req, res, urlInfo) {
         return sendJSON(res, 200, toCamel(result.rows[0]));
       }
 
-      // Count for Content-Range
-      let countSql = `SELECT COUNT(*) FROM "${dbTable}"`;
-      if (conditions.length) countSql += ' WHERE ' + conditions.join(' AND ');
-      const countResult = await pool.query(countSql, params);
-      const total = parseInt(countResult.rows[0].count);
+      let total;
+      if (query.count !== 'none') {
+        let countSql = `SELECT COUNT(*) FROM "${dbTable}"`;
+        if (conditions.length) countSql += ' WHERE ' + conditions.join(' AND ');
+        const countResult = await pool.query(countSql, params);
+        total = parseInt(countResult.rows[0].count);
+      }
 
       sendJSON(res, 200, result.rows.map(r => toCamel(r)), total);
     }
@@ -1026,8 +1169,14 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
+          if (dbTable === 'app_config' && data.key === 'operations_rollout') {
+            return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+          }
           if (!data.created_at) data.created_at = new Date().toISOString();
           data = normalizeTimestamps(data);
+          const guard = guardEditorWrite(requester, dbTable, method, data);
+          if (!guard.ok) return sendError(res, 403, guard.message);
+          if (dbTable === 'product_aliases') data = await prepareProductAlias(data);
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -1039,7 +1188,7 @@ async function handleREST(req, res, urlInfo) {
           const vals = cols.map(k => JSONB_COLS.has(k) && Array.isArray(data[k]) ? JSON.stringify(data[k]) : data[k]);
           const placeholders = vals.map((_, i) => `$${i + 1}`);
           const sql = `INSERT INTO "${dbTable}" (${cols.map(c => '"' + c + '"').join(',')}) VALUES (${placeholders.join(',')}) RETURNING *`;
-          const result = await pool.query(sql, vals);
+          const result = await querySaleWrite(dbTable, sql, vals, requester);
           sendJSON(res, 201, toCamel(result.rows[0]));
         } catch (e) {
           sendError(res, 400, e.message);
@@ -1062,6 +1211,9 @@ async function handleREST(req, res, urlInfo) {
       } else {
         return sendError(res, 400, 'Missing id filter');
       }
+      if (dbTable === 'app_config' && filterVal === 'operations_rollout') {
+        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      }
 
       let body = '';
       req.on('data', chunk => body += chunk.toString('utf8'));
@@ -1069,7 +1221,17 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
+          if (dbTable === 'app_config' && data.key === 'operations_rollout') {
+            return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+          }
           data = normalizeTimestamps(data);
+          const guard = guardEditorWrite(requester, dbTable, method, data);
+          if (!guard.ok) return sendError(res, 403, guard.message);
+          if (dbTable === 'product_aliases') {
+            const old = await pool.query('SELECT * FROM product_aliases WHERE id = $1', [filterVal]);
+            if (!old.rows.length) return sendError(res, 404, '别名不存在');
+            data = await prepareProductAlias(data, old.rows[0]);
+          }
           // 过滤不存在的列（防御前端发送不存在的字段）
           const allowed = TABLE_COLS[dbTable];
           if (allowed) {
@@ -1080,7 +1242,7 @@ async function handleREST(req, res, urlInfo) {
           const setClauses = keys.map((k, i) => `"${k}" = $${i + 1}`);
           vals.push(filterVal);
           const sql = `UPDATE "${dbTable}" SET ${setClauses.join(',')} WHERE "${filterCol}" = $${vals.length} RETURNING *`;
-          const result = await pool.query(sql, vals);
+          const result = await querySaleWrite(dbTable, sql, vals, requester);
           sendJSON(res, 200, result.rows.length ? toCamel(result.rows[0]) : null);
         } catch (e) {
           sendError(res, 400, e.message);
@@ -1090,6 +1252,10 @@ async function handleREST(req, res, urlInfo) {
 
     // --- DELETE /rest/v1/table?id=eq.xxx ---
     else if (method === 'DELETE') {
+      if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可删除数据');
+      if (dbTable === 'app_config' && (parts[3] === 'operations_rollout' || query.key === 'eq.operations_rollout')) {
+        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      }
       let idVal;
       if (query.id && query.id.startsWith('eq.')) {
         idVal = query.id.slice(3);
@@ -1099,13 +1265,16 @@ async function handleREST(req, res, urlInfo) {
         // delete all where neq
         if (query.id && query.id.startsWith('neq.')) {
           const sql = `DELETE FROM "${dbTable}" WHERE "id" <> '${query.id.slice(4)}'`;
-          await pool.query(sql);
+          await querySaleWrite(dbTable, sql, [], requester);
           return sendJSON(res, 200, []);
         }
         return sendError(res, 400, 'Missing id filter');
       }
+      if (dbTable === 'app_config' && (idVal === 'operations_rollout' || query.key === 'eq.operations_rollout')) {
+        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      }
 
-      await pool.query(`DELETE FROM "${dbTable}" WHERE "id" = $1`, [idVal]);
+      await querySaleWrite(dbTable, `DELETE FROM "${dbTable}" WHERE "id" = $1`, [idVal], requester);
       sendJSON(res, 200, []);
     }
 
@@ -1121,6 +1290,163 @@ async function handleREST(req, res, urlInfo) {
   } catch (e) {
     sendError(res, 500, e.message);
   }
+}
+
+// Validate alias writes on the API as well as the maintenance form.
+async function prepareProductAlias(data, existing = null) {
+  const row = { ...existing, ...data };
+  row.alias_name = String(row.alias_name || '').trim();
+  if (!row.alias_name || row.alias_name.length > 100) throw new Error('别名须为 1–100 个字符');
+  if (row.unit_price !== null && row.unit_price !== undefined) {
+    if (row.unit_price === '' || !Number.isFinite(Number(row.unit_price)) || Number(row.unit_price) < 0) throw new Error('匹配单价须为非负数或留空');
+    row.unit_price = Number(row.unit_price);
+  }
+  if ('is_active' in data && typeof data.is_active !== 'boolean') throw new Error('启用状态必须为布尔值');
+  if (!existing || 'standard_product_id' in data) {
+    if (!row.standard_product_id) throw new Error('请选择标准商品');
+    const result = await pool.query('SELECT * FROM creative_products WHERE id = $1', [row.standard_product_id]);
+    const product = result.rows[0];
+    if (!product || product.is_active === false) throw new Error('标准商品不存在或已停用');
+    row.standard_name = product.standard_name || product.name;
+    row.business_type_code = product.business_type_code || (product.is_beverage ? 'beverage_retail' : 'creative_retail');
+    row.is_beverage = row.business_type_code === 'beverage_retail';
+    row.package_spec = product.package_spec || '';
+  }
+  row.updated_at = new Date().toISOString();
+  // Preserve identity on edits; generic PATCH must not rename the alias primary key.
+  if (existing) row.id = existing.id;
+  return row;
+}
+
+async function handleOperationLog(req, res) {
+  const requester = await getRequester(req);
+  if (!ensureRole(res, requester, ['admin', 'editor'])) return;
+  if (req.method !== 'POST') return sendError(res, 405, '仅支持 POST');
+
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', async () => {
+    try {
+      const input = JSON.parse(body || '{}');
+      const id = String(input.id || `log_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`);
+      const action = String(input.action || '').trim();
+      const tableName = String(input.table_name || input.tableName || '').trim();
+      const recordId = String(input.record_id || input.recordId || '');
+      if (!action || !tableName) return sendError(res, 400, '操作类型和数据表不能为空');
+      const details = typeof input.details === 'string' ? input.details : JSON.stringify(input.details || {});
+      const result = await pool.query(
+        `INSERT INTO operation_logs(id,user_id,action,table_name,record_id,details,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [id, requester.id, action, tableName, recordId, details, new Date().toISOString()]
+      );
+      sendJSON(res, 201, toCamel(result.rows[0]));
+    } catch (e) {
+      sendError(res, 400, e.message);
+    }
+  });
+}
+
+const OPERATIONS_ROLLOUT_MODES = new Set(['off', 'admin', 'staff']);
+
+function rolloutModeFromValue(value) {
+  const mode = typeof value === 'string' ? value : value?.mode;
+  return OPERATIONS_ROLLOUT_MODES.has(mode) ? mode : 'off';
+}
+
+function rolloutEnabledForRole(mode, role) {
+  if (mode === 'staff') return role === 'admin' || role === 'editor';
+  if (mode === 'admin') return role === 'admin';
+  return false;
+}
+
+async function readOperationsRollout(client = pool) {
+  const result = await client.query("SELECT value,updated_at FROM app_config WHERE key='operations_rollout'");
+  const row = result.rows[0];
+  return { mode: rolloutModeFromValue(row?.value), updatedAt: row?.updated_at || null };
+}
+
+async function handleOperationsRollout(req, res) {
+  const requester = await getRequester(req);
+  if (!requester) return sendError(res, 401, '未登录或登录已过期');
+
+  if (req.method === 'GET') {
+    try {
+      const rollout = await readOperationsRollout();
+      return sendJSON(res, 200, {
+        ...rollout,
+        enabled: rolloutEnabledForRole(rollout.mode, requester.role),
+        role: requester.role
+      });
+    } catch (error) {
+      return sendError(res, 500, '读取运营管理灰度状态失败：' + error.message);
+    }
+  }
+
+  if (req.method !== 'POST') return sendError(res, 405, '仅支持 GET 和 POST');
+  if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可变更运营管理灰度范围');
+
+  let body = '';
+  req.on('data', chunk => body += chunk.toString('utf8'));
+  req.on('end', async () => {
+    let client;
+    try {
+      const input = JSON.parse(body || '{}');
+      const mode = String(input.mode || '').trim();
+      const reason = String(input.reason || '').trim();
+      if (!OPERATIONS_ROLLOUT_MODES.has(mode)) return sendError(res, 400, '灰度模式必须为 off、admin 或 staff');
+      if (reason.length < 4 || reason.length > 300) return sendError(res, 400, '变更原因须为 4–300 个字符');
+
+      client = await pool.connect();
+      await client.query('BEGIN');
+      await client.query(`INSERT INTO app_config(key,value,updated_at)
+        VALUES('operations_rollout','{"mode":"off"}'::jsonb,NOW()) ON CONFLICT(key) DO NOTHING`);
+      const locked = await client.query("SELECT value FROM app_config WHERE key='operations_rollout' FOR UPDATE");
+      const oldMode = rolloutModeFromValue(locked.rows[0]?.value);
+      if (oldMode === mode) {
+        await client.query('ROLLBACK');
+        return sendError(res, 409, '灰度模式没有变化');
+      }
+      const changedAt = new Date().toISOString();
+      await client.query(`INSERT INTO app_config(key,value,updated_at)
+        VALUES('operations_rollout',$1,$2)
+        ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=EXCLUDED.updated_at`,
+      [JSON.stringify({ mode }), changedAt]);
+      const logId = `log_rollout_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      await client.query(`INSERT INTO operation_logs(id,user_id,action,table_name,record_id,details,created_at)
+        VALUES($1,$2,'operations_rollout_change','app_config','operations_rollout',$3,$4)`,
+      [logId, requester.id, JSON.stringify({ oldMode, newMode: mode, reason }), changedAt]);
+      await client.query('COMMIT');
+      sendJSON(res, 200, {
+        mode,
+        previousMode: oldMode,
+        enabled: rolloutEnabledForRole(mode, requester.role),
+        role: requester.role,
+        reason,
+        updatedAt: changedAt
+      });
+    } catch (error) {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      sendError(res, 400, error.message);
+    } finally {
+      client?.release();
+    }
+  });
+}
+
+// Trusted actor is transaction-local; stock trigger and sale commit or roll back together.
+async function querySaleWrite(table, sql, params, requester) {
+  if (table !== 'revenue') return pool.query(sql, params);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT set_config('aiwei.actor_id',$1,true)", [requester.id]);
+    const result = await client.query(sql, params);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
 }
 
 // --- Static file server ---
@@ -1149,10 +1475,30 @@ function serveStatic(req, res, pathname) {
   }
 }
 
+const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleGovernanceBatches = require('./governance-batches')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
+const handleOperationsReports = require('./operations-reports')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
+const handleItemAnalysis = require('./operations-item-analysis')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
+const trialObservability = require('./trial-observability')({
+  pool, getRequester, ensureRole, sendJSON, sendError,
+  versionPath: path.join(__dirname, 'VERSION'),
+  manifestPath: path.join(__dirname, 'sql', 'm6-forward-manifest.json')
+});
+
 // --- Main request handler ---
 const server = http.createServer((req, res) => {
+  trialObservability.observeRequest(req, res);
   const urlInfo = parsePath(req.url);
   const { pathname, parts } = urlInfo;
+
+  if (req.method === 'GET' && pathname === '/healthz') {
+    pool.query('SELECT 1')
+      .then(() => sendJSON(res, 200, { status: 'ok' }))
+      .catch(() => sendJSON(res, 503, { status: 'down' }));
+    return;
+  }
 
   // CORS preflight
   if (req.method === 'OPTIONS') {
@@ -1166,7 +1512,27 @@ const server = http.createServer((req, res) => {
   }
 
   if (parts[0] === 'rest' && parts[1] === 'v1') {
-    if (parts[2] === 'login' && req.method === 'POST') {
+    if (parts[2] === 'operation-log') {
+      handleOperationLog(req, res);
+    } else if (parts[2] === 'runtime-observability') {
+      trialObservability.handleRuntimeObservability(req, res);
+    } else if (parts[2] === 'trial-run-issues') {
+      trialObservability.handleTrialRunIssues(req, res, urlInfo.query);
+    } else if (parts[2] === 'operations-rollout') {
+      handleOperationsRollout(req, res);
+    } else if (parts[2] === 'operations-reports') {
+      handleOperationsReports(req, res, urlInfo.query);
+    } else if (parts[2] === 'operations-item-analysis') {
+      handleItemAnalysis(req, res, urlInfo.query);
+    } else if (parts[2] === 'expense-entry') {
+      handleExpenseEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'gallery-entry') {
+      handleGalleryEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'space-entry') {
+      handleSpaceEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'governance-batches') {
+      handleGovernanceBatches(req, res, urlInfo.query);
+    } else if (parts[2] === 'login' && req.method === 'POST') {
       handleLogin(req, res);
     } else if (parts[2] === 'change-password' && req.method === 'POST') {
       handleChangePassword(req, res);
@@ -1182,6 +1548,8 @@ const server = http.createServer((req, res) => {
       handleExpenseAttachmentUpload(req, res, urlInfo.query);
     } else if (parts[2] === 'expense_reimbursements' && parts[3] === 'generate' && req.method === 'POST') {
       handleExpensePdfGenerate(req, res);
+    } else if (parts[2] === 'expense_reimbursements' && parts[3] === 'revision' && req.method === 'GET') {
+      handleExpensePdfGenerate(req, res, urlInfo.query);
     } else if (parts[2] === 'expense_artifacts' && parts[3] === 'retention' && req.method === 'GET') {
       handleExpenseArtifactRetention(req, res, urlInfo.query);
     } else {
@@ -1192,7 +1560,7 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log('AIWEI API server running on port ' + PORT);
+server.listen(PORT, HOST, () => {
+  console.log(`AIWEI API server running on ${HOST}:${PORT}`);
   scheduleExpenseArtifactRetention();
 });

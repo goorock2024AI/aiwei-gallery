@@ -5,7 +5,7 @@ const UI = {
   _editingSpaceId: null,
   _editingGalleryId: null,
   _revenueFilterDate: '',
-  _expenseFilterMonth: '',
+  _expenseFilterMonth: null,
   _selectedExpenseIds: new Set(),
   _spaceFilterMonth: '',
   _galleryFilterMonth: '',
@@ -19,6 +19,10 @@ const UI = {
   _productSearch: { ticket: '', coffee: '', creative: '', workshop: '', gallery: '' },
   _artworks: [],
   _creativeProducts: [],
+  _creativePOSProducts: null,
+  _creativePOSProductsPromise: null,
+  _retailSuggestionToken: 0,
+  _retailSuggestionHideTimer: null,
   _cpFilterSupplier: '',
   _cpPage: 0,
   _CP_PAGE_SIZE: 40,
@@ -47,6 +51,62 @@ const UI = {
   _noAccess(page) {
     html(page, '<div class="card" style="text-align:center;padding:60px 20px"><p style="font-size:16px;color:var(--gray-500)">无权限访问此页面</p></div>');
     this.toast('当前账号无权限访问此页面', 'error');
+  },
+
+  _approvalStatus(record) {
+    return record?.approvalStatus || record?.approval_status || '已上架';
+  },
+
+  _isListed(record) {
+    return this._approvalStatus(record) === '已上架' && this._cpBool(record?.isActive ?? record?.is_active, true);
+  },
+
+  _approvalTag(record) {
+    const status = this._approvalStatus(record);
+    const cls = status === '已上架' ? 'tag-success' : status === '待确认' ? 'tag-info' : status === '已下架' ? 'tag-danger' : 'tag-default';
+    return `<span class="tag ${cls}">${this._escHtml(status)}</span>`;
+  },
+
+  _canApproveProducts() {
+    return Auth.can('approve', 'creative-products') || Auth.isAdmin;
+  },
+
+  _canEditCatalog(scope) {
+    return Auth.can('edit', scope);
+  },
+
+  _canDeleteCatalog() {
+    return Auth.can('delete', 'creative-products') || Auth.isAdmin;
+  },
+
+  _cpBool(value, fallback = false) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', '是', '是的', '启用'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', '否', '不是', '停用'].includes(normalized)) return false;
+    return fallback;
+  },
+
+  _cpBusinessTypeOptions() {
+    return [
+      { code: 'creative_retail', label: '文创零售' },
+      { code: 'beverage_retail', label: '饮料零售' }
+    ];
+  },
+
+  _cpBusinessTypeLabel(code, isBeverage = false) {
+    const normalized = code || (isBeverage ? 'beverage_retail' : 'creative_retail');
+    const match = this._cpBusinessTypeOptions().find(item => item.code === normalized);
+    return match ? match.label : (normalized || '未设置');
+  },
+
+  _normalizeCpBusinessType(value, isBeverage = false) {
+    const raw = String(value || '').trim();
+    if (!raw) return isBeverage ? 'beverage_retail' : 'creative_retail';
+    if (raw === '饮料' || raw === '饮料零售' || raw.toLowerCase() === 'beverage') return 'beverage_retail';
+    if (raw === '文创' || raw === '文创零售' || raw === '非饮料文创' || raw.toLowerCase() === 'creative') return 'creative_retail';
+    return raw;
   },
 
   // === 日期工具 ===
@@ -84,6 +144,16 @@ const UI = {
       opts += `<option value="${yr}">${yr}年</option>`;
     }
     return opts;
+  },
+
+  _expenseCategoryOptions(selected = '') {
+    const categories = MODELS.EXPENSE_CATEGORIES || [];
+    let list = categories.slice();
+    if (selected && !list.includes(selected)) list = [selected].concat(list);
+    return list.map(c => {
+      const label = selected && c === selected && !categories.includes(selected) ? `${c}（历史类别）` : c;
+      return `<option value="${this._escAttr(c)}"${c === selected ? ' selected' : ''}>${this._escHtml(label)}</option>`;
+    }).join('');
   },
 
   // === 首页概览 ===
@@ -147,6 +217,21 @@ const UI = {
   async renderRevenuePage() {
     const page = $('#page-revenue');
     if (!Auth.hasModuleAccess('revenue')) { this._noAccess(page); return; }
+    if (!Auth.can('create', 'revenue')) {
+      html(page, `
+        <div class="card">
+          <div class="card-title">收银收入记录</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>日期</label><input type="date" id="rev-filter-date" value="${todayStr()}" onchange="UI._filterRevenue()"></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rev-filter-date').value='${todayStr()}'; UI._filterRevenue()">今天</button>
+            <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="rev-count"></span>
+          </div>
+          <div id="revenue-list"><div class="loading-state"><div class="spinner"></div></div></div>
+        </div>
+      `);
+      await this._renderRevenueList();
+      return;
+    }
     // —— 编辑模式下也用 POS 布局，只是预填数据 ——
     const editing = this._editingId;
 
@@ -174,7 +259,7 @@ const UI = {
                 <div class="pos-section-title">🎫 票务</div>
                 <div class="pos-ticket-area" id="pos-ticket-btns">
                   ${(MODELS.ticketProducts || []).map((p, i) =>
-                    this._renderTicketBtn(p.name, p.price, 'tkt-' + i)
+                    this._renderTicketBtn(p.name, p.price, 'tkt-' + i, true)
                   ).join('')}
                 </div>
 
@@ -204,7 +289,11 @@ const UI = {
                   <div class="pos-input-row">
                     <div class="form-group"><label>单价</label><input type="number" id="rt-price" min="0" step="0.01" placeholder="0.00" style="width:80px"></div>
                     <div class="form-group"><label>数量</label><input type="number" id="rt-qty" min="1" value="1" style="width:60px"></div>
-                    <div class="form-group"><label>产品名</label><input type="text" id="rt-name" placeholder="产品名称" style="width:120px"></div>
+                    <div class="form-group pos-retail-product-field">
+                      <label for="rt-name">产品名</label>
+                      <input type="text" id="rt-name" autocomplete="off" aria-autocomplete="list" aria-controls="rt-product-suggestions" aria-expanded="false" oninput="UI._onRetailProductInput(this.value)" onfocus="UI._onRetailProductInput(this.value)" onkeydown="UI._onRetailProductKeydown(event)" onblur="UI._hideRetailProductSuggestions(150)" placeholder="输入名称自动检索">
+                      <div id="rt-product-suggestions" class="pos-retail-suggestions" role="listbox" aria-label="匹配的文创零售商品"></div>
+                    </div>
                     <button type="button" class="btn btn-sm btn-secondary" onclick="UI._selectCreativeFromPOS()" title="从产品库选择" style="margin-bottom:1px;font-size:16px">📋</button>
                     <button type="button" class="btn btn-sm btn-primary" onclick="UI._addRetailItem()" style="margin-bottom:1px">+ 添加</button>
                   </div>
@@ -222,7 +311,9 @@ const UI = {
                           ${MODELS.WORKSHOP_PRODUCTS.map(p => `<option value="${p.name}:${p.price}">${p.name} ¥${p.price}</option>`).join('')}
                         </select>
                       </div>
-                      <div class="form-group"><label>次数</label><input type="number" id="ws-qty" min="1" value="1" style="width:60px"></div>
+                      <div class="form-group"><label>活动项目</label><input id="ws-project" placeholder="必填，如：周六亲子木刻" style="width:150px"></div>
+                      <div class="form-group"><label>活动类型</label><select id="ws-type"><option value="workshop">工坊/体验</option><option value="course_study">课程/研学</option></select></div>
+                      <div class="form-group"><label>参与人数</label><input type="number" id="ws-qty" min="1" step="1" value="1" style="width:72px"></div>
                       <div class="form-group"><label>优惠额</label><input type="number" id="ws-discount" min="0" value="0" step="0.01" style="width:80px"></div>
                       <button type="button" class="btn btn-sm btn-primary" onclick="UI._addWorkshopItem()" style="margin-bottom:1px">+ 添加</button>
                     </div>
@@ -244,6 +335,8 @@ const UI = {
               <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="rev-count"></span>
             </div>
             <div id="revenue-list"><div class="loading-state"><div class="spinner"></div></div></div>
+            <div class="card-title" style="margin-top:24px">本月工坊项目经营</div>
+            <div id="workshop-project-list"><div class="loading-state"><div class="spinner"></div></div></div>
           </div>
         </div>
 
@@ -284,24 +377,27 @@ const UI = {
     }
 
     this._updatePOS();
+    this._prepareCreativePOSAutocomplete();
     this._loadSpaceRentReminder();
     this._loadTodayStats();
     this._loadCounterCashPanel();
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
   },
 
   // —— 票务按钮辅助渲染 ——
-  _renderTicketBtn(name, price, id) {
+  _renderTicketBtn(name, price, id, allowDirectEntry = false) {
     return `
       <div class="pos-ticket-btn">
         <div class="pos-ticket-name">${name}</div>
         <div class="pos-ticket-price">¥${price}</div>
         <div class="pos-ticket-qty-row">
           <button type="button" class="pos-qty-btn" onclick="UI._adjustTicket('${id}', ${price}, -1)">−</button>
-          <span class="pos-qty-num" id="${id}-display">0</span>
+          ${allowDirectEntry
+            ? `<input type="number" class="pos-qty-num pos-qty-input" id="${id}" value="0" min="0" step="1" inputmode="numeric" aria-label="${this._escHtml(name)}数量" onfocus="this.select()" oninput="UI._setTicketQty('${id}', ${price}, this.value)">`
+            : `<span class="pos-qty-num" id="${id}-display">0</span><input type="hidden" id="${id}" value="0">`}
           <button type="button" class="pos-qty-btn" onclick="UI._adjustTicket('${id}', ${price}, 1)">+</button>
         </div>
-        <input type="hidden" id="${id}" value="0">
         <div class="pos-ticket-subtotal" id="${id}-sub">¥0.00</div>
       </div>`;
   },
@@ -310,8 +406,14 @@ const UI = {
   _adjustTicket(id, price, delta) {
     const input = document.getElementById(id);
     if (!input) return;
-    let qty = +input.value + delta;
-    if (qty < 0) qty = 0;
+    const qty = Math.max(0, (Number.parseInt(input.value, 10) || 0) + delta);
+    this._setTicketQty(id, price, qty);
+  },
+
+  _setTicketQty(id, price, value) {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const qty = Math.max(0, Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0);
     input.value = qty;
     const display = document.getElementById(id + '-display');
     if (display) display.textContent = qty;
@@ -328,18 +430,23 @@ const UI = {
 
   // —— 添加工坊项目 ——
   _workshopItems: [],
+  _editingConfiguredSaleItems: { ticket: new Map(), coffee: new Map() },
   _addWorkshopItem() {
     const sel = document.getElementById('ws-product-select');
     const qtyInput = document.getElementById('ws-qty');
     const discInput = document.getElementById('ws-discount');
     if (!sel || !sel.value) { this.toast('请选择工坊项目', 'error'); return; }
-    const [name, priceStr] = sel.value.split(':');
-    const price = +priceStr;
-    const qty = +qtyInput.value || 1;
+    const projectName = document.getElementById('ws-project')?.value.trim() || '';
+    if (!projectName) { this.toast('请输入活动项目名称', 'error'); return; }
+    const product = MODELS.WORKSHOP_PRODUCTS[sel.selectedIndex - 1];
+    if (!product) { this.toast('工坊产品不存在，请刷新后重试', 'error'); return; }
+    const price = Number(product.price);
+    const qty = Number(qtyInput.value);
     const discount = +discInput.value || 0;
-    const amount = Math.max(0, qty * price - discount);
+    if (!Number.isInteger(qty) || qty <= 0) { this.toast('参与人数必须为正整数', 'error'); return; }
+    if (discount < 0 || discount > qty * price) { this.toast('优惠额不能超过原价', 'error'); return; }
 
-    this._workshopItems.push({ name, qty, unitPrice: price, discount, amount });
+    this._workshopItems.push(createWorkshopSaleItem(product, projectName, document.getElementById('ws-type')?.value, qty, discount));
     this._renderWorkshopList();
     qtyInput.value = 1;
     discInput.value = 0;
@@ -354,11 +461,11 @@ const UI = {
     if (!this._workshopItems.length) { el.innerHTML = ''; document.getElementById('ws-total').textContent = '工坊小计: ¥0.00'; return; }
     let h = '';
     let total = 0;
-    this._workshopItems.forEach((item, idx) => {
+    this._workshopItems.map(normalizeWorkshopSaleItem).forEach((item, idx) => {
       total += item.amount;
       const discText = item.discount > 0 ? ` (优惠¥${item.discount})` : '';
       h += `<div class="pos-item-row">
-        <span class="pos-item-name">${item.name} × ${item.qty}${discText}</span>
+        <span class="pos-item-name">${this._escHtml(item.productName)} · ${this._escHtml(item.projectName || '未填写项目')} · ${item.qty}人${discText}</span>
         <span class="pos-item-amount">¥${item.amount.toFixed(2)}</span>
         <button type="button" class="pos-item-del" onclick="UI._removeWorkshopItem(${idx})">✕</button>
       </div>`;
@@ -374,43 +481,306 @@ const UI = {
   },
 
   // —— 从文创产品库选择 ——
+  async _loadCreativePOSProducts(force = false) {
+    if (force) {
+      this._creativePOSProducts = null;
+      this._creativePOSProductsPromise = null;
+    }
+    if (this._creativePOSProducts) return this._creativePOSProducts;
+    if (this._creativePOSProductsPromise) return this._creativePOSProductsPromise;
+
+    this._creativePOSProductsPromise = (async () => {
+      const products = (await Store.getAll('creativeProducts') || []).filter(p => this._isListed(p));
+      const normalized = products.map(p => ({
+        ...p,
+        _stock: Number(p.stock ?? 0) || 0,
+        _retailPrice: Number(p.retailPrice ?? p.retail_price ?? 0) || 0,
+        _supplier: p.supplier || '',
+        _unit: p.unit || '个',
+        _aliases: ''
+      })).sort((a, b) => {
+        const aReady = a._retailPrice > 0 ? 0 : 1;
+        const bReady = b._retailPrice > 0 ? 0 : 1;
+        if (aReady !== bReady) return aReady - bReady;
+        return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
+      });
+      try {
+        const aliases = await Store._request('GET', '/rest/v1/product_aliases?is_active=eq.true&limit=5000');
+        normalized.forEach(p => {
+          p._aliases = (aliases || []).filter(a => a.standardProductId === p.id).map(a => a.aliasName).join(' ');
+        });
+      } catch (error) {
+        console.warn('Failed to load creative product aliases', error);
+      }
+      this._creativePOSProducts = normalized;
+      return normalized;
+    })();
+
+    try {
+      return await this._creativePOSProductsPromise;
+    } catch (error) {
+      this._creativePOSProductsPromise = null;
+      throw error;
+    }
+  },
+
+  async _prepareCreativePOSAutocomplete() {
+    try {
+      await this._loadCreativePOSProducts();
+    } catch (error) {
+      console.warn('Failed to prepare creative POS autocomplete', error);
+    }
+  },
+
+  _normalizeCreativePOSSearch(value) {
+    return String(value || '').normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+  },
+
+  _isCreativePOSSubsequence(query, value) {
+    let index = 0;
+    for (const char of value) {
+      if (char === query[index]) index += 1;
+      if (index === query.length) return true;
+    }
+    return false;
+  },
+
+  _creativePOSMatchScore(product, keyword) {
+    const query = this._normalizeCreativePOSSearch(keyword);
+    if (!query) return 0;
+    const fields = [product.name, product.standardName, product.packageSpec, product.barcode, product._aliases, product.sku, product.supplier];
+    let best = Number.POSITIVE_INFINITY;
+    fields.forEach(raw => {
+      const value = this._normalizeCreativePOSSearch(raw);
+      if (!value) return;
+      if (value === query) best = Math.min(best, 0);
+      else if (value.startsWith(query)) best = Math.min(best, 10 + value.length - query.length);
+      else if (value.includes(query)) best = Math.min(best, 20 + value.indexOf(query));
+      else if (this._isCreativePOSSubsequence(query, value)) best = Math.min(best, 40 + value.length - query.length);
+    });
+    return best;
+  },
+
+  _filterCreativePOSProducts(products, keyword) {
+    const query = this._normalizeCreativePOSSearch(keyword);
+    if (!query) return products.slice();
+    return products
+      .map(product => ({ product, score: this._creativePOSMatchScore(product, query) }))
+      .filter(item => Number.isFinite(item.score))
+      .sort((a, b) => a.score - b.score || Number(b.product._retailPrice > 0) - Number(a.product._retailPrice > 0) || String(a.product.name || '').localeCompare(String(b.product.name || ''), 'zh-CN'))
+      .map(item => item.product);
+  },
+
+  async _onRetailProductInput(value) {
+    if (this._retailSuggestionHideTimer) {
+      clearTimeout(this._retailSuggestionHideTimer);
+      this._retailSuggestionHideTimer = null;
+    }
+    this._selectedRetailProduct = null;
+    const input = document.getElementById('rt-name');
+    const listEl = document.getElementById('rt-product-suggestions');
+    const query = String(value || '').trim();
+    const token = ++this._retailSuggestionToken;
+    if (!input || !listEl || !query) {
+      this._hideRetailProductSuggestions();
+      return;
+    }
+
+    listEl.style.display = 'block';
+    listEl.innerHTML = '<div class="pos-retail-suggestion-state">正在检索…</div>';
+    input.setAttribute('aria-expanded', 'true');
+    try {
+      const products = await this._loadCreativePOSProducts();
+      if (token !== this._retailSuggestionToken || input.value.trim() !== query) return;
+      const matches = this._filterCreativePOSProducts(products, query).slice(0, 8);
+      if (!matches.length) {
+        listEl.innerHTML = '<div class="pos-retail-suggestion-state">没有匹配商品，可继续手动输入</div>';
+        return;
+      }
+      listEl.innerHTML = matches.map(p => {
+        const canSelect = p._retailPrice > 0;
+        const detail = [p.standardName && p.standardName !== p.name ? p.standardName : '', p.packageSpec, p._aliases, p.sku].filter(Boolean).join(' · ');
+        return `<button type="button" role="option" class="pos-retail-suggestion ${canSelect ? '' : 'is-disabled'}" data-product-id="${this._escHtml(p.id)}" ${canSelect ? `onmousedown="event.preventDefault()" onclick="UI._selectRetailProductSuggestion('${p.id}')"` : 'disabled'}>
+          <span><strong>${this._escHtml(p.name || '-')}</strong>${detail ? `<small>${this._escHtml(detail)}</small>` : ''}</span>
+          <span class="pos-retail-suggestion-meta"><strong>¥${p._retailPrice.toFixed(2)}</strong><small>${canSelect ? (this._cpBool(p.isCountableStock ?? p.is_countable_stock, true) ? '库存 ' + p._stock + this._escHtml(p._unit) : '不计库存') : '无零售价'}</small></span>
+        </button>`;
+      }).join('');
+    } catch (error) {
+      if (token !== this._retailSuggestionToken) return;
+      listEl.innerHTML = '<div class="pos-retail-suggestion-state">商品检索暂不可用，可继续手动输入</div>';
+    }
+  },
+
+  _selectRetailProductSuggestion(id) {
+    const product = (this._creativePOSProducts || []).find(item => item.id === id);
+    if (!product || product._retailPrice <= 0) return;
+    this._selectedRetailProduct = { ...product };
+    const nameInput = document.getElementById('rt-name');
+    const priceInput = document.getElementById('rt-price');
+    const qtyInput = document.getElementById('rt-qty');
+    if (nameInput) nameInput.value = product.name;
+    if (priceInput) priceInput.value = product._retailPrice;
+    if (qtyInput) {
+      qtyInput.value = 1;
+      qtyInput.focus();
+      qtyInput.select();
+    }
+    this._hideRetailProductSuggestions();
+  },
+
+  _onRetailProductKeydown(event) {
+    if (event.key === 'Escape') {
+      this._hideRetailProductSuggestions();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    const first = document.querySelector('#rt-product-suggestions .pos-retail-suggestion:not([disabled])');
+    if (!first) return;
+    event.preventDefault();
+    this._selectRetailProductSuggestion(first.dataset.productId || '');
+  },
+
+  _hideRetailProductSuggestions(delay = 0) {
+    if (this._retailSuggestionHideTimer) {
+      clearTimeout(this._retailSuggestionHideTimer);
+      this._retailSuggestionHideTimer = null;
+    }
+    const hide = () => {
+      const listEl = document.getElementById('rt-product-suggestions');
+      const input = document.getElementById('rt-name');
+      if (listEl) {
+        listEl.style.display = 'none';
+        listEl.innerHTML = '';
+      }
+      if (input) input.setAttribute('aria-expanded', 'false');
+      this._retailSuggestionHideTimer = null;
+    };
+    if (delay) this._retailSuggestionHideTimer = setTimeout(hide, delay);
+    else hide();
+  },
+
   async _selectCreativeFromPOS() {
-    const products = await Store.getAll('creativeProducts') || [];
-    if (!products.length) { this.toast('请先在产品管理中录入文创产品', 'error'); return; }
-    // 过滤有库存且零售价 > 0 的产品
-    const available = products.filter(p => (p.stock || 0) > 0 && (p.retailPrice || 0) > 0);
-    if (!available.length) { this.toast('没有库存充足的产品可选', 'error'); return; }
+    try {
+      var normalized = await this._loadCreativePOSProducts(true);
+    } catch (error) {
+      this.toast('文创产品加载失败，请稍后重试', 'error');
+      return;
+    }
+    if (!normalized.length) { this.toast('暂无已上架文创产品，请先由管理员确认上架', 'error'); return; }
+    const hotKeywords = await this._getCreativePOSHotKeywords(normalized);
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.style.display = 'flex';
-    let listHtml = available.map(p => `
-      <div class="cp-select-item" onclick="UI._fillCreativeFromPOS('${p.id}')" style="cursor:pointer;padding:8px 12px;border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center">
-        <span><strong>${p.name}</strong> <span style="color:var(--gray-500);font-size:12px">${p.sku || ''}</span></span>
-        <span style="color:var(--green-700)">¥${(+p.retailPrice||0).toFixed(2)} <span style="color:var(--gray-500);font-size:12px">库存:${p.stock||0}${p.unit||'个'}</span></span>
-      </div>`).join('') || '<div style="padding:20px;text-align:center;color:var(--gray-500)">无可用产品</div>';
+    const suppliers = [...new Set(normalized.map(p => p._supplier).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    const hotHtml = hotKeywords.length ? `
+        <div class="pos-creative-hot-row">
+          ${hotKeywords.map(k => `<button type="button" class="cp-hot-chip" data-product-name="${this._escHtml(k)}" title="直接选择 ${this._escHtml(k)}">${this._escHtml(k)}</button>`).join('')}
+        </div>` : '';
     overlay.innerHTML = `
-      <div class="modal-card modal-card-md">
-        <div class="modal-title">📦 选择文创产品</div>
-        <div style="margin-bottom:10px"><input type="text" id="cp-search-pos" placeholder="搜索产品..." style="width:100%;padding:6px 10px" oninput="UI._filterCPSearch(this.value)"></div>
-        <div id="cp-select-list">${listHtml}</div>
+      <div class="modal-card modal-card-wide">
+        <div class="modal-title">📦 选择文创 / 饮料</div>
+        <div class="pos-creative-picker-toolbar">
+          <input type="text" id="cp-search-pos" placeholder="按名称 / 标准名 / 条码 / 别名搜索..." oninput="UI._renderCreativePOSList()">
+          <select id="cp-supplier-pos" onchange="UI._renderCreativePOSList()">
+            <option value="">全部供应商</option>
+            ${suppliers.map(s => `<option value="${this._escHtml(s)}">${this._escHtml(s)}</option>`).join('')}
+          </select>
+        </div>
+        ${hotHtml}
+        <div id="cp-select-list" class="pos-creative-picker-list"></div>
         <div class="modal-actions">
           <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
         </div>
       </div>`;
-    // 存储供搜索过滤
-    overlay._cpList = available;
+    overlay._cpList = normalized;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelectorAll('.cp-hot-chip').forEach(btn => {
+      btn.addEventListener('click', () => this._selectCreativePOSHotProduct(btn.dataset.productName || ''));
+    });
+    this._renderCreativePOSList();
   },
 
-  _filterCPSearch(val) {
-    const list = document.getElementById('cp-select-list');
-    const items = document.querySelectorAll('.cp-select-item');
-    const q = val.toLowerCase().trim();
-    items.forEach(el => {
-      el.style.display = (!q || el.textContent.toLowerCase().includes(q)) ? '' : 'none';
-    });
+  async _getCreativePOSHotKeywords(products) {
+    const productNames = new Set(products.map(p => String(p.name || '').trim()).filter(Boolean));
+    const scores = new Map();
+    try {
+      const revenues = await Store.getAll('revenue') || [];
+      revenues.forEach(r => {
+        const items = Array.isArray(r.retailItems) ? r.retailItems : [];
+        items.forEach(item => {
+          const name = String(item.productName || item.product_name || item.name || '').trim();
+          if (!name || !productNames.has(name)) return;
+          const qty = Number(item.qty || item.quantity || 1) || 1;
+          scores.set(name, (scores.get(name) || 0) + qty);
+        });
+      });
+    } catch (err) {
+      console.warn('Failed to load creative hot products', err);
+    }
+
+    const hot = [...scores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name)
+      .slice(0, 5);
+    products
+      .filter(p => p._retailPrice > 0 && p.name)
+      .forEach(p => {
+        if (hot.length < 5 && !hot.includes(p.name)) hot.push(p.name);
+      });
+    return hot.slice(0, 5);
+  },
+
+  _applyCreativePOSKeyword(keyword) {
+    const input = document.getElementById('cp-search-pos');
+    if (!input) return;
+    input.value = keyword;
+    this._renderCreativePOSList();
+  },
+
+  _selectCreativePOSHotProduct(productName) {
+    const overlay = document.querySelector('.modal-overlay');
+    const name = String(productName || '').trim();
+    const product = overlay?._cpList?.find(p => String(p.name || '').trim() === name && p._retailPrice > 0);
+    if (product) {
+      this._fillCreativeFromPOS(product.id);
+      return;
+    }
+    this._applyCreativePOSKeyword(name);
+  },
+
+  _renderCreativePOSList() {
+    const overlay = document.querySelector('.modal-overlay');
+    const listEl = document.getElementById('cp-select-list');
+    if (!overlay || !listEl || !overlay._cpList) return;
+    const q = (document.getElementById('cp-search-pos')?.value || '').trim().toLowerCase();
+    const supplier = document.getElementById('cp-supplier-pos')?.value || '';
+    let list = overlay._cpList;
+    if (supplier) list = list.filter(p => p._supplier === supplier);
+    if (q) {
+      list = this._filterCreativePOSProducts(list, q);
+    }
+    if (!list.length) {
+      listEl.innerHTML = '<div class="empty-state" style="padding:24px"><div class="icon">📦</div>没有匹配的产品</div>';
+      return;
+    }
+    listEl.innerHTML = list.map(p => {
+      const canSelect = p._retailPrice > 0;
+      const reason = p._retailPrice <= 0 ? '\u65e0\u96f6\u552e\u4ef7' : '';
+      return `
+        <button type="button" class="cp-select-item ${canSelect ? '' : 'is-disabled'}" ${canSelect ? `onclick="UI._fillCreativeFromPOS('${p.id}')"` : 'disabled'} title="${reason}">
+          <span class="cp-select-main">
+            <strong>${this._escHtml(p.name || '-')}</strong>
+            <span>${this._escHtml([p.standardName, p.packageSpec, this._cpBusinessTypeLabel(p.businessTypeCode, p.isBeverage), p.sku, p._supplier].filter(Boolean).join(' · '))}</span>
+          </span>
+          <span class="cp-select-side">
+            <strong>¥${p._retailPrice.toFixed(2)}</strong>
+            <span class="${p._stock > 0 ? 'tag tag-success' : 'tag tag-danger'}">${this._cpBool(p.isCountableStock ?? p.is_countable_stock, true) ? '库存 ' + p._stock + this._escHtml(p._unit) : '不计库存'}</span>
+            ${reason ? `<span class="cp-select-reason">${reason}</span>` : ''}
+          </span>
+        </button>`;
+    }).join('');
   },
 
   _fillCreativeFromPOS(id) {
@@ -418,8 +788,9 @@ const UI = {
     if (overlay && overlay._cpList) {
       const p = overlay._cpList.find(x => x.id === id);
       if (p) {
+        this._selectedRetailProduct = { ...p };
         document.getElementById('rt-name').value = p.name;
-        document.getElementById('rt-price').value = +p.retailPrice || 0;
+        document.getElementById('rt-price').value = p._retailPrice || +p.retailPrice || 0;
         document.getElementById('rt-qty').value = 1;
       }
       overlay.remove();
@@ -427,6 +798,7 @@ const UI = {
   },
 
   // —— 添加文创产品 ——
+  _selectedRetailProduct: null,
   _retailItems: [],
   _addRetailItem() {
     const priceInput = document.getElementById('rt-price');
@@ -435,15 +807,16 @@ const UI = {
     if (!priceInput || !priceInput.value || +priceInput.value <= 0) { this.toast('请输入有效单价', 'error'); return; }
     if (!nameInput || !nameInput.value.trim()) { this.toast('请输入产品名称', 'error'); return; }
     const price = +priceInput.value;
-    const qty = +qtyInput.value || 1;
+    const qty = qtyInput.value === '' ? 1 : Number(qtyInput.value);
     const name = nameInput.value.trim();
-    const amount = qty * price;
-
-    this._retailItems.push({ productName: name, qty, unitPrice: price, amount });
+    if (!Number.isFinite(price) || !Number.isFinite(qty) || qty <= 0) { this.toast('请输入有效数量和单价', 'error'); return; }
+    this._retailItems.push(createRetailSaleItem(name, qty, price, this._selectedRetailProduct));
+    this._selectedRetailProduct = null;
     this._renderRetailList();
     priceInput.value = '';
     qtyInput.value = 1;
     nameInput.value = '';
+    this._hideRetailProductSuggestions();
     this._updatePOS();
   },
 
@@ -456,7 +829,7 @@ const UI = {
     this._retailItems.forEach((item, idx) => {
       total += item.amount;
       h += `<div class="pos-item-row">
-        <span class="pos-item-name">${item.productName} × ${item.qty}</span>
+        <span class="pos-item-name">${this._escHtml(item.productName)} × ${item.qty}${item.snapshotVersion === 1 ? ' · ' + this._escHtml(this._cpBusinessTypeLabel(item.businessTypeCode, item.isBeverage)) : ' · 未关联商品'}</span>
         <span class="pos-item-amount">¥${item.amount.toFixed(2)}</span>
         <button type="button" class="pos-item-del" onclick="UI._removeRetailItem(${idx})">✕</button>
       </div>`;
@@ -476,7 +849,8 @@ const UI = {
     const items = [];
     (MODELS.ticketProducts || []).forEach((p, i) => {
       const qty = +(document.getElementById('tkt-' + i)?.value || 0);
-      if (qty > 0) items.push({ name: p.name, qty, price: p.price, amount: qty * p.price });
+      const prior = this._editingId ? (this._editingConfiguredSaleItems.ticket.get(p.name) || {}) : null;
+      if (qty > 0) items.push(createConfiguredSaleItem(p, qty, prior));
     });
     return items;
   },
@@ -484,7 +858,8 @@ const UI = {
     const items = [];
     (MODELS.coffeeProducts || []).forEach((p, i) => {
       const qty = +(document.getElementById('cof-' + i)?.value || 0);
-      if (qty > 0) items.push({ name: p.name, qty, price: p.price, amount: qty * p.price });
+      const prior = this._editingId ? (this._editingConfiguredSaleItems.coffee.get(p.name) || {}) : null;
+      if (qty > 0) items.push(createConfiguredSaleItem(p, qty, prior));
     });
     return items;
   },
@@ -601,9 +976,9 @@ const UI = {
           coffeeItems: cItems,
           coffeeQty: cItems.reduce((s, i) => s + i.qty, 0),
           coffeeAmount: cItems.reduce((s, i) => s + i.amount, 0),
-          workshopItems: this._workshopItems.map(i => ({ ...i })),
+          workshopItems: this._workshopItems.map(normalizeWorkshopSaleItem),
           workshopAmount: this._workshopItems.reduce((s, i) => s + i.amount, 0),
-          retailItems: this._retailItems.map(i => ({ productName: i.productName, qty: i.qty, unitPrice: i.unitPrice, amount: i.amount })),
+          retailItems: this._retailItems.map(i => ({ ...i })),
           retailAmount: this._retailItems.reduce((s, i) => s + i.amount, 0),
           otherAmount: +($('#rev-other')?.value || 0),
           otherDesc: $('#rev-other-desc')?.value || '',
@@ -624,7 +999,8 @@ const UI = {
         for (const item of this._workshopItems) {
           const saved = await Store.add('revenue', createRevenue({
             ...baseRecord,
-            workshopItems: [{ ...item }],
+            projectName: normalizeWorkshopSaleItem(item).projectName,
+            workshopItems: [normalizeWorkshopSaleItem(item)],
             workshopAmount: item.amount,
             cashAmount: isCash ? item.amount : 0,
             accountAmount: isCash ? 0 : item.amount,
@@ -636,7 +1012,7 @@ const UI = {
           const amt = item.qty * item.unitPrice;
           const saved = await Store.add('revenue', createRevenue({
             ...baseRecord,
-            retailItems: [{ productName: item.productName, qty: item.qty, unitPrice: item.unitPrice, amount: amt }],
+            retailItems: [{ ...item, amount: amt }],
             retailAmount: amt,
             cashAmount: isCash ? amt : 0,
             accountAmount: isCash ? 0 : amt,
@@ -651,9 +1027,12 @@ const UI = {
       if (btn) { btn.disabled = false; btn.textContent = '确认收款'; }
       return;
     }
+    this._creativePOSProducts = null;
+    this._creativePOSProductsPromise = null;
     this._submittingPayment = false;
     this._resetPOS();
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },
@@ -691,7 +1070,13 @@ const UI = {
     document.getElementById('rev-other-desc').value = '';
     document.getElementById('rev-notes').value = '';
     this._workshopItems = [];
+    this._editingConfiguredSaleItems = { ticket: new Map(), coffee: new Map() };
+    const workshopProject = document.getElementById('ws-project');
+    if (workshopProject) workshopProject.value = '';
+    const workshopType = document.getElementById('ws-type');
+    if (workshopType) workshopType.value = 'workshop';
     this._retailItems = [];
+    this._selectedRetailProduct = null;
     this._renderWorkshopList();
     this._renderRetailList();
     document.querySelectorAll('.pos-payment-btn').forEach(b => b.classList.toggle('active', b.dataset.payment === '扫码支付'));
@@ -700,37 +1085,36 @@ const UI = {
 
   // —— 编辑模式预填 ——
   async _fillPOSEdit(id) {
+    this._selectedRetailProduct = null;
     const r = await Store.getById('revenue', id);
     if (!r) return;
+    this._editingConfiguredSaleItems = {
+      ticket: new Map((Array.isArray(r.ticketItems) ? r.ticketItems : []).map(item => [item.name, item])),
+      coffee: new Map((Array.isArray(r.coffeeItems) ? r.coffeeItems : []).map(item => [item.name, item]))
+    };
     document.getElementById('rev-date').value = r.date || todayStr();
 
     // 票务（动态）
     (r.ticketItems || []).forEach((item, i) => {
       const idx = (MODELS.ticketProducts || []).findIndex(p => p.name === item.name);
       if (idx >= 0) {
-        const el = document.getElementById('tkt-' + idx);
-        if (el) { el.value = item.qty || 0; }
-        const disp = document.getElementById('tkt-' + idx + '-display');
-        if (disp) disp.textContent = item.qty || 0;
+        this._setTicketQty('tkt-' + idx, MODELS.ticketProducts[idx].price, item.qty || 0);
       }
     });
     // 咖啡（动态）
     (r.coffeeItems || []).forEach((item, i) => {
       const idx = (MODELS.coffeeProducts || []).findIndex(p => p.name === item.name);
       if (idx >= 0) {
-        const el = document.getElementById('cof-' + idx);
-        if (el) { el.value = item.qty || 0; }
-        const disp = document.getElementById('cof-' + idx + '-display');
-        if (disp) disp.textContent = item.qty || 0;
+        this._setTicketQty('cof-' + idx, MODELS.coffeeProducts[idx].price, item.qty || 0);
       }
     });
 
     // 工坊
-    this._workshopItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(i => ({ ...i }));
+    this._workshopItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(normalizeWorkshopSaleItem);
     this._renderWorkshopList();
 
     // 文创
-    this._retailItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(i => ({ ...i }));
+    this._retailItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(normalizeRetailSaleItem);
     this._renderRetailList();
 
     // 其他
@@ -751,6 +1135,7 @@ const UI = {
     this._editingId = null;
     this._workshopItems = [];
     this._retailItems = [];
+    this._selectedRetailProduct = null;
     this.renderRevenuePage();
   },
 
@@ -762,6 +1147,22 @@ const UI = {
       + (r.retailAmount || r.creativeAmount || 0)
       + (r.venueAmount || 0)
       + (r.otherAmount || 0);
+  },
+
+  async _renderWorkshopProjects() {
+    const el = document.getElementById('workshop-project-list');
+    if (!el) return;
+    const month = (document.getElementById('rev-filter-date')?.value || todayStr()).slice(0, 7);
+    try {
+      const rows = await Store._request('GET', '/rest/v1/workshop_project_performance_v2?activity_month=eq.' + encodeURIComponent(month) + '&order=last_activity_date.desc');
+      if (!rows.length) { el.innerHTML = '<div class="empty-state"><div class="icon">🔧</div>本月暂无已命名的工坊项目</div>'; return; }
+      el.innerHTML = '<div class="table-wrap"><table class="data-table" style="min-width:850px"><thead><tr><th>活动项目</th><th>类型/日期</th><th>参与人数</th><th>收入</th><th>直接成本</th><th>贡献额</th><th>数据状态</th></tr></thead><tbody>' + rows.map(r => {
+        const costState = r.missingDirectCost ? '<span class="tag tag-info">待补直接成本</span>' : r.pendingCostCount > 0 ? '<span class="tag tag-info">有待归类成本</span>' : '<span class="tag tag-success">已关联成本</span>';
+        return `<tr><td><strong>${this._escHtml(r.projectName)}</strong></td><td>${this._escHtml(r.activityTypes || '工坊/体验')}<br>${r.firstActivityDate}${r.firstActivityDate === r.lastActivityDate ? '' : ' 至 ' + r.lastActivityDate}</td><td>${this._fmt(r.participantCount)} 人</td><td>¥${this._fmt(r.revenueAmount)}</td><td>¥${this._fmt(r.directCostAmount)}</td><td><strong>¥${this._fmt(r.contributionAmount)}</strong></td><td>${costState}</td></tr>`;
+      }).join('') + '</tbody></table></div><p class="form-hint">直接成本只汇总 M3-05 中明确归属到同名项目和体验活动层的期间支出；未录入成本时不估算。</p>';
+    } catch (error) {
+      el.innerHTML = '<p>工坊项目经营数据加载失败：' + this._escHtml(error.message || error) + '</p>';
+    }
   },
 
   _canAdjustRecord(record) {
@@ -919,10 +1320,10 @@ const UI = {
       const cItems = Array.isArray(r.coffeeItems) ? r.coffeeItems : [];
       cItems.forEach(i => lines.push(fmtItem('☕', i.qty || 0, itemName(i) || '咖啡', itemPrice(i))));
       // 工坊明细
-      const wItems = Array.isArray(r.workshopItems) ? r.workshopItems : [];
-      wItems.forEach(i => lines.push(fmtItem('🔧', i.qty || 0, itemName(i) || '工坊', itemPrice(i))));
+      const wItems = (Array.isArray(r.workshopItems) ? r.workshopItems : []).map(normalizeWorkshopSaleItem);
+      wItems.forEach(i => lines.push(`🔧 ${i.qty}人 · ${this._escHtml(i.productName)}${i.projectName ? ' · ' + this._escHtml(i.projectName) : ''} ¥${this._fmt(i.unitPrice)}`));
       // 文创明细
-      const retItems = Array.isArray(r.retailItems) ? r.retailItems : [];
+      const retItems = (Array.isArray(r.retailItems) ? r.retailItems : []).map(normalizeRetailSaleItem);
       retItems.forEach(i => lines.push(fmtItem('🛒', i.qty || 0, itemName(i) || '文创', itemPrice(i))));
 
       // 兜底 tag：金额>0 但明细数组为空（历史旧数据），保留旧版汇总式显示
@@ -963,7 +1364,7 @@ const UI = {
         <td>${r.handler || '—'}</td>
         <td class="action-cell">
           <div class="row-actions">
-            ${this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>` : ''}
+            ${Auth.can('edit', 'revenue') && this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editRevenue('${r.id}')">编辑</button>` : ''}
             ${canAdjust ? `<button class="btn btn-sm btn-secondary" onclick="UI._refundRevenue('${r.id}')">退款</button>` : ''}
             ${canAdjust ? `<button class="btn btn-sm btn-danger" onclick="UI._voidRevenue('${r.id}')">作废</button>` : ''}
             ${Auth.isAdmin ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteRevenue('${r.id}')">删除</button>` : ''}
@@ -982,9 +1383,10 @@ const UI = {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   },
 
-  _filterRevenue() {
+  async _filterRevenue() {
     this._revenueFilterDate = document.getElementById('rev-filter-date').value;
-    this._renderRevenueList();
+    await this._renderRevenueList();
+    await this._renderWorkshopProjects();
   },
 
   async _deleteRevenue(id) {
@@ -1006,6 +1408,7 @@ const UI = {
     await Store.delete('revenue', id);
     this.toast('已删除');
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },
@@ -1043,6 +1446,7 @@ const UI = {
     }
     this.toast('收入记录已作废');
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },
@@ -1096,6 +1500,7 @@ const UI = {
     }
     this.toast('退款已记录');
     await this._renderRevenueList();
+    await this._renderWorkshopProjects();
     this._loadTodayStats();
     this._loadCounterCashPanel();
   },
@@ -1336,7 +1741,7 @@ const UI = {
       const pct = recv > 0 ? Math.round((got / recv) * 100) : 100;
       const isPending = gap > 0;
       const paymentsN = Array.isArray(r.payments) ? r.payments.length : 0;
-      const no = this._genSpaceContractNo(r);
+      const no = r.contractNo || this._genSpaceContractNo(r);
       return `
         <tr>
           <td><span style="font-family:monospace;background:var(--cream);padding:2px 6px;border-radius:4px;font-size:12px">${no}</span></td>
@@ -1360,10 +1765,10 @@ const UI = {
             </div>
             ${paymentsN > 0 ? `<div style="font-size:12px;color:var(--gray-500);margin-top:2px">${paymentsN} 笔到账</div>` : ''}
           </td>
-          <td><span class="tag tag-info">${this._escHtml(r.status || '筹备中')}</span></td>
+          <td><span class="tag tag-info">${this._escHtml(r.businessStatus || '待确认')}</span><div style="font-size:12px;color:var(--gray-500);margin-top:2px">执行：${this._escHtml(r.status || '筹备中')}</div></td>
           <td class="row-actions" style="white-space:nowrap">
-            ${isPending ? `<button class="btn btn-primary btn-sm" onclick="UI._openQuickCollectModal('${r.id}')">💰 收款</button> ` : ''}
-            <button class="btn btn-secondary btn-sm" onclick="UI._editSpace('${r.id}')">详情</button>
+            ${Auth.can('create', 'space') && isPending ? `<button class="btn btn-primary btn-sm" onclick="UI._openQuickCollectModal('${r.id}')">💰 收款</button> ` : ''}
+            ${Auth.can('edit', 'space') ? `<button class="btn btn-secondary btn-sm" onclick="UI._editSpace('${r.id}')">详情</button>` : ''}
           </td>
         </tr>
       `;
@@ -1386,6 +1791,7 @@ const UI = {
   },
 
   _openQuickCollectModal(spaceId) {
+    if (!Auth.can('create', 'space')) { this.toast('当前账号无权限录入到账', 'error'); return; }
     const r = (this._projectListRecords || []).find(x => x.id === spaceId);
     if (!r) { this.toast('记录不存在', 'error'); return; }
     const recv = +r.receivableAmount || 0;
@@ -1453,11 +1859,9 @@ const UI = {
       this.toast(`金额超过待收 ¥${this._fmt(gap)}`, 'error'); return;
     }
     try {
-      await Store.add('spacePayment', createSpacePayment({
-        spaceUsageId: spaceId,
-        paymentDate: date,
-        amount, paymentMethod: method, notes
-      }));
+      await Store._request('POST', `/rest/v1/space-entry?id=${encodeURIComponent(spaceId)}&action=payment`, { payment: createSpacePayment({
+        spaceUsageId: spaceId, paymentDate: date, amount, paymentMethod: method, notes
+      }) });
       this.toast(`已录入到账 ¥${this._fmt(amount)}`);
       document.getElementById('quick-collect-modal').remove();
       // 刷新页面与顶部 4 卡片
@@ -1473,54 +1877,192 @@ const UI = {
     }
   },
 
+  _expensePendingOnly: false,
+  _expenseClassFields: {
+    costTypeCode: ['cost_type', '成本类型'], businessLayerCode: ['business_layer', '业务层'],
+    businessTypeCode: ['business_type', '业务类型'], capabilityAxisCode: ['capability_axis', '能力轴']
+  },
+
+  _expenseClassificationHTML(prefix) {
+    return `<div class="form-group full"><label for="${prefix}-class-mode">成本归属</label>
+      <select id="${prefix}-class-mode" onchange="UI._setExpenseClassMode('${prefix}')"><option value="suggested">采用默认映射建议</option><option value="manual">手动确认归属</option><option value="pending">暂不能判断，标为待归类</option></select>
+      <p id="${prefix}-class-hint" role="status">正在加载归属选项…</p>
+      <p style="font-size:12px;color:var(--gray-500)">这里记录期间支出与能力投入；采购支出不会再次扣入商品销售毛利。</p></div>
+      ${Object.entries(this._expenseClassFields).map(([key, [, label]]) => `<div class="form-group"><label for="${prefix}-${key}">${label}</label><select id="${prefix}-${key}" ${key === 'businessLayerCode' ? `onchange="UI._filterExpenseTypes('${prefix}')"` : ''}></select></div>`).join('')}
+      <div class="form-group full"><label for="${prefix}-class-reason">归属说明（可选）</label><input id="${prefix}-class-reason" maxlength="500" placeholder="补充判断依据"></div>`;
+  },
+
+  async _loadExpenseClassification(prefix, id = '', initial = false) {
+    const mode = document.getElementById(prefix + '-class-mode');
+    if (!mode) return;
+    const form = mode.closest('form');
+    const token = (form._classToken || 0) + 1;
+    form._classToken = token;
+    form._classReady = false;
+    const submit = form.querySelector('[type=submit]');
+    submit.disabled = true;
+    const params = new URLSearchParams();
+    if (id || form._expenseId) params.set('id', id || form._expenseId);
+    for (const [key, suffix] of Object.entries({ project: 'project', category: 'category', description: 'desc', related_activity: 'activity' })) {
+      params.set(key, document.getElementById(prefix + '-' + suffix)?.value || '');
+    }
+    try {
+      const context = await Store._request('GET', '/rest/v1/expense-entry?' + params);
+      if (!form.isConnected || form._classToken !== token) return;
+      form._expenseId = id || form._expenseId || '';
+      form._classContext = context;
+      if (initial || !form._classInitialized) {
+        for (const [key, [type]] of Object.entries(this._expenseClassFields)) {
+          const select = document.getElementById(prefix + '-' + key);
+          select.innerHTML = (key === 'costTypeCode' ? '' : '<option value="">' + (key === 'businessLayerCode' ? '共享运营 / 暂不指定' : '暂不指定') + '</option>') + context.dimensions.filter(d => d.dimensionType === type).map(d => `<option value="${this._escHtml(d.code)}">${this._escHtml(d.name)}</option>`).join('');
+        }
+        if (context.classification) {
+          mode.value = 'manual';
+          for (const key of Object.keys(this._expenseClassFields)) document.getElementById(prefix + '-' + key).value = context.classification[key] || (key === 'costTypeCode' ? 'uncategorized_cost' : '');
+          document.getElementById(prefix + '-class-reason').value = context.classification.overrideReason || '';
+        }
+        form._classInitialized = true;
+      }
+      form._classReady = true;
+      this._setExpenseClassMode(prefix);
+      submit.disabled = false;
+    } catch (error) {
+      if (form._classToken !== token) return;
+      document.getElementById(prefix + '-class-hint').textContent = '归属信息加载失败，请重新进入页面或修改类别重试：' + error.message;
+    }
+  },
+
+  _filterExpenseTypes(prefix) {
+    const layer = document.getElementById(prefix + '-businessLayerCode').value;
+    const select = document.getElementById(prefix + '-businessTypeCode');
+    const context = select.closest('form')._classContext;
+    for (const option of select.options) {
+      const match = context?.dimensions.find(d => d.dimensionType === 'business_type' && d.code === option.value);
+      option.disabled = !!option.value && match?.parentCode !== layer;
+    }
+    if (select.selectedOptions[0]?.disabled) select.value = '';
+  },
+
+  _setExpenseClassMode(prefix) {
+    const mode = document.getElementById(prefix + '-class-mode');
+    const context = mode.closest('form')._classContext;
+    if (!context) return;
+    if (mode.value !== 'manual') {
+      const values = mode.value === 'suggested' ? context.suggestion || {} : {};
+      for (const key of Object.keys(this._expenseClassFields)) document.getElementById(prefix + '-' + key).value = values[key] || (key === 'costTypeCode' ? 'uncategorized_cost' : '');
+    }
+    for (const key of Object.keys(this._expenseClassFields)) document.getElementById(prefix + '-' + key).disabled = mode.value !== 'manual';
+    this._filterExpenseTypes(prefix);
+    const name = context.dimensions.find(d => d.dimensionType === 'cost_type' && d.code === context.suggestion?.costTypeCode)?.name;
+    document.getElementById(prefix + '-class-hint').textContent = mode.value === 'pending' ? '将保存为待归类，后续可在列表中补充。' : mode.value === 'manual' ? '按当前选择保存；共享运营可不指定业务层，能力轴可留空。' : name ? '默认建议：' + name + '。如不符合本笔用途，请切换手动确认。' : '未找到可靠默认映射，将保存为待归类。';
+  },
+
+  _readExpenseClassification(prefix) {
+    const mode = document.getElementById(prefix + '-class-mode');
+    if (!mode.closest('form')._classReady) throw new Error('请先加载成本归属选项');
+    const result = { mode: mode.value, overrideReason: document.getElementById(prefix + '-class-reason').value.trim() };
+    for (const key of Object.keys(this._expenseClassFields)) result[key] = document.getElementById(prefix + '-' + key).value;
+    return result;
+  },
+
   // === 支出录入 ===
   async renderExpensePage() {
     const page = $('#page-expense');
     if (!Auth.hasModuleAccess('expense')) { this._noAccess(page); return; }
 
     html(page, `
-      <div class="card">
+      <div class="card" id="expense-entry-card">
         <div class="card-title">新增支出记录</div>
         <form id="expense-form" class="form-grid">
           <div class="form-group">
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="exp-date" value="${todayStr()}" style="flex:1">${this._todayBtn('exp-date')}</div>
           </div>
-          <div class="form-group"><label>项目</label><select id="exp-project">${MODELS.PROJECT_TYPES.map(p => `<option value="${p}">${p}</option>`).join('')}</select></div>
-          <div class="form-group"><label>支出类别</label><select id="exp-category">${MODELS.EXPENSE_CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('')}</select></div>
+          <div class="form-group"><label>支出类别</label><select id="exp-category" onchange="UI._loadExpenseClassification('exp')">${this._expenseCategoryOptions()}</select></div>
+          <div class="form-group"><label for="exp-project">归属项目</label><input id="exp-project" value="运营" placeholder="项目/展览/活动名称" onchange="UI._loadExpenseClassification('exp')"></div>
           <div class="form-group"><label>金额</label><input type="number" id="exp-amount" min="0" step="0.01" placeholder="0.00" required></div>
-          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-desc" placeholder="支出具体内容"></div>
+          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-desc" onchange="UI._loadExpenseClassification('exp')" placeholder="支出具体内容"></div>
           <div class="form-group"><label>经手人</label><input type="text" id="exp-handler" placeholder="经手人姓名"></div>
           <div class="form-group"><label>发票</label><select id="exp-invoice">${MODELS.INVOICE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>付款凭证</label><select id="exp-receipt">${MODELS.RECEIPT_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
-          <div class="form-group"><label>关联活动</label><input type="text" id="exp-activity" placeholder="关联展览/活动名称"></div>
+          <div class="form-group"><label>关联活动</label><input type="text" id="exp-activity" onchange="UI._loadExpenseClassification('exp')" placeholder="关联展览/活动名称"></div>
+          ${this._expenseClassificationHTML('exp')}
           <div class="form-actions full">
-            <button type="submit" class="btn btn-primary">保存记录</button>
+            <button type="submit" class="btn btn-primary" disabled>保存记录</button>
           </div>
         </form>
       </div>
       <div class="card">
-        <div class="card-title">支出记录</div>
-        <div class="filter-bar">
-          <div class="form-group"><label>筛选月份</label><select id="exp-filter-month" onchange="UI._filterExpense()">${this._monthOptions()}</select></div>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('exp-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterExpense()">本月</button>
-          <button type="button" class="btn btn-sm btn-secondary" onclick="UI._uploadSelectedExpenseAttachment()">上传票据</button>
-          <button type="button" class="btn btn-sm btn-primary" onclick="UI._generateSelectedExpensePdf()">生成所选 PDF</button>
-          <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="exp-count"></span>
-        </div>
-        <div id="expense-list"><div class="loading-state"><div class="spinner"></div></div></div>
-        <div id="expense-pdf-list" style="margin-top:16px"></div>
+        <div class="filter-bar" role="tablist" aria-label="支出管理视图">
+          <button class="btn" id="exp-tab-ledger" onclick="UI._switchExpenseView('ledger')">支出记录</button>
+          <button class="btn" id="exp-tab-preparation" onclick="UI._switchExpenseView('preparation')">报销准备</button>
+          <button class="btn" id="exp-tab-packages" onclick="UI._switchExpenseView('packages')">报销凭证包</button>
+        </div><p id="exp-view-hint"></p>
+        <div id="exp-record-controls"><div class="filter-bar">
+          <div class="form-group"><label for="exp-filter-month">支出月份（留空为全部）</label><input type="month" id="exp-filter-month" onchange="UI._filterExpense()"></div>
+          <button class="btn btn-sm btn-secondary" onclick="document.getElementById('exp-filter-month').value=''; UI._filterExpense()">全部月份</button>
+          <button class="btn btn-sm btn-secondary" onclick="document.getElementById('exp-filter-month').value='${todayStr().slice(0,7)}'; UI._filterExpense()">本月</button>
+          <div class="form-group"><label for="exp-filter-status">材料进度</label><select id="exp-filter-status" onchange="UI._filterExpense()"><option value="pending">全部待处理</option><option value="missing">已录入无票据</option><option value="ready">已上传票据未申请报销</option><option value="exported">已导出报销凭证 PDF</option><option value="all">全部记录</option></select></div>
+          <div class="form-group"><label for="exp-search">查询</label><input id="exp-search" placeholder="项目、类别、内容、经手人" oninput="UI._renderExpenseList(false)"></div>
+        </div><div class="filter-bar">
+          <label><input id="exp-pending-only" type="checkbox" onchange="UI._expensePendingOnly=this.checked; UI._renderExpenseList(false)"> 只看待归类支出</label><span id="exp-class-count"></span>
+          <button class="btn btn-sm btn-secondary" onclick="UI._uploadSelectedExpenseAttachment()">上传票据</button>
+          <button id="exp-generate-pdf" class="btn btn-sm btn-primary" onclick="UI._generateSelectedExpensePdf()">生成所选 PDF</button>
+          <span id="exp-selection-summary" role="status"></span><span id="exp-count"></span>
+        </div></div><div id="expense-list"></div><div id="exp-package-controls" hidden class="filter-bar"><div class="form-group"><label for="exp-package-month">凭证生成月份</label><input type="month" id="exp-package-month" onchange="UI._renderExpensePdfList()"></div><button class="btn btn-sm btn-secondary" onclick="document.getElementById('exp-package-month').value='';UI._renderExpensePdfList()">全部月份</button></div><div id="expense-pdf-list"></div>
       </div>
     `);
 
-    document.getElementById('exp-filter-month').value = this._expenseFilterMonth || todayStr().slice(0, 7);
-    await this._renderExpenseList();
-    await this._renderExpensePdfList();
+    await this._loadExpenseClassification('exp');
+    await this._switchExpenseView(this._expenseView || 'ledger');
+  },
+
+  async _switchExpenseView(view) {
+    this._expenseView = view;
+    this._expenseLoadToken = (this._expenseLoadToken || 0) + 1;
+    this._selectedExpenseIds.clear();
+    this._expensePendingOnly = false;
+    $('#exp-pending-only').checked = false;
+    for (const name of ['ledger','preparation','packages']) {
+      const button = $('#exp-tab-' + name);
+      button.className = 'btn ' + (name === view ? 'btn-primary' : 'btn-secondary');
+      button.setAttribute('role','tab'); button.setAttribute('aria-selected',String(name === view));
+    }
+    $('#exp-record-controls').hidden = view === 'packages';
+    $('#expense-entry-card').hidden = view !== 'ledger';
+    $('#expense-list').hidden = view === 'packages';
+    $('#expense-pdf-list').hidden = view !== 'packages';
+    $('#exp-package-controls').hidden = view !== 'packages';
+    $('#exp-filter-month').value = view === 'ledger' ? this._expenseFilterMonth ?? todayStr().slice(0,7) : '';
+    $('#exp-filter-status').value = view === 'ledger' ? 'all' : 'pending';
+    $('#exp-search').value = '';
+    $('#exp-view-hint').textContent = view === 'ledger' ? '运营成本按支出日期计算，票据和 PDF 进度不影响成本。' : view === 'preparation' ? '默认展示所有月份待处理支出，可跨月勾选合并生成 PDF；生成成功即完成本系统流程。' : '按凭证包归档，可重复下载；生成凭证不代表财务已付款。';
+    if (view === 'packages') await this._renderExpensePdfList(); else await this._renderExpenseList();
+  },
+
+  async _loadExpenseRows(table, filter = '') {
+    const rows = [];
+    for (let offset = 0; ; offset += 500) {
+      const batch = await Store._request('GET','/rest/v1/'+table+'?order='+(table === 'business_cost_facts_v2' ? 'fact_id' : 'id')+'.asc&limit=500&offset='+offset+filter);
+      if (!Array.isArray(batch)) throw new Error('数据返回格式错误');
+      rows.push(...batch); if (batch.length < 500) return rows;
+    }
+  },
+
+  _expenseProgress(record, attachments = [], packages = []) {
+    return packages.some(pack=>!pack.supersededById && (pack.expenseIds || []).includes(record.id)) ? 'exported' : attachments.length ? 'ready' : 'missing';
+  },
+
+  _expenseMissingMaterials(record, attachments = []) {
+    const missing = [];
+    if (!attachments.some(a=>a.attachmentType === 'invoice') && record.invoiceStatus !== '不需要') missing.push('发票');
+    if (!attachments.some(a=>a.attachmentType === 'payment') && record.receiptStatus !== '不需要') missing.push('支付凭证');
+    return missing;
   },
 
   _fillExpenseForm(r) {
     $('#exp-date').value = r.date;
-    $('#exp-project').value = r.project;
+    if ($('#exp-project')) $('#exp-project').value = r.project;
     $('#exp-category').value = r.category;
     $('#exp-amount').value = r.amount;
     $('#exp-desc').value = r.description || '';
@@ -1530,58 +2072,62 @@ const UI = {
     $('#exp-activity').value = r.relatedActivity || '';
   },
 
-  async _renderExpenseList() {
-    const filter = document.getElementById('exp-filter-month')?.value || todayStr().slice(0, 7);
+  async _renderExpenseList(reload = true) {
     const el = $('#expense-list');
-    if (!el) return;
+    if (!el || this._expenseView === 'packages') return;
+    const token = this._expenseLoadToken = (this._expenseLoadToken || 0) + 1;
+    const generateButton = $('#exp-generate-pdf');
+    this._expenseDataReady = false;
+    if (generateButton) generateButton.disabled = true;
+    if (reload) this._expenseDataset = null;
+    try {
+      const [expenses,attachments,packages,facts] = this._expenseDataset || await Promise.all([
+        this._loadExpenseRows('expense'),this._loadExpenseRows('expense_attachments'),
+        this._loadExpenseRows('expense_reimbursements'),this._loadExpenseRows('business_cost_facts_v2','&source_table=eq.expense')
+      ]);
+      if (token !== this._expenseLoadToken || this._expenseView === 'packages') return;
+      this._expenseDataset = [expenses,attachments,packages,facts];
+      this._expenseRecords = expenses.filter(isOperationalExpenseRecord);
+      this._expensePackages = packages; this._expenseAttachments = this._groupExpenseAttachments(attachments);
+      const byId = new Map(facts.map(f=>[f.sourceId,f]));
+      const month = $('#exp-filter-month').value, status = $('#exp-filter-status').value, query = $('#exp-search').value.trim().toLowerCase();
+      const progress = r=>this._expenseProgress(r,this._expenseAttachments[r.id] || [],packages);
+      const pendingClass = r=>!byId.has(r.id) || byId.get(r.id).costTypeCode === 'uncategorized_cost';
+      const scope = this._expenseRecords.filter(r=>(!month || r.date.startsWith(month)) && (!query || [r.project,r.category,r.description,r.handler].join(' ').toLowerCase().includes(query)));
+      const records = scope.filter(r=>(status === 'all' || (status === 'pending' ? progress(r) !== 'exported' : progress(r) === status)) && (!this._expensePendingOnly || pendingClass(r)));
+      records.sort((a,b)=>this._expenseView === 'preparation' ? a.date.localeCompare(b.date) || a.id.localeCompare(b.id) : b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+      this._expenseVisibleIds = new Set(records.map(r=>r.id));
+      for (const id of this._selectedExpenseIds) if (!this._expenseVisibleIds.has(id) || progress(this._expenseRecords.find(r=>r.id === id)) === 'exported') this._selectedExpenseIds.delete(id);
+      $('#exp-count').textContent = records.length+' 条记录';
+      $('#exp-class-count').textContent = '当前范围待归类 '+scope.filter(pendingClass).length+' 笔';
+      const sum = rows=>rows.reduce((n,r)=>n+Number(r.amount || 0),0), pending = scope.filter(r=>progress(r) !== 'exported');
+      const oldest = pending.map(r=>r.date).sort()[0];
+      const labels = {missing:'已录入无票据',ready:'已上传票据未申请报销',exported:'已导出报销凭证 PDF'};
+      let markup = `<div class="stats-grid"><div class="stat-card"><div class="stat-label">${this._expenseView === 'ledger' ? '运营支出合计' : '待处理金额'}</div><div class="stat-value">¥${this._fmt(sum(this._expenseView === 'ledger' ? scope : pending))}</div><div class="stat-sub">${month || '全部月份'}</div></div><div class="stat-card"><div class="stat-label">待补票据</div><div class="stat-value">${scope.filter(r=>progress(r)==='missing').length} 笔</div></div><div class="stat-card"><div class="stat-label">待生成 PDF</div><div class="stat-value">${scope.filter(r=>progress(r)==='ready').length} 笔</div><div class="stat-sub">最早待处理：${oldest || '无'}</div></div></div>`;
+      markup += '<div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" aria-label="全选待处理支出" onchange="UI._toggleAllExpenseSelection(this.checked)"></th><th>日期</th><th>项目 / 类别</th><th>成本归属</th><th>金额</th><th>内容 / 经手人</th><th>票据</th><th>材料进度</th><th>操作</th></tr></thead><tbody>';
+      for (const r of records) {
+        const state = progress(r), exported = state === 'exported';
+        const linked = packages.filter(pack=>!pack.supersededById && (pack.expenseIds || []).includes(r.id));
+        const age = Math.max(0,Math.floor((Date.parse(todayStr())-Date.parse(r.date))/86400000));
+        const missing = this._expenseMissingMaterials(r,this._expenseAttachments[r.id] || []);
+        markup += `<tr><td><input type="checkbox" class="exp-select" value="${this._escAttr(r.id)}" ${exported?'disabled':''} ${this._selectedExpenseIds.has(r.id)?'checked':''} onchange="UI._toggleExpenseSelection(this.value,this.checked)"></td><td>${this._escHtml(r.date)}${!exported?'<br><small>已过 '+age+' 天</small>':''}</td><td>${this._escHtml(r.project)}<br>${this._escHtml(r.category)}</td><td>${this._escHtml(byId.get(r.id)?.costTypeName || '待归类')}<br>${this._escHtml(byId.get(r.id)?.businessLayerName || '共享运营 / 暂不指定')}<br>${this._escHtml(byId.get(r.id)?.capabilityAxisName || '')}</td><td>¥${this._fmt(r.amount)}</td><td>${this._escHtml(r.description || '-')}<br>${this._escHtml(r.handler || '-')}</td><td>${this._renderExpenseAttachmentStatus(this._expenseAttachments[r.id] || [],r.id)}<small>${missing.length?'待补：'+missing.join('、'):'材料已齐 / 已注明不需要'}</small></td><td>${labels[state]}${linked.map(pack=>'<br>'+this._escHtml(pack.title)+' <a target="_blank" rel="noopener" href="'+this._escAttr(this._resolveImageUrl(pack.pdfUrl))+'">下载</a>').join('')}</td><td><button class="btn btn-sm btn-secondary" onclick="UI._editExpense('${this._escAttr(r.id)}')">编辑</button><button class="btn btn-sm btn-danger" onclick="UI._deleteExpense('${this._escAttr(r.id)}')">删除</button>${exported?`<button class="btn btn-sm btn-secondary" onclick="UI._generateExpensePdf(['${this._escAttr(r.id)}'],true)">另存 PDF</button>`:''}</td></tr>`;
+      }
+      markup += '</tbody></table></div>';
+      if (!records.length) markup += '<div class="empty-state">当前范围没有支出记录</div>';
+      this._expenseDataReady = true;
+      html(el,markup); this._updateExpenseSelectionSummary();
+      if (generateButton) generateButton.disabled = !!this._expensePdfBusy;
+    } catch (error) {
+      if (token === this._expenseLoadToken) {
+        this._selectedExpenseIds.clear(); this._updateExpenseSelectionSummary();
+        html(el,'<p role="alert">支出数据加载失败，请重新进入页面重试：'+this._escHtml(error.message)+'</p>');
+      }
+    }
+  },
 
-    const records = (await Store.getByMonth('expense', filter)).filter(isOperationalExpenseRecord);
-    const attachmentsByExpense = this._groupExpenseAttachments(await Store.getAll('expenseAttachments'));
-    const countEl = $('#exp-count');
-    if (countEl) countEl.textContent = `${records.length} 条记录`;
-
-    const expenseTotal = records.reduce((s, r) => s + (+r.amount || 0), 0);
-    const reimbursedTotal = records.reduce((s, r) => s + (r.reimbursementStatus === '已报销' ? (+r.amount || 0) : 0), 0);
-    const pendingReimbursementTotal = Math.max(0, expenseTotal - reimbursedTotal);
-    const summaryHtml = `
-      <div class="stats-grid" style="margin-bottom:16px">
-        <div class="stat-card"><div class="stat-label">支出合计</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(expenseTotal)}</div><div class="stat-sub">${filter}</div></div>
-        <div class="stat-card"><div class="stat-label">已报销</div><div class="stat-value">¥${this._fmt(reimbursedTotal)}</div><div class="stat-sub">运营支出</div></div>
-        <div class="stat-card"><div class="stat-label">待报销</div><div class="stat-value">¥${this._fmt(pendingReimbursementTotal)}</div><div class="stat-sub">运营支出</div></div>
-      </div>`;
-
-    if (!records.length) { html(el, summaryHtml + '<div class="empty-state"><div class="icon">🧾</div>暂无支出记录</div>'); return; }
-
-    let h = summaryHtml + '<div class="table-wrap"><table class="data-table"><thead><tr><th><input type="checkbox" onchange="UI._toggleAllExpenseSelection(this.checked)"></th><th>日期</th><th>项目</th><th>类别</th><th>金额</th><th>内容</th><th>经手人</th><th>票据</th><th>报销</th><th>操作</th></tr></thead><tbody>';
-    records.forEach(r => {
-      const isReimbursed = r.reimbursementStatus === '已报销';
-      const reimbursementTag = isReimbursed ? 'tag-success' : 'tag-info';
-      const reimbursementStatus = r.reimbursementStatus || '未报销';
-      const attachmentStatus = this._renderExpenseAttachmentStatus(attachmentsByExpense[r.id] || [], r.id);
-      const checked = this._selectedExpenseIds.has(r.id) ? ' checked' : '';
-      h += `<tr>
-        <td><input type="checkbox" class="exp-select" value="${r.id}"${checked} onchange="UI._toggleExpenseSelection('${r.id}', this.checked)"></td>
-        <td>${r.date}</td>
-        <td>${r.project}</td>
-        <td>${r.category}</td>
-        <td><strong>${this._fmt(r.amount)}</strong></td>
-        <td>${r.description || '-'}</td>
-        <td>${r.handler || '-'}</td>
-        <td>${attachmentStatus}</td>
-        <td>
-          <span class="tag ${reimbursementTag}">${reimbursementStatus}</span>
-        </td>
-        <td class="row-actions">
-          <button class="btn btn-sm btn-primary" onclick="UI._showExpenseAttachmentModal('${r.id}')">上传票据</button>
-          <button class="btn btn-sm btn-gold" onclick="UI._generateExpensePdf(['${r.id}'])">PDF</button>
-          <button class="btn btn-sm ${isReimbursed ? 'btn-secondary' : 'btn-primary'}" onclick="UI._toggleExpenseReimbursed('${r.id}', '${isReimbursed ? '未报销' : '已报销'}')">${isReimbursed ? '取消报销' : '已报销'}</button>
-          <button class="btn btn-sm btn-secondary" onclick="UI._editExpense('${r.id}')">编辑</button>
-          <button class="btn btn-sm btn-danger" onclick="UI._deleteExpense('${r.id}')">删除</button>
-        </td>
-      </tr>`;
-    });
-    h += '</tbody></table></div>';
-    html(el, h);
+  _updateExpenseSelectionSummary() {
+    const selected = (this._expenseRecords || []).filter(r=>this._selectedExpenseIds.has(r.id)), target = $('#exp-selection-summary');
+    if (target) target.textContent = '已选 '+selected.length+' 笔 · ¥'+this._fmt(selected.reduce((n,r)=>n+Number(r.amount || 0),0));
   },
 
   async _saveExpense(e) {
@@ -1591,7 +2137,7 @@ const UI = {
 
     const data = {
       date: $('#exp-date').value,
-      project: $('#exp-project').value,
+      project: $('#exp-project').value || '运营',
       category: $('#exp-category').value,
       amount: +($('#exp-amount').value || 0),
       description: $('#exp-desc').value,
@@ -1603,16 +2149,22 @@ const UI = {
     const errs = validateExpense(data);
     if (errs.length) { this.toast(errs[0], 'error'); if (btn) { btn.disabled = false; btn.textContent = '保存记录'; } return; }
 
-    const created = await Store.add('expense', createExpense(data));
-    const shouldUpload = confirm('支出记录已保存。是否现在上传发票或支付凭证？');
-    this.toast('支出记录已保存');
-    await this.renderExpensePage();
-    if (shouldUpload && created?.id) await this._showExpenseAttachmentModal(created.id);
+    try {
+      const result = await Store._request('POST', '/rest/v1/expense-entry', { expense: createExpense(data), classification: this._readExpenseClassification('exp') });
+      const shouldUpload = confirm('支出与成本归属已保存。是否现在上传发票或支付凭证？');
+      this.toast('支出与成本归属已保存');
+      await this.renderExpensePage();
+      if (shouldUpload && result.expense?.id) await this._showExpenseAttachmentModal(result.expense.id);
+    } catch (error) {
+      this.toast('保存失败：' + error.message, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = '保存记录'; }
+    }
   },
 
   async _editExpense(id) {
     const r = await Store.getById('expense', id);
-    if (!r) { this.toast('未找到支出记录', 'error'); return; }
+    if (!r) { this.toast('未找到支出记录','error'); return; }
+    if ((this._expensePackages || []).some(pack=>(pack.expenseIds || []).includes(id)) && !confirm('此支出已生成凭证。修改台账不会改变历史 PDF；如需移除凭证明细，请到“报销凭证包”修改对应报销单。继续编辑？')) return;
     document.getElementById('expense-edit-modal')?.remove();
     const overlay = document.createElement('div');
     const safeId = this._escAttr(r.id);
@@ -1622,18 +2174,19 @@ const UI = {
       <div class="modal-card modal-card-wide" onclick="event.stopPropagation()">
         <div class="modal-title">编辑支出记录</div>
         <form id="expense-edit-form" class="form-grid" onsubmit="event.preventDefault(); UI._saveExpenseEdit('${safeId}')">
+          <div class="form-group"><label for="exp-edit-project">归属项目</label><input id="exp-edit-project" value="${this._escAttr(r.project || '运营')}" onchange="UI._loadExpenseClassification('exp-edit')"></div>
           <div class="form-group">
             <label>日期</label>
             <div style="display:flex;gap:6px"><input type="date" id="exp-edit-date" value="${this._escHtml(r.date || todayStr())}" style="flex:1">${this._todayBtn('exp-edit-date')}</div>
           </div>
-          <div class="form-group"><label>项目</label><select id="exp-edit-project">${MODELS.PROJECT_TYPES.map(p => `<option value="${this._escHtml(p)}"${p === r.project ? ' selected' : ''}>${this._escHtml(p)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>支出类别</label><select id="exp-edit-category">${MODELS.EXPENSE_CATEGORIES.map(c => `<option value="${this._escHtml(c)}"${c === r.category ? ' selected' : ''}>${this._escHtml(c)}</option>`).join('')}</select></div>
+          <div class="form-group"><label>支出类别</label><select id="exp-edit-category" onchange="UI._loadExpenseClassification('exp-edit')">${this._expenseCategoryOptions(r.category || '')}</select></div>
           <div class="form-group"><label>金额</label><input type="number" id="exp-edit-amount" min="0" step="0.01" placeholder="0.00" value="${this._escHtml(r.amount ?? '')}" required></div>
-          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-edit-desc" placeholder="支出具体内容" value="${this._escHtml(r.description || '')}"></div>
+          <div class="form-group full"><label>内容说明</label><input type="text" id="exp-edit-desc" onchange="UI._loadExpenseClassification('exp-edit')" placeholder="支出具体内容" value="${this._escHtml(r.description || '')}"></div>
           <div class="form-group"><label>经手人</label><input type="text" id="exp-edit-handler" placeholder="经手人姓名" value="${this._escHtml(r.handler || '')}"></div>
           <div class="form-group"><label>发票</label><select id="exp-edit-invoice">${MODELS.INVOICE_STATUSES.map(s => `<option value="${this._escHtml(s)}"${s === r.invoiceStatus ? ' selected' : ''}>${this._escHtml(s)}</option>`).join('')}</select></div>
           <div class="form-group"><label>付款凭证</label><select id="exp-edit-receipt">${MODELS.RECEIPT_STATUSES.map(s => `<option value="${this._escHtml(s)}"${s === r.receiptStatus ? ' selected' : ''}>${this._escHtml(s)}</option>`).join('')}</select></div>
-          <div class="form-group"><label>关联活动</label><input type="text" id="exp-edit-activity" placeholder="关联展览/活动名称" value="${this._escHtml(r.relatedActivity || '')}"></div>
+          <div class="form-group"><label>关联活动</label><input type="text" id="exp-edit-activity" onchange="UI._loadExpenseClassification('exp-edit')" placeholder="关联展览/活动名称" value="${this._escHtml(r.relatedActivity || '')}"></div>
+          ${this._expenseClassificationHTML('exp-edit')}
           <div class="modal-actions full">
             <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
             <button type="submit" class="btn btn-primary">保存修改</button>
@@ -1642,6 +2195,7 @@ const UI = {
       </div>`;
     overlay.addEventListener('click', () => overlay.remove());
     document.body.appendChild(overlay);
+    await this._loadExpenseClassification('exp-edit', id, true);
     document.getElementById('exp-edit-amount')?.focus();
   },
 
@@ -1651,7 +2205,7 @@ const UI = {
     if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
     const data = {
       date: $('#exp-edit-date').value,
-      project: $('#exp-edit-project').value,
+      project: $('#exp-edit-project')?.value || '运营',
       category: $('#exp-edit-category').value,
       amount: +($('#exp-edit-amount').value || 0),
       description: $('#exp-edit-desc').value,
@@ -1667,7 +2221,7 @@ const UI = {
       return;
     }
     try {
-      await Store.update('expense', id, data);
+      await Store._request('PATCH', '/rest/v1/expense-entry?id=' + encodeURIComponent(id), { expense: data, classification: this._readExpenseClassification('exp-edit') });
       this.toast('支出记录已更新');
       document.getElementById('expense-edit-modal')?.remove();
       await this._renderExpenseList();
@@ -1685,29 +2239,25 @@ const UI = {
     await this._renderExpenseList();
   },
 
-  async _toggleExpenseReimbursed(id, reimbursementStatus) {
-    await Store.update('expense', id, { reimbursementStatus });
-    this.toast(reimbursementStatus === '已报销' ? '已标记为已报销' : '已取消报销标记');
-    await this._renderExpenseList();
-  },
-
   _filterExpense() {
-    this._expenseFilterMonth = document.getElementById('exp-filter-month').value;
+    if (this._expenseView === 'ledger') this._expenseFilterMonth = document.getElementById('exp-filter-month').value;
     this._selectedExpenseIds.clear();
-    this._renderExpenseList();
+    this._renderExpenseList(false);
   },
 
   _toggleExpenseSelection(id, checked) {
     if (checked) this._selectedExpenseIds.add(id);
     else this._selectedExpenseIds.delete(id);
+    this._updateExpenseSelectionSummary();
   },
 
   _toggleAllExpenseSelection(checked) {
-    document.querySelectorAll('.exp-select').forEach(input => {
+    document.querySelectorAll('.exp-select:not(:disabled)').forEach(input => {
       input.checked = checked;
       if (checked) this._selectedExpenseIds.add(input.value);
       else this._selectedExpenseIds.delete(input.value);
     });
+    this._updateExpenseSelectionSummary();
   },
 
   async _generateSelectedExpensePdf() {
@@ -1723,14 +2273,25 @@ const UI = {
     await this._showExpenseAttachmentModal(ids[0]);
   },
 
-  async _generateExpensePdf(expenseIds) {
-    if (!Array.isArray(expenseIds) || !expenseIds.length) return;
+  async _generateExpensePdf(expenseIds, regenerate = false) {
+    if (!Array.isArray(expenseIds) || !expenseIds.length || this._expensePdfBusy) return;
+    if (expenseIds.length > 50) { this.toast('单个凭证包最多选择 50 笔','error'); return; }
+    const records = (this._expenseRecords || []).filter(r=>expenseIds.includes(r.id));
+    const missing = records.flatMap(r=>this._expenseMissingMaterials(r,this._expenseAttachments[r.id] || []).map(label=>r.date+' '+r.description+'：缺'+label));
+    let materialNote = '';
+    if (missing.length) {
+      materialNote = prompt('以下材料尚未齐全：\n'+missing.join('\n')+'\n如确实无法提供，请填写说明后继续生成；取消则返回补充材料。');
+      if (!materialNote?.trim()) return;
+    }
+    if (!confirm(`${regenerate?'将另存独立凭证，不替代原报销单。移除重复明细请到“报销凭证包”使用“修改报销单”。\n':''}确认将所选 ${expenseIds.length} 笔（¥${this._fmt(records.reduce((n,r)=>n+Number(r.amount || 0),0))}）合并生成一个报销凭证包？`)) return;
+    this._expensePdfBusy = true;
+    const button = $('#exp-generate-pdf'); if (button) button.disabled = true;
     try {
       const title = expenseIds.length > 1
         ? `运营支出报销凭证包（${expenseIds.length}笔）`
         : '运营支出报销凭证';
       this.toast('正在生成 PDF...');
-      const result = await Store.generateExpensePdf(expenseIds, title);
+      const result = await Store.generateExpensePdf(expenseIds,title,{regenerate,materialNote:materialNote.trim()});
       this.toast('报销 PDF 已生成');
       this._selectedExpenseIds.clear();
       await this._renderExpenseList();
@@ -1739,28 +2300,37 @@ const UI = {
       if (url) window.open(url, '_blank');
     } catch (e) {
       this.toast('生成 PDF 失败：' + (e.message || e), 'error');
+    } finally {
+      this._expensePdfBusy = false; if (button) button.disabled = !this._expenseDataReady;
     }
   },
 
   async _renderExpensePdfList() {
     const target = $('#expense-pdf-list');
     if (!target) return;
-    const rows = await Store.getAll('expenseReimbursements');
+    let rows;
+    try { rows = await this._loadExpenseRows('expense_reimbursements'); } catch (error) { html(target,'<p role="alert">凭证包加载失败：'+this._escHtml(error.message)+'</p>'); return; }
     if (!rows.length) {
       html(target, '<div class="empty-state" style="padding:18px"><div class="icon">📄</div>暂无已生成报销 PDF</div>');
       return;
     }
-    const recent = rows.slice(0, 8);
+    const month = $('#exp-package-month')?.value || '';
+    const beijingMonth = value=>new Date(value).toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'}).slice(0,7);
+    const recent = rows.filter(r=>!month || beijingMonth(r.createdAt) === month).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));
+    let expenses;
+    try { expenses = await this._loadExpenseRows('expense'); } catch (error) { html(target,'<p role="alert">凭证明细加载失败：'+this._escHtml(error.message)+'</p>'); return; }
+    const byId = new Map(expenses.map(r=>[r.id,r]));
+    if (!recent.length) { html(target,'<div class="empty-state">所选月份暂无凭证包</div>'); return; }
     const body = recent.map(r => {
       const url = this._resolveImageUrl(r.pdfUrl || r.pdf_url || '');
       const expenseIds = Array.isArray(r.expenseIds || r.expense_ids) ? (r.expenseIds || r.expense_ids) : [];
-      return `<tr>
-        <td>${this._escHtml(r.title || '运营支出报销凭证包')}</td>
-        <td>${expenseIds.length || '-'}</td>
+      return `<tr data-expense-package-id="${this._escAttr(r.id)}">
+        <td>${this._escHtml(r.title || '运营支出报销凭证包')}<br><strong>${r.supersededById ? '已替代 · 请勿提交财务' : '当前版本'}</strong>${r.supersededById ? '<br>新版：'+this._escHtml(rows.find(p=>p.id===r.supersededById)?.title || r.supersededById) : ''}${r.supersedesId ? '<br>原单：'+this._escHtml(rows.find(p=>p.id===r.supersedesId)?.title || r.supersedesId)+'<br>修改原因：'+this._escHtml(r.revisionReason || '') : ''}</td>
+        <td>${expenseIds.length || '-'}<details><summary>查看支出条目</summary>${expenseIds.map(id=>{const r=byId.get(id);return '<p>'+this._escHtml(r?r.date+' · '+r.project+' · '+r.description+' · ¥'+this._fmt(r.amount):id+'（原支出已删除）')+'</p>';}).join('')}<small>此处为当前台账，生成时内容以 PDF 为准。</small></details></td>
         <td>¥${this._fmt(r.totalAmount || r.total_amount)}</td>
-        <td>${r.createdAt ? this._fmtBeijingTime(r.createdAt) : '-'}</td>
+        <td>${r.createdAt ? this._escHtml(new Date(r.createdAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})) : '-'}</td>
         <td>${this._escHtml(r.generatedBy || r.generated_by || '-')}</td>
-        <td><a class="btn btn-sm btn-primary" href="${this._escHtml(url)}" target="_blank" rel="noopener">下载</a></td>
+        <td><a class="btn btn-sm btn-primary" href="${this._escHtml(url)}" target="_blank" rel="noopener" ${r.supersededById ? 'onclick="return confirm(\'这是已替代的历史 PDF，仅供追溯，请勿提交财务。继续下载？\')"' : ''}>${r.supersededById ? '历史 PDF' : '下载'}</a>${!r.supersededById ? '<button class="btn btn-sm btn-secondary" data-package-id="'+this._escAttr(r.id)+'" onclick="UI._editExpensePdfPackage(this.dataset.packageId)">修改报销单</button>' : ''}</td>
       </tr>`;
     }).join('');
     html(target, `
@@ -1773,6 +2343,58 @@ const UI = {
           </table>
         </div>
       </div>`);
+  },
+
+  async _editExpensePdfPackage(id) {
+    if (this._expensePdfBusy) return;
+    try {
+      const data = await Store._request('GET','/rest/v1/expense_reimbursements/revision?id='+encodeURIComponent(id));
+      if (data.package.supersededById) { this.toast('此报销单已被替代，请修改最新版本','error'); return; }
+      document.getElementById('expense-pdf-revision-modal')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'expense-pdf-revision-modal'; overlay.className = 'modal-overlay';
+      overlay.innerHTML = `<div class="modal-card modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="exp-revision-title">
+        <div class="modal-title" id="exp-revision-title">修改报销单</div>
+        <p>${this._escHtml(data.package.title)}</p>
+        <p>取消勾选要移除的重复支出。保留项目沿用原 PDF 的内容和金额，旧版保留并标记为已替代。</p>
+        <p>仅移出报销单不会删除支出台账中的重复记录，请另行核对处理。已发送的旧 PDF 需通知财务更换。</p>
+        <div id="exp-revision-items">${data.expenses.map(r=>`<label style="display:flex;gap:10px;align-items:flex-start;margin:12px 0"><input type="checkbox" class="exp-revision-keep" value="${this._escAttr(r.id)}" checked><span>${this._escHtml(r.date)} · ${this._escHtml(r.description || r.category || r.project || '')} · ¥${this._fmt(r.amount)}</span></label>`).join('')}</div>
+        <p id="exp-revision-total" aria-live="polite"></p>
+        <div class="form-group"><label for="exp-revision-reason">修改原因（必填）</label><textarea id="exp-revision-reason" maxlength="500" rows="3" placeholder="例如：重复录入，移除重复的支出"></textarea></div>
+        <p id="exp-revision-error" role="alert"></p>
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" id="exp-revision-cancel">取消</button><button type="button" class="btn btn-primary" id="exp-revision-save">保存并生成新版 PDF</button></div>
+      </div>`;
+      document.body.appendChild(overlay);
+      const checks = [...overlay.querySelectorAll('.exp-revision-keep')];
+      const save = overlay.querySelector('#exp-revision-save'), cancel = overlay.querySelector('#exp-revision-cancel');
+      const reason = overlay.querySelector('#exp-revision-reason');
+      const selected = ()=>checks.filter(c=>c.checked).map(c=>c.value);
+      const update = ()=>{
+        const ids = selected(), total = data.expenses.filter(r=>ids.includes(r.id)).reduce((n,r)=>n+Math.round(Number(r.amount)*100),0)/100;
+        overlay.querySelector('#exp-revision-total').textContent = `保留 ${ids.length} 笔 · ¥${this._fmt(total)}；移除 ${checks.length-ids.length} 笔`;
+        save.disabled = !ids.length || ids.length === checks.length || !reason.value.trim();
+      };
+      checks.forEach(c=>c.addEventListener('change',update)); reason.addEventListener('input',update);
+      cancel.onclick = ()=>overlay.remove();
+      save.onclick = async ()=>{
+        if (this._expensePdfBusy || save.disabled) return;
+        this._expensePdfBusy = true; save.disabled = true; cancel.disabled = true;
+        checks.forEach(c=>c.disabled=true); reason.disabled=true;
+        overlay.querySelector('#exp-revision-error').textContent='';
+        try {
+          const result = await Store.generateExpensePdf(selected(),'',{revisionOf:id,revisionReason:reason.value.trim()});
+          overlay.remove(); this._expenseDataset=null; this._selectedExpenseIds?.clear();
+          this.toast('新版 PDF 已生成，旧报销单已标记为已替代');
+          await this._renderExpenseList(); await this._renderExpensePdfList();
+          const url = this._resolveImageUrl(result.pdfUrl || ''); if (url) window.open(url,'_blank');
+        } catch (error) {
+          overlay.querySelector('#exp-revision-error').textContent = '未保存，原报销单保持不变：'+error.message;
+        } finally {
+          this._expensePdfBusy=false; cancel.disabled=false; checks.forEach(c=>c.disabled=false); reason.disabled=false; update();
+        }
+      };
+      update(); reason.focus();
+    } catch (error) { this.toast('无法打开报销单：'+error.message,'error'); }
   },
 
   _groupExpenseAttachments(rows = []) {
@@ -1951,6 +2573,31 @@ const UI = {
     if (!Auth.hasModuleAccess('space')) { this._noAccess(page); return; }
     const editing = this._editingSpaceId;
     const records = await Store.getAll('space');
+    if (!Auth.can('create', 'space')) {
+      html(page, `
+        <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div>
+        <div class="card">
+          <div class="card-title">🏛 空间使用日历（本月）</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>月份</label><input type="month" id="sp-gantt-month" value="${this._spaceGanttMonth || todayStr().slice(0,7)}" onchange="UI._onGanttMonthChange()"></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('sp-gantt-month').value='${todayStr().slice(0,7)}'; UI._onGanttMonthChange()">本月</button>
+          </div>
+          <div id="space-gantt">${this._renderSpaceGantt(records, this._spaceGanttMonth || todayStr().slice(0,7))}</div>
+        </div>
+        <div class="card">
+          <div class="card-title">空间使用记录</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>筛选月份</label><select id="sp-filter-month" onchange="UI._filterSpace()">${this._monthOptions()}</select></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('sp-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterSpace()">本月</button>
+            <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="sp-count"></span>
+          </div>
+          <div id="space-list"><div class="loading-state"><div class="spinner"></div></div></div>
+        </div>
+      `);
+      document.getElementById('sp-filter-month').value = this._spaceFilterMonth || todayStr().slice(0, 7);
+      await this._renderSpaceList();
+      return;
+    }
 
     html(page, `
       <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div>
@@ -1970,9 +2617,9 @@ const UI = {
           <div class="form-group"><label>结束日期</label><input type="date" id="sp-end-date" value="" onchange="UI._autoSetExpectedPayment()"></div>
           <div class="form-group"><label>空间</label><select id="sp-space">${MODELS.SPACES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>项目/活动名称</label><input type="text" id="sp-project" placeholder="请输入项目名称" required></div>
-          <div class="form-group"><label>类型</label><select id="sp-type">${MODELS.SPACE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
+          <div class="form-group"><label>执行类型</label><select id="sp-type" onchange="UI._suggestSpaceBusiness()">${MODELS.SPACE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}</select></div>
           <div class="form-group"><label>客户/合作方</label><input type="text" id="sp-client" placeholder="客户或合作方名称"></div>
-          <div class="form-group"><label>状态</label><select id="sp-status">${MODELS.SPACE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
+          <div class="form-group"><label>执行状态</label><select id="sp-status" onchange="UI._suggestSpaceBusiness()">${MODELS.SPACE_STATUSES.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
           <div class="form-group"><label>租金类型</label>
             <select id="sp-rental-type" onchange="UI._toggleRentalType()">
               ${MODELS.RENTAL_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
@@ -1980,6 +2627,11 @@ const UI = {
           </div>
           <div class="form-group" id="sp-rental-amount-group"><label>应收金额</label><input type="number" id="sp-receivable" min="0" step="0.01" placeholder="0.00" value="0"></div>
           <div class="form-group"><label>预计到账日</label><input type="date" id="sp-expected-payment"></div>
+          <div class="form-group"><label>业务类型<span class="required-mark">*</span></label><select id="sp-business-type" onchange="UI._markSpaceClassificationManual()"><option value="space_rental">空间租赁/合作</option><option value="brand_event">品牌活动/企业合作</option><option value="uncategorized_revenue">待确认项目</option></select><div class="form-hint" id="sp-business-hint">根据执行类型提供默认建议，可人工确认</div></div>
+          <div class="form-group"><label>合作方式<span class="required-mark">*</span></label><select id="sp-cooperation-mode"><option value="">请选择</option><option value="租赁">租赁</option><option value="联办">联办</option><option value="赞助">赞助</option><option value="置换">置换</option><option value="自营">自营</option><option value="其他">其他</option></select></div>
+          <div class="form-group"><label>经营状态<span class="required-mark">*</span></label><select id="sp-business-status"><option value="线索">线索</option><option value="洽谈">洽谈</option><option value="已签约">已签约</option><option value="执行中">执行中</option><option value="已完成">已完成</option><option value="已取消">已取消</option><option value="待确认">待确认</option></select></div>
+          <div class="form-group"><label>合同/合作编号</label><input type="text" id="sp-contract-no" maxlength="100" placeholder="付费签约项目必填"></div>
+          <div class="form-group"><label>项目负责人</label><input type="text" id="sp-project-owner" maxlength="100" placeholder="内部负责人或对接人"></div>
           <div class="form-group full"><label>备注</label><textarea id="sp-notes" rows="2"></textarea></div>
           <div class="form-actions full">
             <button type="button" class="btn btn-primary" onclick="UI._saveSpace()">${editing ? '保存修改' : '保存记录'}</button>
@@ -2004,6 +2656,7 @@ const UI = {
     // 初始化租金类型 + 自动算预计到账日
     this._toggleRentalType();
     this._autoSetExpectedPayment();
+    await this._suggestSpaceBusiness(true);
 
     if (editing) {
       const r = await Store.getById('space', editing);
@@ -2204,7 +2857,7 @@ const UI = {
         <td>¥${this._fmt(p.amount)}</td>
         <td>${p.paymentMethod || '转账'}</td>
         <td>${this._escHtml(p.notes || '')}</td>
-        <td class="row-actions"><button class="btn btn-sm btn-danger" onclick="UI._deletePayment('${p.id}','${spaceId}')">删除</button></td>
+        <td><span class="tag tag-success">已入账</span></td>
       </tr>
     `).join('');
 
@@ -2212,7 +2865,7 @@ const UI = {
       <div class="card-title">💰 到账明细（已收 ¥${this._fmt(total)} / 应收 ¥${this._fmt(req)}${unpaid > 0 ? ' · 待收 ¥' + this._fmt(unpaid) : ' · 已结清'}）<span style="font-size:12px;color:var(--gray-500);margin-left:8px">录入请到「📋 项目清单」</span></div>
       ${payments.length === 0 ? '<div class="empty-state">暂无到账记录</div>' : `
         <div class="table-wrap"><table class="data-table">
-          <thead><tr><th>日期</th><th>金额</th><th>方式</th><th>备注</th><th>操作</th></tr></thead>
+          <thead><tr><th>日期</th><th>金额</th><th>方式</th><th>备注</th><th>状态</th></tr></thead>
           <tbody>${rows}</tbody>
         </table></div>`}
     `;
@@ -2252,6 +2905,28 @@ const UI = {
     }
   },
 
+  _markSpaceClassificationManual() {
+    this._spaceClassificationSource = 'manual';
+    const hint = $('#sp-business-hint');
+    if (hint) hint.textContent = '已人工确认业务类型';
+  },
+
+  async _suggestSpaceBusiness(initial = false) {
+    const type = $('#sp-type')?.value || '';
+    const status = $('#sp-status')?.value || '';
+    if (!type) return;
+    try {
+      const suggestion = await Store._request('GET', `/rest/v1/space-entry?type=${encodeURIComponent(type)}&status=${encodeURIComponent(status)}`);
+      if (initial || this._spaceClassificationSource !== 'manual') {
+        if ($('#sp-business-type')) $('#sp-business-type').value = suggestion.businessTypeCode;
+        if ($('#sp-business-status')) $('#sp-business-status').value = suggestion.businessStatus;
+        this._spaceClassificationSource = 'suggested';
+      }
+      const hint = $('#sp-business-hint');
+      if (hint) hint.textContent = suggestion.requiresConfirmation ? '该场景存在混合用途，请人工确认业务类型' : '已按执行类型给出默认建议，可人工修改';
+    } catch (e) { console.warn('[space] 业务类型建议加载失败', e); }
+  },
+
   _escHtml(s) {
     return String(s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
   },
@@ -2287,6 +2962,12 @@ const UI = {
     $('#sp-rental-type').value = r.rentalType || '付费';
     $('#sp-receivable').value = r.receivableAmount || 0;
     $('#sp-expected-payment').value = r.expectedPaymentDate || this._calcExpectedPaymentDate(r.date, r.endDate);
+    $('#sp-business-type').value = r.businessTypeCode || 'uncategorized_revenue';
+    $('#sp-cooperation-mode').value = r.cooperationMode || '';
+    $('#sp-business-status').value = r.businessStatus || '待确认';
+    $('#sp-contract-no').value = r.contractNo || '';
+    $('#sp-project-owner').value = r.projectOwner || '';
+    this._spaceClassificationSource = r.businessTypeCode ? 'manual' : 'suggested';
     $('#sp-notes').value = r.notes || '';
     this._toggleRentalType();
   },
@@ -2302,25 +2983,22 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">📋</div>暂无记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>结束日期</th><th>空间</th><th>项目名称</th><th>类型</th><th>客户</th><th>租金类型</th><th>状态</th><th>应收</th><th>已收</th><th>预计到账</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>空间</th><th>项目名称</th><th>业务类型</th><th>合作方式</th><th>合同编号</th><th>负责人</th><th>经营状态</th><th>应收/已收</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       const statusTagClass = r.status === '已完成' ? 'tag-success' : r.status === '已取消' || r.status === '空闲' ? 'tag-danger' : 'tag-info';
       const expected = r.expectedPaymentDate || this._calcExpectedPaymentDate(r.date, r.endDate);
       h += `<tr>
         <td>${r.date}</td>
-        <td>${r.endDate || '—'}</td>
         <td>${this._escHtml(r.space)}</td>
         <td>${this._escHtml(r.projectName)}</td>
-        <td>${this._escHtml(r.type)}</td>
-        <td>${this._escHtml(r.client || '-')}</td>
-        <td><span class="tag ${r.rentalType === '免费' ? 'tag-free' : 'tag-info'}">${r.rentalType || '付费'}</span></td>
-        <td><span class="tag ${statusTagClass}">${r.status}</span></td>
-        <td>${r.rentalType === '免费' ? '免费' : '¥' + this._fmt(r.receivableAmount)}</td>
-        <td>${r.rentalType === '免费' ? '—' : '¥' + this._fmt(r.receivedAmount || 0)}</td>
-        <td>${expected || '—'}</td>
+        <td><span class="tag ${(r.businessTypeCode || '') === 'uncategorized_revenue' ? 'tag-danger' : 'tag-info'}">${({space_rental:'空间租赁/合作',brand_event:'品牌活动/企业合作',uncategorized_revenue:'待确认项目'})[r.businessTypeCode] || '待确认项目'}</span><div class="form-hint">${this._escHtml(r.type)}</div></td>
+        <td>${this._escHtml(r.cooperationMode || '-')}</td>
+        <td>${this._escHtml(r.contractNo || '-')}</td>
+        <td>${this._escHtml(r.projectOwner || '-')}</td>
+        <td><span class="tag ${statusTagClass}">${this._escHtml(r.businessStatus || r.status)}</span></td>
+        <td>${r.rentalType === '免费' ? '免费' : `¥${this._fmt(r.receivableAmount)} / ¥${this._fmt(r.receivedAmount || 0)}`}<div class="form-hint">预计 ${expected || '—'}</div></td>
         <td class="row-actions">
-          <button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>
-          <button class="btn btn-sm btn-danger" onclick="UI._deleteSpace('${r.id}')">删除</button>
+          ${Auth.can('edit', 'space') ? `<button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>` : ''}
         </td>
       </tr>`;
     });
@@ -2341,6 +3019,11 @@ const UI = {
       rentalType: rentalType,
       receivableAmount: rentalType === '免费' ? 0 : +($('#sp-receivable').value || 0),
       expectedPaymentDate: $('#sp-expected-payment').value || '',
+      businessTypeCode: $('#sp-business-type').value,
+      cooperationMode: $('#sp-cooperation-mode').value,
+      businessStatus: $('#sp-business-status').value,
+      contractNo: $('#sp-contract-no').value.trim(),
+      projectOwner: $('#sp-project-owner').value.trim(),
       notes: $('#sp-notes').value
     };
 
@@ -2352,7 +3035,7 @@ const UI = {
       try {
         const r = await fetch((SUPABASE_CONFIG.url || '') + '/rest/v1/space_usage/check-conflict', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {}) },
           body: JSON.stringify({
             space: data.space,
             date: data.date,
@@ -2377,11 +3060,11 @@ const UI = {
 
     try {
       if (this._editingSpaceId) {
-        await Store.update('space', this._editingSpaceId, data);
+        await Store._request('PATCH', `/rest/v1/space-entry?id=${encodeURIComponent(this._editingSpaceId)}`, { project: data, classificationSource: this._spaceClassificationSource || 'manual' });
         this.toast('空间使用记录已更新');
         this._editingSpaceId = null;
       } else {
-        await Store.add('space', createSpaceUsage(data));
+        await Store._request('POST', '/rest/v1/space-entry', { project: createSpaceUsage(data), classificationSource: this._spaceClassificationSource || 'manual' });
         this.toast('空间使用记录已保存');
       }
       await this.renderSpacePage();
@@ -2417,9 +3100,9 @@ const UI = {
   // === 画廊销售 ===
   async _pickGalleryArtwork() {
     await this._loadArtworks();
-    const list = this._artworks;
+    const list = (this._artworks || []).filter(a => this._isListed(a));
     if (!list.length) {
-      this.toast('作品库为空，请先在「产品管理 → 画廊」录入作品', 'error');
+      this.toast('暂无已上架作品，请先由管理员确认上架', 'error');
       return;
     }
     const overlay = document.createElement('div');
@@ -2503,6 +3186,9 @@ const UI = {
     const priceEl = $('#gal-price');
     const qtyEl = $('#gal-quantity');
     const hintEl = $('#gal-max-qty-hint');
+    const idEl = $('#gal-artwork-id');
+    const settlementEl = $('#gal-settlement-hint');
+    if (idEl) idEl.value = a.id;
     if (artworkEl) artworkEl.value = a.title || '';
     if (noEl) noEl.value = a.artworkNo || a.artwork_no || '';
     if (artistEl) artistEl.value = a.artist || '';
@@ -2514,6 +3200,7 @@ const UI = {
     if (qtyEl) qtyEl.value = 1;
     if (qtyEl) qtyEl.max = avail;
     if (hintEl) hintEl.textContent = `(库存 ${avail}/${totalQty})`;
+    if (settlementEl) settlementEl.textContent = `结算价快照：¥${this._fmt(a.settlementPrice ?? a.settlement_price)} · 零售价快照：¥${this._fmt(retail)}`;
     this._updateGalleryNet();
     document.querySelector('.modal-overlay')?.remove();
     this.toast(`已选择：${a.artworkNo ? '['+a.artworkNo+'] ' : ''}${a.title}`);
@@ -2524,6 +3211,28 @@ const UI = {
     if (!Auth.hasModuleAccess('gallery')) { this._noAccess(page); return; }
     const editing = this._editingGalleryId;
     await this._loadArtworks();
+    if (!Auth.can('create', 'gallery')) {
+      html(page, `
+        <div class="stats-grid" id="gallery-sales-stats">
+          <div class="stat-card"><div class="stat-label">本年画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+          <div class="stat-card"><div class="stat-label">本月画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+          <div class="stat-card"><div class="stat-label">本日画廊销售</div><div class="stat-value">¥0.00</div><div class="stat-sub">--</div></div>
+        </div>
+        <div class="card">
+          <div class="card-title">画廊销售记录</div>
+          <div class="filter-bar">
+            <div class="form-group"><label>筛选月份</label><select id="gal-filter-month" onchange="UI._filterGallery()">${this._monthOptions()}</select></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('gal-filter-month').value='${todayStr().slice(0, 7)}'; UI._filterGallery()">本月</button>
+            <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="gal-count"></span>
+          </div>
+          <div id="gallery-list"><div class="loading-state"><div class="spinner"></div></div></div>
+        </div>
+      `);
+      document.getElementById('gal-filter-month').value = this._galleryFilterMonth || todayStr().slice(0, 7);
+      await this._renderGallerySalesStats();
+      await this._renderGalleryList();
+      return;
+    }
 
     html(page, `
       <div class="stats-grid" id="gallery-sales-stats">
@@ -2543,7 +3252,6 @@ const UI = {
               <select id="gal-status">
                 <option value="已售出">已售出</option>
                 <option value="已预定">已预定</option>
-                <option value="已退款">已退款</option>
               </select>
             </div>
           </div>
@@ -2553,10 +3261,11 @@ const UI = {
             <div class="form-group full">
               <label>作品名称<span class="required-mark">*</span></label>
               <div style="display:flex;gap:6px">
-                <input type="text" id="gal-artwork" placeholder="请输入或从作品库选择" required style="flex:1">
+                <input type="hidden" id="gal-artwork-id">
+                <input type="text" id="gal-artwork" placeholder="请从作品库选择" readonly required style="flex:1;background:var(--cream)">
                 <button type="button" class="btn btn-secondary" onclick="UI._pickGalleryArtwork()" title="从产品库-画廊的作品档案中选择">📋 选作品</button>
               </div>
-              <div class="form-hint">从作品库选择可自动填充编号与艺术家</div>
+              <div class="form-hint" id="gal-settlement-hint">必须明确关联已上架作品，保存时锁定价格快照</div>
             </div>
             <div class="form-group"><label>作品编号</label>
               <input type="text" id="gal-artwork-no" placeholder="选品后自动填充" readonly style="background:var(--cream);font-family:monospace">
@@ -2610,6 +3319,9 @@ const UI = {
                 <option value="对公转账">对公转账</option>
               </select>
             </div>
+            <div class="form-group"><label>销售渠道</label>
+              <select id="gal-channel"><option value="馆内画廊">馆内画廊</option><option value="展览现场">展览现场</option><option value="线上咨询">线上咨询</option><option value="其他">其他</option></select>
+            </div>
             <div class="form-group"><label>经手人</label>
               <input type="text" id="gal-handler" placeholder="经手人姓名">
             </div>
@@ -2662,16 +3374,22 @@ const UI = {
     $('#gal-date').value = r.date;
     $('#gal-artwork').value = r.artworkName || '';
     $('#gal-artwork-no').value = r.artworkNo || r.artwork_no || '';
+    $('#gal-artwork-id').value = r.artworkId || r.artwork_id || '';
     $('#gal-artist').value = r.artist || '';
     $('#gal-quantity').value = r.saleQuantity || r.sale_quantity || 1;
     $('#gal-price').value = r.price || 0;
     $('#gal-commission').value = r.commission || 0;
     $('#gal-buyer').value = r.buyerName || '';
     $('#gal-payment').value = r.paymentMethod || '扫码支付';
-    $('#gal-status').value = r.status || '已售出';
+    $('#gal-channel').value = r.galleryChannel || '馆内画廊';
+    $('#gal-status').value = ['已售出', '已预定'].includes(r.status) ? r.status : '已售出';
     $('#gal-exhibition').value = r.relatedExhibition || '';
     $('#gal-handler').value = r.handler || '';
     $('#gal-notes').value = r.notes || '';
+    const hint = $('#gal-settlement-hint');
+    if (hint) hint.textContent = (r.artworkId || r.artwork_id)
+      ? `当前快照：结算价 ¥${this._fmt(r.settlementPriceSnapshot)} · 零售价 ¥${this._fmt(r.retailPriceSnapshot)}`
+      : '旧记录未明确关联作品，保存前必须重新选作品';
     this._updateGalleryNet();
   },
 
@@ -2692,27 +3410,25 @@ const UI = {
       notes: $('#gal-notes').value.trim()
     };
 
+    const artworkId = $('#gal-artwork-id')?.value || '';
+    data.galleryChannel = $('#gal-channel')?.value || '馆内画廊';
+    if (!artworkId) { this.toast('请从作品库明确选择作品', 'error'); return; }
+
     const errs = validateGallerySale(data);
     if (errs.length) { this.toast(errs[0], 'error'); return; }
 
     const btn = document.querySelector('#page-gallery .btn-primary');
     if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
 
-    let prevRecord = null;
     try {
       if (this._editingGalleryId) {
-        prevRecord = await Store.getById('gallery', this._editingGalleryId);
-        const updated = await Store.update('gallery', this._editingGalleryId, data);
-        await this._recordGalleryCashDelta(prevRecord, updated || { ...prevRecord, ...data, id: this._editingGalleryId }, '画廊现金收款编辑差额');
+        await Store._request('PATCH', `/rest/v1/gallery-entry?id=${encodeURIComponent(this._editingGalleryId)}`, { sale: data, artworkId });
         this.toast('画廊记录已更新');
         this._editingGalleryId = null;
       } else {
-        const saved = await Store.add('gallery', createGallerySale(data));
-        await this._recordGalleryCashSale(saved);
+        await Store._request('POST', '/rest/v1/gallery-entry', { sale: createGallerySale(data), artworkId });
         this.toast('画廊销售记录已保存');
       }
-      // 联动艺术品库状态（按 artwork_no 优先，title+artist 兜底）
-      await this._syncArtworkStatusBySale(data, prevRecord);
     } catch (e) {
       this.toast('保存失败：' + (e.message || e), 'error');
       if (btn) { btn.disabled = false; btn.textContent = '保存记录'; }
@@ -2787,27 +3503,30 @@ const UI = {
 
     if (!records.length) { html(el, '<div class="empty-state"><div class="icon">🖼️</div>暂无画廊销售记录</div>'); return; }
 
-    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>作品名称</th><th>艺术家</th><th>成交价</th><th>佣金</th><th>净收入</th><th>买家</th><th>状态</th><th>收款方式</th><th>操作</th></tr></thead><tbody>';
+    let h = '<div class="table-wrap"><table class="data-table"><thead><tr><th>日期</th><th>作品名称</th><th>作品关联</th><th>成交总额</th><th>结算成本</th><th>贡献</th><th>买家</th><th>状态</th><th>收款方式</th><th>操作</th></tr></thead><tbody>';
     records.forEach(r => {
       const net = Math.max(0, this._getGallerySaleNet(r) - (r.refundAmount || 0));
       const statusClass = r.status === '已售出' ? 'tag-success' : (r.status === '已预定' || r.status === '部分退款') ? 'tag-info' : 'tag-danger';
       const statusText = (r.refundAmount || 0) > 0 ? `${r.status || '已售出'} ¥${this._fmt(r.refundAmount)}` : (r.status || '已售出');
       const canAdjust = Auth.isAdmin && this._canAdjustRecord(r);
+      const qty = +(r.saleQuantity || 1);
+      const gross = +(r.grossAmountSnapshot ?? (r.price * qty));
+      const cost = +(r.settlementPriceSnapshot || 0) * qty;
+      const contribution = Math.max(0, net - cost);
       h += `<tr>
         <td>${r.date}</td>
         <td>${r.artworkName || '-'}</td>
-        <td>${r.artist || '-'}</td>
-        <td><strong>¥${this._fmt(r.price)}</strong></td>
-        <td>¥${this._fmt(r.commission)}</td>
-        <td>¥${this._fmt(net)}</td>
+        <td>${r.artworkId ? `<span class="tag tag-success">${r.artworkNo || '已关联'}</span>` : '<span class="tag tag-danger">待关联</span>'}</td>
+        <td><strong>¥${this._fmt(gross)}</strong><div class="form-hint">${qty} 件</div></td>
+        <td>¥${this._fmt(cost)}</td>
+        <td><strong>¥${this._fmt(contribution)}</strong><div class="form-hint">扣佣金/退款后</div></td>
         <td>${r.buyerName || '-'}</td>
         <td><span class="tag ${statusClass}">${statusText}</span></td>
         <td>${r.paymentMethod || '-'}</td>
         <td class="row-actions">
-          ${this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>` : ''}
+          ${Auth.can('edit', 'gallery') && this._canEditOriginalRecord(r) ? `<button class="btn btn-sm btn-secondary" onclick="UI._editGallery('${r.id}')">编辑</button>` : ''}
           ${canAdjust ? `<button class="btn btn-sm btn-secondary" onclick="UI._refundGallery('${r.id}')">退款</button>` : ''}
           ${canAdjust ? `<button class="btn btn-sm btn-danger" onclick="UI._voidGallery('${r.id}')">作废</button>` : ''}
-          ${Auth.isAdmin ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteGallery('${r.id}')">删除</button>` : ''}
         </td>
       </tr>`;
     });
@@ -2903,36 +3622,7 @@ const UI = {
     }
     const reason = (prompt('请输入作废原因') || '').trim();
     if (!reason) { this.toast('已取消作废'); return; }
-    const total = this._getGallerySaleNet(record);
-    const now = new Date().toISOString();
-    await Store.update('gallery', id, {
-      status: '已作废',
-      adjustedAt: now,
-      adjustedBy: Auth.currentUser?.displayName || '',
-      adjustmentReason: reason
-    });
-    await this._recordTransactionAdjustment('gallery', id, 'void', total, reason);
-    const cashToVoid = this._getGalleryCashAmount(record);
-    if (cashToVoid > 0) {
-      await this._recordCashMovement({
-        id: 'cash_void_gallery_' + id,
-        date: record.date || todayStr(),
-        type: 'cash_void',
-        amount: -cashToVoid,
-        sourceType: 'gallery',
-        sourceId: id,
-        reason,
-        notes: '画廊现金销售作废'
-      });
-    }
-    if ((record.status || '已售出') === '已售出') {
-      const qty = +(record.saleQuantity || record.sale_quantity || 1);
-      await this._syncArtworkStatusBySale(
-        { artworkNo: record.artworkNo, artworkName: record.artworkName, artist: record.artist },
-        null,
-        -qty
-      );
-    }
+    await Store._request('POST', `/rest/v1/gallery-entry?id=${encodeURIComponent(id)}&action=void`, { reason });
     this.toast('画廊销售记录已作废');
     await this._renderGalleryList();
     await this._renderGallerySalesStats();
@@ -2961,39 +3651,9 @@ const UI = {
     }
     const reason = (prompt('请输入退款原因') || '').trim();
     if (!reason) { this.toast('已取消退款'); return; }
-    const payoutMethod = '现金';
-    const newRefund = refunded + amount;
-    const status = newRefund >= total ? '已退款' : '部分退款';
-    const now = new Date().toISOString();
-    const adjustmentReason = `${reason}；实际退款方式：${payoutMethod}`;
-    await Store.update('gallery', id, {
-      status,
-      refundAmount: newRefund,
-      adjustedAt: now,
-      adjustedBy: Auth.currentUser?.displayName || '',
-      adjustmentReason
-    });
-    await this._recordTransactionAdjustment('gallery', id, status === '已退款' ? 'refund' : 'partial_refund', amount, adjustmentReason);
-    if (payoutMethod === '现金') {
-      await this._recordCashMovement({
-        id: 'cash_refund_gallery_' + id + '_' + Date.now().toString(36),
-        date: record.date || todayStr(),
-        type: 'cash_refund',
-        amount: -amount,
-        sourceType: 'gallery',
-        sourceId: id,
-        reason,
-        notes: `画廊退款实际支付现金；原收款方式：${record.paymentMethod || '未知'}`
-      });
-    }
-    if (status === '已退款' && (record.status || '已售出') === '已售出') {
-      const qty = +(record.saleQuantity || record.sale_quantity || 1);
-      await this._syncArtworkStatusBySale(
-        { artworkNo: record.artworkNo, artworkName: record.artworkName, artist: record.artist },
-        null,
-        -qty
-      );
-    }
+    const payoutMethod = (prompt('请输入实际退款方式：现金 / 原路退回 / 对公转账', record.paymentMethod === '现金' ? '现金' : '原路退回') || '').trim();
+    if (!['现金', '原路退回', '对公转账'].includes(payoutMethod)) { this.toast('请选择有效退款方式', 'error'); return; }
+    await Store._request('POST', `/rest/v1/gallery-entry?id=${encodeURIComponent(id)}&action=refund`, { amount, reason, payoutMethod });
     this.toast('画廊退款已记录');
     await this._renderGalleryList();
     await this._renderGallerySalesStats();
@@ -3147,6 +3807,7 @@ const UI = {
   async renderProductPage() {
     if (!Auth.hasModuleAccess('products')) { this._noAccess($('#page-products')); return; }
     const page = $('#page-products');
+    if (!Auth.isAdmin && !['creative', 'gallery'].includes(this._productTab)) this._productTab = 'creative';
     const tab = this._productTab;
     // 确保配置已从数据库加载
     await Store.loadAppConfig();
@@ -3163,10 +3824,10 @@ const UI = {
 
     html(page, `
       <div class="sub-tabs" id="product-sub-tabs">
-        <button class="sub-tab-btn ${tab==='ticket'?'active':''}" data-ptab="ticket">🎫 门票 <span class="badge">${counts.ticket}</span></button>
-        <button class="sub-tab-btn ${tab==='coffee'?'active':''}" data-ptab="coffee">☕ 咖啡 <span class="badge">${counts.coffee}</span></button>
+        ${Auth.isAdmin ? `<button class="sub-tab-btn ${tab==='ticket'?'active':''}" data-ptab="ticket">🎫 门票 <span class="badge">${counts.ticket}</span></button>
+        <button class="sub-tab-btn ${tab==='coffee'?'active':''}" data-ptab="coffee">☕ 咖啡 <span class="badge">${counts.coffee}</span></button>` : ''}
         <button class="sub-tab-btn ${tab==='creative'?'active':''}" data-ptab="creative">📦 文创/零售 <span class="badge">${counts.creative}</span></button>
-        <button class="sub-tab-btn ${tab==='workshop'?'active':''}" data-ptab="workshop">🔧 工坊 <span class="badge">${counts.workshop}</span></button>
+        ${Auth.isAdmin ? `<button class="sub-tab-btn ${tab==='workshop'?'active':''}" data-ptab="workshop">🔧 工坊 <span class="badge">${counts.workshop}</span></button>` : ''}
         <button class="sub-tab-btn ${tab==='gallery'?'active':''}" data-ptab="gallery">🖼️ 画廊 <span class="badge">${counts.gallery}</span></button>
       </div>
       <div id="product-tab-content">${this._renderProductTabContent(tab)}</div>
@@ -3188,9 +3849,9 @@ const UI = {
 
   /** 二级 tab 内容渲染 */
   _renderProductTabContent(tab) {
-    if (tab === 'ticket')      return this._renderSimpleConfigTab('ticket', '门票', ['名称', '单价'], ['name', 'price']);
-    if (tab === 'coffee')      return this._renderSimpleConfigTab('coffee', '咖啡', ['名称', '单价'], ['name', 'price']);
-    if (tab === 'workshop')    return this._renderSimpleConfigTab('workshop', '工坊', ['名称', '单价'], ['name', 'price']);
+    if (tab === 'ticket')      return this._renderSimpleConfigTab('ticket', '门票', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
+    if (tab === 'coffee')      return this._renderSimpleConfigTab('coffee', '咖啡', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
+    if (tab === 'workshop')    return this._renderSimpleConfigTab('workshop', '工坊', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
     if (tab === 'creative')    return this._renderCreativeTab();
     if (tab === 'gallery')     return this._renderArtworkTab();
     return '';
@@ -3237,6 +3898,9 @@ const UI = {
 
   /** 门票/咖啡/工坊：简单配置表 + 查询框 + 内嵌表单 */
   _renderSimpleConfigTab(type, label, headers, fields) {
+    if (!Auth.isAdmin) {
+      return '<div class="card"><p style="color:var(--gray-500)">该配置仅管理员可维护</p></div>';
+    }
     const listKey = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' }[type];
     const allItems = MODELS[listKey] || [];
     const keyword = (this._productSearch[type] || '').trim().toLowerCase();
@@ -3252,7 +3916,7 @@ const UI = {
         const realIdx = allItems.indexOf(item);
         const tds = fields.map(f => {
           const v = item[f];
-          if (f === 'price') return `<td>¥${this._fmt(v)}</td>`;
+          if (f === 'price' || f === 'costPrice') return `<td>¥${this._fmt(v)}</td>`;
           return `<td>${escaped(v)}</td>`;
         }).join('');
         rows += `<tr>${tds}<td class="row-actions">
@@ -3294,13 +3958,101 @@ const UI = {
   },
 
   /** 文创产品 tab：查询框 + 供应商筛选 + 分页（重构版） */
+  async _openProductAliases() {
+    if (!Auth.can('edit', 'creative-products')) return this.toast('无权维护商品别名', 'error');
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `<div class="modal-card modal-card-wide">
+      <div class="modal-title">商品别名</div>
+      <p>将常用名称关联到标准商品。可限定单价，区分同名商品；停用后不再匹配未归类记录。已保存的销售快照保持不变。</p>
+      <div data-alias-status role="status">正在加载…</div>
+      <form data-alias-form>
+        <div class="form-group"><label for="alias-name">别名</label><input id="alias-name" required maxlength="100" placeholder="例如：水"></div>
+        <div class="form-group"><label for="alias-product">标准商品</label><select id="alias-product" required><option value="">请选择商品</option>${this._creativeProducts.filter(p => this._cpBool(p.isActive, true)).map(p => `<option value="${this._escHtml(p.id)}">${this._escHtml([p.standardName || p.name, p.packageSpec, p.sku].filter(Boolean).join(' · '))}</option>`).join('')}</select></div>
+        <div class="form-group"><label for="alias-price">匹配单价（留空表示不限）</label><input id="alias-price" type="number" min="0" step="0.01"></div>
+        <div class="form-group"><label for="alias-notes">备注</label><input id="alias-notes" maxlength="500"></div>
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-alias-reset>清空</button><button type="submit" class="btn btn-primary" disabled>保存别名</button></div>
+      </form>
+      <div class="form-group"><label for="alias-search">查找别名</label><input id="alias-search" data-alias-search placeholder="搜索别名或标准商品"></div>
+      <div class="table-wrap" data-alias-list></div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary" data-alias-close>关闭</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const form = overlay.querySelector('form');
+    const submit = form.querySelector('[type=submit]');
+    const status = overlay.querySelector('[data-alias-status]');
+    const list = overlay.querySelector('[data-alias-list]');
+    let rows = [], editingId = null, busy = false;
+    const reset = () => { form.reset(); editingId = null; submit.textContent = '保存别名'; };
+    const render = () => {
+      const q = overlay.querySelector('[data-alias-search]').value.trim().toLowerCase();
+      list.innerHTML = `<table class="data-table"><thead><tr><th>别名</th><th>标准商品 / 规格</th><th>单价</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.filter(r => [r.aliasName, r.standardName].some(v => String(v || '').toLowerCase().includes(q))).map(r => `<tr><td>${this._escHtml(r.aliasName)}</td><td>${this._escHtml(r.standardName)}<br>${this._escHtml(r.packageSpec || '')}</td><td>${r.unitPrice == null ? '不限' : this._fmt(r.unitPrice)}</td><td>${r.isActive ? '启用' : '停用'}</td><td><button type="button" class="btn btn-sm btn-secondary" data-alias-edit="${this._escHtml(r.id)}">编辑</button> <button type="button" class="btn btn-sm btn-secondary" data-alias-toggle="${this._escHtml(r.id)}">${r.isActive ? '停用' : '启用'}</button></td></tr>`).join('') || '<tr><td colspan="5">暂无匹配别名</td></tr>'}</tbody></table>`;
+    };
+    const load = async () => {
+      rows = await Store._request('GET', '/rest/v1/product_aliases?order=created_at.desc&limit=5000');
+      status.textContent = `共 ${rows.length} 条别名`;
+      render();
+      submit.disabled = false;
+    };
+    overlay.querySelector('[data-alias-close]').onclick = () => { if (!busy) overlay.remove(); };
+    overlay.querySelector('[data-alias-reset]').onclick = () => { if (!busy) reset(); };
+    overlay.querySelector('[data-alias-search]').oninput = render;
+    list.onclick = async e => {
+      if (busy) return;
+      const edit = e.target.closest('[data-alias-edit]');
+      const toggle = e.target.closest('[data-alias-toggle]');
+      const row = rows.find(r => r.id === (edit?.dataset.aliasEdit || toggle?.dataset.aliasToggle));
+      if (!row) return;
+      if (edit) {
+        editingId = row.id;
+        form.querySelector('#alias-name').value = row.aliasName;
+        form.querySelector('#alias-product').value = row.standardProductId;
+        form.querySelector('#alias-price').value = row.unitPrice ?? '';
+        form.querySelector('#alias-notes').value = row.notes || '';
+        submit.textContent = '保存修改';
+      } else {
+        busy = true;
+        submit.disabled = true;
+        try { await Store.update('productAliases', row.id, { isActive: !row.isActive }); await load(); }
+        catch (error) { status.textContent = '状态更新失败：' + error.message; }
+        finally { busy = false; submit.disabled = false; }
+      }
+    };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      if (busy) return;
+      const aliasName = form.querySelector('#alias-name').value.trim();
+      const standardProductId = form.querySelector('#alias-product').value;
+      const rawPrice = form.querySelector('#alias-price').value;
+      if (!aliasName || !standardProductId) { status.textContent = '请填写别名并选择标准商品'; return; }
+      const record = { aliasName, standardProductId, unitPrice: rawPrice === '' ? null : Number(rawPrice), notes: form.querySelector('#alias-notes').value.trim() };
+      busy = true;
+      submit.disabled = true;
+      try {
+        if (editingId) await Store.update('productAliases', editingId, record);
+        else await Store.add('productAliases', { id: createId(), ...record, isActive: true });
+        reset();
+        await load();
+        this.toast('别名已保存');
+      } catch (error) { status.textContent = '保存失败：' + error.message; }
+      finally { busy = false; submit.disabled = false; }
+    };
+    try { await load(); }
+    catch (error) { status.textContent = '别名数据加载失败，请稍后重试：' + error.message; }
+  },
+
   _renderCreativeTab() {
     const keyword = (this._productSearch.creative || '').trim().toLowerCase();
     let list = this._creativeProducts;
     if (this._cpFilterSupplier) list = list.filter(p => p.supplier === this._cpFilterSupplier);
     if (keyword) list = list.filter(p =>
       String(p.name || '').toLowerCase().includes(keyword) ||
+      String(p.standardName || p.standard_name || '').toLowerCase().includes(keyword) ||
       String(p.sku || '').toLowerCase().includes(keyword) ||
+      String(p.barcode || '').toLowerCase().includes(keyword) ||
+      String(p.businessTypeCode || p.business_type_code || '').toLowerCase().includes(keyword) ||
+      String(p.packageSpec || p.package_spec || '').toLowerCase().includes(keyword) ||
       String(p.supplier || '').toLowerCase().includes(keyword) ||
       String(p.notes || '').toLowerCase().includes(keyword)
     );
@@ -3309,11 +4061,14 @@ const UI = {
     if (this._cpPage >= totalPages) this._cpPage = totalPages - 1;
     const start = this._cpPage * this._CP_PAGE_SIZE;
     const pageItems = list.slice(start, start + this._CP_PAGE_SIZE);
+    const canApprove = this._canApproveProducts();
+    const canExport = Auth.can('export', 'creative-products');
+    const canDelete = this._canDeleteCatalog();
 
     const toolbar = `<div class="filter-bar" style="flex-wrap:wrap;gap:8px">
       <div class="form-group" style="min-width:220px;margin-bottom:0">
         <label>查询</label>
-        <input type="text" id="prod-search-creative" placeholder="按名称/SKU/供应商/备注搜索..." value="${this._escHtml(this._productSearch.creative || '')}" oninput="UI._onProductSearch('creative', this.value)">
+        <input type="text" id="prod-search-creative" placeholder="按名称/标准名/SKU/条码/规格/供应商搜索..." value="${this._escHtml(this._productSearch.creative || '')}" oninput="UI._onProductSearch('creative', this.value)">
       </div>
       <div class="form-group" style="margin-bottom:0">
         <label>供应商</label>
@@ -3325,28 +4080,47 @@ const UI = {
       <button type="button" class="btn btn-sm btn-primary" onclick="UI._addCreativeProduct()">+ 新增产品</button>
       <button type="button" class="btn btn-sm btn-secondary" onclick="UI._importCreativeProducts()">📥 导入库存</button>
       <button type="button" class="btn btn-sm btn-secondary" onclick="UI._downloadImportTemplate()">📋 下载模板</button>
-      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品</button>
-      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 销售清单</button>
+      <button type="button" class="btn btn-sm btn-secondary" onclick="UI._openProductAliases()">商品别名</button>
+      ${canExport ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeProducts()">📤 导出产品</button>' : ''}
+      ${canExport ? '<button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportCreativeSales()">📄 销售清单</button>' : ''}
       <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="cp-count">${list.length} 个${keyword||this._cpFilterSupplier ? ' (筛选后)' : ''} · 共 ${this._creativeProducts.length} 个</span>
     </div>`;
 
-    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>SKU</th><th>供应商</th><th>进货价</th><th>零售价</th><th>库存</th><th>单位</th><th>备注</th><th style="width:90px">操作</th></tr></thead><tbody>';
+    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>标准名称</th><th>SKU/条码</th><th>归属/规格</th><th>供应商</th><th>进货价</th><th>零售价</th><th>库存</th><th>状态</th><th>备注</th><th style="width:130px">操作</th></tr></thead><tbody>';
     if (!pageItems.length) {
-      table += `<tr><td colspan="9" style="text-align:center;color:var(--gray-500);padding:16px">${keyword ? '没有匹配项' : '暂无文创产品，请新增或导入'}</td></tr>`;
+      table += `<tr><td colspan="11" style="text-align:center;color:var(--gray-500);padding:16px">${keyword ? '没有匹配项' : '暂无文创产品，请新增或导入'}</td></tr>`;
     } else {
       pageItems.forEach(p => {
+        const status = this._approvalStatus(p);
+        const standardName = p.standardName || p.standard_name || p.name || '-';
+        const businessTypeCode = p.businessTypeCode || p.business_type_code || '';
+        const isBeverage = this._cpBool(p.isBeverage ?? p.is_beverage, businessTypeCode === 'beverage_retail');
+        const isActive = this._cpBool(p.isActive ?? p.is_active, true);
+        const isCountableStock = this._cpBool(p.isCountableStock ?? p.is_countable_stock, true);
+        const packageSpec = p.packageSpec || p.package_spec || '-';
+        const barcode = p.barcode || '';
         table += `<tr>
           <td>${this._escHtml(p.name || '-')}</td>
-          <td>${this._escHtml(p.sku || '-')}</td>
+          <td>${this._escHtml(standardName)}</td>
+          <td>
+            <div>${this._escHtml(p.sku || '-')}</div>
+            ${barcode ? `<div style="font-size:11px;color:var(--gray-500)">${this._escHtml(barcode)}</div>` : ''}
+          </td>
+          <td>
+            <span class="tag ${isBeverage ? 'tag-info' : 'tag-success'}">${this._escHtml(this._cpBusinessTypeLabel(businessTypeCode, isBeverage))}</span>
+            <div style="font-size:11px;color:var(--gray-500);margin-top:4px">${this._escHtml(packageSpec)}</div>
+          </td>
           <td>${this._escHtml(p.supplier || '-')}</td>
           <td>¥${this._fmt(p.costPrice)}</td>
           <td><strong>¥${this._fmt(p.retailPrice)}</strong></td>
-          <td><span class="tag ${(p.stock || 0) <= 0 ? 'tag-danger' : 'tag-success'}">${p.stock || 0}</span></td>
-          <td>${this._escHtml(p.unit || '个')}</td>
+          <td><span class="tag ${(p.stock || 0) <= 0 ? 'tag-danger' : 'tag-success'}">${isCountableStock ? (p.stock || 0) : '不计'}</span><span style="margin-left:4px">${this._escHtml(p.unit || '个')}</span></td>
+          <td>${this._approvalTag(p)}${isActive ? '' : '<br><span class="tag tag-danger" style="margin-top:4px">停用</span>'}</td>
           <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis">${this._escHtml(p.notes || '-')}</td>
           <td class="row-actions">
             <button class="btn btn-sm btn-secondary" onclick="UI._editCreativeProduct('${p.id}')">编辑</button>
-            <button class="btn btn-sm btn-danger" onclick="UI._deleteCreativeProduct('${p.id}')">删除</button>
+            ${canApprove && status !== '已上架' ? `<button class="btn btn-sm btn-primary" onclick="UI._approveCreativeProduct('${p.id}')">上架</button>` : ''}
+            ${canApprove && status === '已上架' ? `<button class="btn btn-sm btn-secondary" onclick="UI._unlistCreativeProduct('${p.id}')">下架</button>` : ''}
+            ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteCreativeProduct('${p.id}')">删除</button>` : ''}
           </td>
         </tr>`;
       });
@@ -3425,6 +4199,8 @@ const UI = {
       });
     };
     list = filterByChip(list);
+    const canApprove = this._canApproveProducts();
+    const canDelete = this._canDeleteCatalog();
 
     // 顶部库存看板（5 张卡）
     const statsHtml = `<div class="stats-grid artwork-stats">
@@ -3484,12 +4260,13 @@ const UI = {
     // 最近售出聚合
     const lastSoldMap = this._artworkLastSoldMap || {};
 
-    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th style="width:80px">编号</th><th style="width:64px">缩略图</th><th>标题</th><th>艺术家</th><th style="width:90px">库存</th><th style="width:100px">零售价</th><th style="width:110px">最近售出</th><th>状态</th><th>位置</th><th style="width:90px">操作</th></tr></thead><tbody>';
+    let table = '<div class="table-wrap"><table class="data-table"><thead><tr><th style="width:80px">编号</th><th style="width:64px">缩略图</th><th>标题</th><th>艺术家</th><th style="width:90px">库存</th><th style="width:100px">零售价</th><th style="width:110px">最近售出</th><th>作品状态</th><th>上架状态</th><th>位置</th><th style="width:130px">操作</th></tr></thead><tbody>';
     if (!list.length) {
-      table += `<tr><td colspan="10" style="text-align:center;color:var(--gray-500);padding:16px">${keyword || chip !== 'all' ? '没有匹配项' : '暂无作品档案，请新增或导入'}</td></tr>`;
+      table += `<tr><td colspan="11" style="text-align:center;color:var(--gray-500);padding:16px">${keyword || chip !== 'all' ? '没有匹配项' : '暂无作品档案，请新增或导入'}</td></tr>`;
     } else {
       list.forEach(a => {
         const statusClass = a.status === '在库' ? 'tag-success' : a.status === '在展' ? 'tag-info' : a.status === '已售' ? 'tag-danger' : a.status === '借出' ? 'tag-warning' : 'tag-default';
+        const approvalStatus = this._approvalStatus(a);
         const imgUrl = this._resolveImageUrl(a.imageUrl || a.image_url || '');
         const thumbCell = imgUrl
           ? `<img src="${this._escHtml(imgUrl)}" class="aw-thumb" onerror="this.outerHTML='<div class=&quot;aw-thumb aw-thumb--placeholder&quot;>无图</div>'">`
@@ -3513,14 +4290,17 @@ const UI = {
           <td>¥${this._fmt(a.retailPrice ?? a.retail_price)}</td>
           <td style="font-size:12px">${lastSoldCell}</td>
           <td><span class="tag ${statusClass}">${this._escHtml(a.status || '在库')}</span></td>
+          <td>${this._approvalTag(a)}</td>
           <td style="max-width:120px">${this._escHtml(a.location || '-')}</td>
           <td class="row-actions" onclick="event.stopPropagation()">
             <button class="btn btn-sm btn-secondary" onclick="UI._editArtwork('${a.id}')">编辑</button>
-            <button class="btn btn-sm btn-danger" onclick="UI._deleteArtwork('${a.id}')">删除</button>
+            ${canApprove && approvalStatus !== '已上架' ? `<button class="btn btn-sm btn-primary" onclick="UI._approveArtwork('${a.id}')">上架</button>` : ''}
+            ${canApprove && approvalStatus === '已上架' ? `<button class="btn btn-sm btn-secondary" onclick="UI._unlistArtwork('${a.id}')">下架</button>` : ''}
+            ${canDelete ? `<button class="btn btn-sm btn-danger" onclick="UI._deleteArtwork('${a.id}')">删除</button>` : ''}
           </td>
         </tr>
         <tr class="artwork-detail-row" id="aw-detail-${this._escHtml(a.id)}" style="display:none;background:var(--cream)">
-          <td colspan="10" style="padding:12px 16px">
+          <td colspan="11" style="padding:12px 16px">
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 24px;font-size:13px">
               <div><span style="color:var(--gray-500)">结算价：</span><strong>¥${this._fmt(a.settlementPrice ?? a.settlement_price)}</strong></div>
               <div><span style="color:var(--gray-500)">年份：</span>${this._escHtml(a.year || '-')}</div>
@@ -3564,6 +4344,7 @@ const UI = {
     const ARTWORK_STATUSES = ['在库', '在展', '已售', '借出', '下架'];
     const initialNo = d.artworkNo || d.artwork_no || (isEdit ? '' : this._nextArtworkNo());
     const initialImg = this._resolveImageUrl(d.imageUrl || d.image_url || '');
+    const currentApproval = this._approvalStatus(d);
     overlay.innerHTML = `
       <div class="modal-card modal-card-form">
         <div class="modal-title">${isEdit ? '编辑作品' : '新增作品'}</div>
@@ -3590,6 +4371,11 @@ const UI = {
               ${ARTWORK_STATUSES.map(s => `<option value="${s}"${(d.status||'在库') === s ? ' selected' : ''}>${s}</option>`).join('')}
             </select>
           </div>
+          <div class="form-group"><label>上架状态</label>
+            ${Auth.isAdmin ? `<select id="aw-approval">
+              ${['草稿','待确认','已上架','已下架'].map(s => `<option value="${s}"${currentApproval === s ? ' selected' : ''}>${s}</option>`).join('')}
+            </select>` : `<div style="padding:8px;background:var(--cream);border-radius:var(--radius-sm)">保存后进入待确认</div>`}
+          </div>
           <div class="form-group full">
             <label>作品照片</label>
             <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
@@ -3609,12 +4395,11 @@ const UI = {
           <div class="form-group full"><label>备注</label><textarea id="aw-notes" rows="2">${this._escHtml(d.notes || '')}</textarea></div>
         </div>
         <div class="modal-actions">
-          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
-          <button class="btn btn-primary" id="aw-save-btn">${isEdit ? '保存修改' : '创建作品'}</button>
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button type="button" class="btn btn-primary" id="aw-save-btn">${isEdit ? '保存修改' : '创建作品'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 
     // 初始化可用库存预览
     this._updateQtyPreview();
@@ -3648,6 +4433,7 @@ const UI = {
         fd.append('file', file);
         const r = await fetch((SUPABASE_CONFIG.url || '') + '/rest/v1/artworks/upload', {
           method: 'POST',
+          headers: typeof Auth !== 'undefined' && Auth.authHeaders ? Auth.authHeaders() : {},
           body: fd
         });
         const body = await r.json();
@@ -3678,6 +4464,8 @@ const UI = {
     }
 
     overlay.querySelector('#aw-save-btn').addEventListener('click', async () => {
+      const saveBtn = overlay.querySelector('#aw-save-btn');
+      if (saveBtn?.disabled) return;
       const title = overlay.querySelector('#aw-title').value.trim();
       if (!title) { UI.toast('请输入作品标题', 'error'); return; }
       const record = {
@@ -3693,23 +4481,35 @@ const UI = {
         settlementPrice: Number(overlay.querySelector('#aw-settlement-price').value) || 0,
         retailPrice: Number(overlay.querySelector('#aw-retail-price').value) || 0,
         status: overlay.querySelector('#aw-status').value,
+        approvalStatus: Auth.isAdmin ? overlay.querySelector('#aw-approval').value : '待确认',
+        submittedBy: d.submittedBy || d.submitted_by || Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+        approvedBy: Auth.isAdmin && overlay.querySelector('#aw-approval')?.value === '已上架' ? (Auth.currentUser?.displayName || Auth.currentUser?.username || '') : (d.approvedBy || d.approved_by || ''),
+        approvedAt: Auth.isAdmin && overlay.querySelector('#aw-approval')?.value === '已上架' ? new Date().toISOString() : (d.approvedAt || d.approved_at || null),
         imageUrl: overlay.querySelector('#aw-image-stored').value.trim(),
         notes: overlay.querySelector('#aw-notes').value.trim(),
         updatedAt: new Date().toISOString()
       };
       try {
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.textContent = '保存中...';
+        }
         if (isEdit && d.id) {
           await Store.update('artworks', d.id, record);
-          UI.toast('作品已更新');
+          UI.toast(Auth.isAdmin ? '作品已更新，列表已刷新' : '作品已更新，等待管理员确认，列表已刷新');
         } else {
           await Store.add('artworks', createArtwork(record));
-          UI.toast('作品已新增');
+          UI.toast(Auth.isAdmin ? '作品已新增，列表已刷新' : '作品已提交待确认，列表已刷新');
         }
-        overlay.remove();
         await UI._loadArtworks();
         UI._refreshCurrentProductTab();
+        overlay.remove();
       } catch (e) {
         UI.toast('保存失败：' + (e.message || e), 'error');
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = isEdit ? '保存修改' : '创建作品';
+        }
       }
     });
   },
@@ -3769,7 +4569,33 @@ const UI = {
     this._showArtworkModal(a, true);
   },
 
+  async _approveArtwork(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可确认上架', 'error'); return; }
+    await Store.update('artworks', id, {
+      approvalStatus: '已上架',
+      approvedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+      approvedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('作品已上架');
+    await this._loadArtworks();
+    this._refreshCurrentProductTab();
+  },
+
+  async _unlistArtwork(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可下架', 'error'); return; }
+    if (!confirm('确认下架该作品？下架后不会出现在画廊销售可选列表。')) return;
+    await Store.update('artworks', id, {
+      approvalStatus: '已下架',
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('作品已下架');
+    await this._loadArtworks();
+    this._refreshCurrentProductTab();
+  },
+
   async _deleteArtwork(id) {
+    if (!this._canDeleteCatalog()) { this.toast('仅管理员可删除', 'error'); return; }
     const a = this._artworks.find(x => x.id === id);
     if (!confirm(`确认删除作品「${a ? a.title : id}」？`)) return;
     await Store.delete('artworks', id);
@@ -3785,26 +4611,32 @@ const UI = {
     overlay.className = 'modal-overlay';
     overlay.style.display = 'flex';
     const d = item || {};
+    const supportsCost = ['ticket', 'coffee', 'workshop'].includes(type);
     overlay.innerHTML = `
       <div class="modal-card modal-card-sm">
         <div class="modal-title">${isEdit ? '编辑' + label : '新增' + label}</div>
         <div class="form-grid">
           <div class="form-group full"><label>名称 *</label><input type="text" id="cfg-name" value="${this._escHtml(d.name || '')}" placeholder="如 普通票 / 手冲咖啡 / 果壳风铃" autofocus></div>
+          ${supportsCost ? `<div class="form-group full"><label>成本价（元）</label><input type="number" id="cfg-cost" min="0" step="0.01" value="${d.costPrice ?? 0}" placeholder="0.00"></div>` : ''}
           <div class="form-group full"><label>单价（元）*</label><input type="number" id="cfg-price" min="0" step="0.01" value="${d.price || ''}" placeholder="0.00"></div>
         </div>
         <div class="modal-actions">
-          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
-          <button class="btn btn-primary" id="cfg-save-btn">${isEdit ? '保存修改' : '创建'}</button>
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button type="button" class="btn btn-primary" id="cfg-save-btn">${isEdit ? '保存修改' : '创建'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
     overlay.querySelector('#cfg-save-btn').addEventListener('click', async () => {
+      const saveBtn = overlay.querySelector('#cfg-save-btn');
+      if (saveBtn?.disabled) return;
       const name = overlay.querySelector('#cfg-name').value.trim();
       const price = parseFloat(overlay.querySelector('#cfg-price').value);
+      const costInput = overlay.querySelector('#cfg-cost');
+      const costPrice = costInput ? parseFloat(costInput.value || '0') : 0;
       if (!name) { UI.toast('请输入名称', 'error'); return; }
       if (isNaN(price) || price < 0) { UI.toast('请输入有效单价', 'error'); return; }
-      const newItem = { name, price };
+      if (supportsCost && (isNaN(costPrice) || costPrice < 0)) { UI.toast('请输入有效成本价', 'error'); return; }
+      const newItem = supportsCost ? { name, costPrice, price } : { name, price };
       const listKeyMap = { ticket: 'ticketProducts', coffee: 'coffeeProducts', workshop: 'WORKSHOP_PRODUCTS' };
       const dbKeyMap = { ticket: 'ticket_products', coffee: 'coffee_products', workshop: 'workshop_products' };
       const listKey = listKeyMap[type];
@@ -3818,8 +4650,18 @@ const UI = {
       } else {
         nextItems.push(newItem);
       }
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = '保存中...';
+      }
       const saved = await Store.saveConfig(dbKey, nextItems);
-      if (!saved) return;
+      if (!saved) {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = isEdit ? '保存修改' : '创建';
+        }
+        return;
+      }
       MODELS[listKey] = nextItems;
       // 同步旧常量（票务/咖啡）
       if (type === 'ticket') {
@@ -3827,7 +4669,7 @@ const UI = {
         MODELS.COMBO_PRICE = MODELS.ticketProducts.length > 1 ? MODELS.ticketProducts[1].price : 25;
       }
       if (type === 'coffee') MODELS.COFFEE_PRICE = MODELS.coffeeProducts[0]?.price || 15;
-      UI.toast(isEdit ? '已更新' : '已新增');
+      UI.toast(isEdit ? '已更新，列表已刷新' : '已新增，列表已刷新');
       overlay.remove();
       UI._refreshCurrentProductTab();
     });
@@ -4022,55 +4864,100 @@ const UI = {
     overlay.className = 'modal-overlay';
     overlay.style.display = 'flex';
     const d = data || {};
+    const currentApproval = this._approvalStatus(d);
+    const currentIsBeverage = this._cpBool(d.isBeverage ?? d.is_beverage, (d.businessTypeCode || d.business_type_code) === 'beverage_retail');
+    const currentBusinessType = this._normalizeCpBusinessType(d.businessTypeCode || d.business_type_code, currentIsBeverage);
+    const currentIsActive = this._cpBool(d.isActive ?? d.is_active, true);
+    const currentIsCountableStock = this._cpBool(d.isCountableStock ?? d.is_countable_stock, true);
     overlay.innerHTML = `
       <div class="modal-card modal-card-md">
         <div class="modal-title">${isEdit ? '编辑文创产品' : '新增文创产品'}</div>
         <div class="form-grid">
-          <div class="form-group"><label>产品名称 *</label><input type="text" id="cp-name" value="${d.name || ''}" placeholder="必填"></div>
-          <div class="form-group"><label>SKU/编码</label><input type="text" id="cp-sku" value="${d.sku || ''}" placeholder="选填"></div>
-          <div class="form-group"><label>供应商</label><input type="text" id="cp-supplier" value="${d.supplier || ''}" placeholder="选填"></div>
+          <div class="form-group"><label>产品名称 *</label><input type="text" id="cp-name" value="${this._escHtml(d.name || '')}" placeholder="必填"></div>
+          <div class="form-group"><label>标准名称</label><input type="text" id="cp-standard-name" value="${this._escHtml(d.standardName || d.standard_name || d.name || '')}" placeholder="用于合并同一产品"></div>
+          <div class="form-group"><label>SKU/编码</label><input type="text" id="cp-sku" value="${this._escHtml(d.sku || '')}" placeholder="选填"></div>
+          <div class="form-group"><label>条码</label><input type="text" id="cp-barcode" value="${this._escHtml(d.barcode || '')}" placeholder="选填"></div>
+          <div class="form-group"><label>业务归属</label><select id="cp-business-type">
+            ${this._cpBusinessTypeOptions().map(item => `<option value="${item.code}"${currentBusinessType === item.code ? ' selected' : ''}>${item.label}</option>`).join('')}
+          </select></div>
+          <div class="form-group"><label>包装规格</label><input type="text" id="cp-package-spec" value="${this._escHtml(d.packageSpec || d.package_spec || '')}" placeholder="如 330ml 瓶装"></div>
+          <div class="form-group"><label>供应商</label><input type="text" id="cp-supplier" value="${this._escHtml(d.supplier || '')}" placeholder="选填"></div>
           <div class="form-group"><label>进货价</label><input type="number" id="cp-cost" min="0" step="0.01" value="${d.costPrice || 0}" placeholder="0.00"></div>
           <div class="form-group"><label>零售价 *</label><input type="number" id="cp-retail" min="0" step="0.01" value="${d.retailPrice || 0}" placeholder="0.00"></div>
           <div class="form-group"><label>库存数量</label><input type="number" id="cp-stock" min="0" step="1" value="${d.stock || 0}" placeholder="0"></div>
           <div class="form-group"><label>单位</label><select id="cp-unit">
-            ${['个','件','套','只','对','盒','包'].map(u => `<option value="${u}"${(d.unit||'个') === u ? ' selected' : ''}>${u}</option>`).join('')}
+            ${['个','件','套','只','对','盒','包','瓶','听'].map(u => `<option value="${u}"${(d.unit||'个') === u ? ' selected' : ''}>${u}</option>`).join('')}
           </select></div>
-          <div class="form-group full"><label>备注</label><input type="text" id="cp-notes" value="${d.notes || ''}" placeholder="选填"></div>
+          <div class="form-group"><label>商品属性</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px"><input type="checkbox" id="cp-is-beverage" ${currentIsBeverage ? 'checked' : ''}> 饮料商品</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px"><input type="checkbox" id="cp-is-countable-stock" ${currentIsCountableStock ? 'checked' : ''}> 参与库存计数</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="cp-is-active" ${currentIsActive ? 'checked' : ''}> 参与经营统计</label>
+          </div>
+          <div class="form-group"><label>上架状态</label>
+            ${Auth.isAdmin ? `<select id="cp-approval">
+              ${['草稿','待确认','已上架','已下架'].map(s => `<option value="${s}"${currentApproval === s ? ' selected' : ''}>${s}</option>`).join('')}
+            </select>` : `<div style="padding:8px;background:var(--cream);border-radius:var(--radius-sm)">保存后进入待确认</div>`}
+          </div>
+          <div class="form-group full"><label>备注</label><input type="text" id="cp-notes" value="${this._escHtml(d.notes || '')}" placeholder="选填"></div>
         </div>
         <div class="modal-actions">
-          <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
-          <button class="btn btn-primary" id="cp-save-btn">${isEdit ? '保存修改' : '创建产品'}</button>
+          <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">取消</button>
+          <button type="button" class="btn btn-primary" id="cp-save-btn">${isEdit ? '保存修改' : '创建产品'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
 
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-
     overlay.querySelector('#cp-save-btn').addEventListener('click', async () => {
+      const saveBtn = overlay.querySelector('#cp-save-btn');
+      if (saveBtn?.disabled) return;
       const name = overlay.querySelector('#cp-name').value.trim();
       if (!name) { UI.toast('请输入产品名称', 'error'); return; }
+      const selectedBusinessType = overlay.querySelector('#cp-business-type')?.value || '';
+      const isBeverage = (overlay.querySelector('#cp-is-beverage')?.checked || false) || selectedBusinessType === 'beverage_retail';
+      const businessTypeCode = this._normalizeCpBusinessType(isBeverage ? 'beverage_retail' : selectedBusinessType, isBeverage);
       const record = {
         name,
+        standardName: overlay.querySelector('#cp-standard-name').value.trim() || name,
+        businessTypeCode,
+        packageSpec: overlay.querySelector('#cp-package-spec').value.trim(),
+        barcode: overlay.querySelector('#cp-barcode').value.trim(),
+        isBeverage,
+        isCountableStock: overlay.querySelector('#cp-is-countable-stock')?.checked !== false,
+        isActive: overlay.querySelector('#cp-is-active')?.checked !== false,
         sku: overlay.querySelector('#cp-sku').value.trim(),
         supplier: overlay.querySelector('#cp-supplier').value.trim(),
         costPrice: +overlay.querySelector('#cp-cost').value || 0,
         retailPrice: +overlay.querySelector('#cp-retail').value || 0,
         stock: +overlay.querySelector('#cp-stock').value || 0,
         unit: overlay.querySelector('#cp-unit').value,
-        notes: overlay.querySelector('#cp-notes').value.trim()
+        approvalStatus: Auth.isAdmin ? overlay.querySelector('#cp-approval').value : '待确认',
+        submittedBy: d.submittedBy || d.submitted_by || Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+        approvedBy: Auth.isAdmin && overlay.querySelector('#cp-approval')?.value === '已上架' ? (Auth.currentUser?.displayName || Auth.currentUser?.username || '') : (d.approvedBy || d.approved_by || ''),
+        approvedAt: Auth.isAdmin && overlay.querySelector('#cp-approval')?.value === '已上架' ? new Date().toISOString() : (d.approvedAt || d.approved_at || null),
+        notes: overlay.querySelector('#cp-notes').value.trim(),
+        updatedAt: new Date().toISOString()
       };
       try {
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.textContent = '保存中...';
+        }
         if (isEdit && d.id) {
           await Store.update('creativeProducts', d.id, record);
-          UI.toast('产品已更新');
+          UI.toast(Auth.isAdmin ? '产品已更新，列表已刷新' : '产品已更新，等待管理员确认，列表已刷新');
         } else {
           await Store.add('creativeProducts', createCreativeProduct(record));
-          UI.toast('产品已新增');
+          UI.toast(Auth.isAdmin ? '产品已新增，列表已刷新' : '产品已提交待确认，列表已刷新');
         }
-        overlay.remove();
+        await UI._loadCreativeProducts();
         await UI._refreshCurrentProductTab();
+        overlay.remove();
       } catch (e) {
         UI.toast('保存失败：' + (e.message || e), 'error');
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = isEdit ? '保存修改' : '创建产品';
+        }
       }
     });
   },
@@ -4085,7 +4972,33 @@ const UI = {
     this._showCreativeProductModal(p, true);
   },
 
+  async _approveCreativeProduct(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可确认上架', 'error'); return; }
+    await Store.update('creativeProducts', id, {
+      approvalStatus: '已上架',
+      approvedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+      approvedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('产品已上架');
+    await this._loadCreativeProducts();
+    this._refreshCurrentProductTab();
+  },
+
+  async _unlistCreativeProduct(id) {
+    if (!this._canApproveProducts()) { this.toast('仅管理员可下架', 'error'); return; }
+    if (!confirm('确认下架该产品？下架后不会出现在收银台可选列表。')) return;
+    await Store.update('creativeProducts', id, {
+      approvalStatus: '已下架',
+      updatedAt: new Date().toISOString()
+    });
+    this.toast('产品已下架');
+    await this._loadCreativeProducts();
+    this._refreshCurrentProductTab();
+  },
+
   async _deleteCreativeProduct(id) {
+    if (!this._canDeleteCatalog()) { this.toast('仅管理员可删除', 'error'); return; }
     const p = this._creativeProducts.find(x => x.id === id);
     if (!confirm(`确认删除产品「${p ? p.name : id}」？`)) return;
     await Store.delete('creativeProducts', id);
@@ -4107,7 +5020,11 @@ const UI = {
         let imported = 0;
         for (const row of data) {
           try {
-            await Store.add('creativeProducts', createCreativeProduct(row));
+            await Store.add('creativeProducts', createCreativeProduct({
+              ...row,
+              approvalStatus: Auth.isAdmin ? '已上架' : '待确认',
+              submittedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || ''
+            }));
             imported++;
           } catch (err) {
             console.warn('导入失败:', row, err);
@@ -4136,8 +5053,16 @@ const UI = {
             const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
             resolve(rows.map(r => {
               const nameVal = this._getCPField(r, ['产品名称','产品名','名称','name','Name','商品名','商品名称']);
+              const isBeverage = this._cpBool(this._getCPField(r, ['是否饮料','饮料','isBeverage','is_beverage']), false);
               return {
                 name: String(nameVal || '').trim(),
+                standardName: String(this._getCPField(r, ['标准名称','归一名称','standardName','standard_name']) || nameVal || '').trim(),
+                businessTypeCode: this._normalizeCpBusinessType(this._getCPField(r, ['业务归属','业务类型','businessTypeCode','business_type_code']), isBeverage),
+                packageSpec: String(this._getCPField(r, ['包装规格','规格','packageSpec','package_spec']) || '').trim(),
+                barcode: String(this._getCPField(r, ['条码','barcode','Barcode']) || '').trim(),
+                isBeverage,
+                isCountableStock: this._cpBool(this._getCPField(r, ['是否计库存','参与库存计数','isCountableStock','is_countable_stock']), true),
+                isActive: this._cpBool(this._getCPField(r, ['是否启用','参与经营统计','isActive','is_active']), true),
                 sku: String(this._getCPField(r, ['SKU','sku','Sku','编码','编号','货号']) || '').trim(),
                 supplier: String(this._getCPField(r, ['供应商','supplier','Supplier','供货商']) || '').trim(),
                 costPrice: +(+this._getCPField(r, ['进货价','costPrice','cost_price','进价','成本价']) || 0),
@@ -4160,8 +5085,16 @@ const UI = {
               headers.forEach((h, idx) => { row[h] = vals[idx] || ''; });
               const nameVal = this._getCPField(row, ['产品名称','产品名','名称','name','Name','商品名','商品名称']);
               if (!nameVal) continue;
+              const isBeverage = this._cpBool(this._getCPField(row, ['是否饮料','饮料','isBeverage','is_beverage']), false);
               results.push({
                 name: String(nameVal || '').trim(),
+                standardName: String(this._getCPField(row, ['标准名称','归一名称','standardName','standard_name']) || nameVal || '').trim(),
+                businessTypeCode: this._normalizeCpBusinessType(this._getCPField(row, ['业务归属','业务类型','businessTypeCode','business_type_code']), isBeverage),
+                packageSpec: String(this._getCPField(row, ['包装规格','规格','packageSpec','package_spec']) || '').trim(),
+                barcode: String(this._getCPField(row, ['条码','barcode','Barcode']) || '').trim(),
+                isBeverage,
+                isCountableStock: this._cpBool(this._getCPField(row, ['是否计库存','参与库存计数','isCountableStock','is_countable_stock']), true),
+                isActive: this._cpBool(this._getCPField(row, ['是否启用','参与经营统计','isActive','is_active']), true),
                 sku: String(this._getCPField(row, ['SKU','sku','Sku','编码','编号','货号']) || '').trim(),
                 supplier: String(this._getCPField(row, ['供应商','supplier','Supplier','供货商']) || '').trim(),
                 costPrice: +(+this._getCPField(row, ['进货价','costPrice','cost_price','进价','成本价']) || 0),
@@ -4213,11 +5146,23 @@ const UI = {
   },
 
   async _exportCreativeProducts() {
+    if (!Auth.can('export', 'creative-products')) {
+      this.toast('当前账号无权限导出产品数据', 'error');
+      return;
+    }
     await this._loadCreativeProducts();
     if (!this._creativeProducts.length) { this.toast('没有产品可导出', 'error'); return; }
-    const headers = ['产品名称','SKU','供应商','进货价','零售价','库存','单位','备注'];
+    const headers = ['产品名称','标准名称','业务归属','包装规格','条码','是否饮料','是否计库存','是否启用','SKU','供应商','进货价','零售价','库存','单位','备注'];
     const rows = this._creativeProducts.map(p => [
-      p.name || '', p.sku || '', p.supplier || '',
+      p.name || '',
+      p.standardName || p.standard_name || p.name || '',
+      this._cpBusinessTypeLabel(p.businessTypeCode || p.business_type_code, this._cpBool(p.isBeverage ?? p.is_beverage, false)),
+      p.packageSpec || p.package_spec || '',
+      p.barcode || '',
+      this._cpBool(p.isBeverage ?? p.is_beverage, false) ? '是' : '否',
+      this._cpBool(p.isCountableStock ?? p.is_countable_stock, true) ? '是' : '否',
+      this._cpBool(p.isActive ?? p.is_active, true) ? '是' : '否',
+      p.sku || '', p.supplier || '',
       (+p.costPrice || 0).toFixed(2), (+p.retailPrice || 0).toFixed(2),
       p.stock || 0, p.unit || '个', p.notes || ''
     ]);
@@ -4225,6 +5170,10 @@ const UI = {
   },
 
   async _exportCreativeSales() {
+    if (!Auth.can('export', 'creative-products')) {
+      this.toast('当前账号无权限导出销售清单', 'error');
+      return;
+    }
     const { start, end } = ImportExport._getExportDates();
     await this._loadCreativeProducts();
     const productMetaByName = this._creativeProductMetaMap();
@@ -4238,7 +5187,7 @@ const UI = {
     if (!records.length) { this.toast('所选范围内无文创销售记录', 'error'); return; }
 
     // 展开每条 retailItems
-    const headers = ['日期','产品名称','供应商','进货价','数量','单价','金额','收款方式','经手人','备注','创建时间'];
+    const headers = ['日期','产品名称','标准名称','业务归属','包装规格','是否饮料','供应商','进货价','数量','单价','金额','收款方式','经手人','备注','创建时间'];
     const rows = [];
     // 字段名兼容：服务端 toCamel 不递归 JSONB 数组，所以读出来时是 snake（product_name/unit_price）；
     // 少数旧数据可能保留录入时的 camel（productName/unitPrice）。两种都要支持。
@@ -4252,6 +5201,10 @@ const UI = {
         rows.push([
           r.date,
           name,
+          meta.standardName || '',
+          meta.businessType || '',
+          meta.packageSpec || '',
+          meta.isBeverage ? '是' : '否',
           meta.supplier || '',
           meta.costPrice === '' ? '' : (+meta.costPrice || 0).toFixed(2),
           item.qty || 1,
@@ -4271,12 +5224,19 @@ const UI = {
     const map = new Map();
     (this._creativeProducts || []).forEach(p => {
       const key = this._normalizeCreativeProductName(p.name || '');
+      const meta = {
+        standardName: p.standardName || p.standard_name || p.name || '',
+        businessType: this._cpBusinessTypeLabel(p.businessTypeCode || p.business_type_code, this._cpBool(p.isBeverage ?? p.is_beverage, false)),
+        packageSpec: p.packageSpec || p.package_spec || '',
+        isBeverage: this._cpBool(p.isBeverage ?? p.is_beverage, false),
+        supplier: p.supplier || '',
+        costPrice: p.costPrice ?? p.cost_price ?? ''
+      };
       if (key && !map.has(key)) {
-        map.set(key, {
-          supplier: p.supplier || '',
-          costPrice: p.costPrice ?? p.cost_price ?? ''
-        });
+        map.set(key, meta);
       }
+      const standardKey = this._normalizeCreativeProductName(p.standardName || p.standard_name || '');
+      if (standardKey && !map.has(standardKey)) map.set(standardKey, meta);
     });
     return map;
   },
@@ -4300,8 +5260,8 @@ const UI = {
   },
 
   _downloadImportTemplate() {
-    const headers = ['产品名称','SKU','供应商','进货价','零售价','库存','单位','备注'];
-    const example = ['示例文创笔记本','CP-001','示例供应商','15','38','100','个','首批进货'];
+    const headers = ['产品名称','标准名称','业务归属','包装规格','条码','是否饮料','是否计库存','是否启用','SKU','供应商','进货价','零售价','库存','单位','备注'];
+    const example = ['纯悦水','纯悦水','饮料零售','550ml 瓶装','','是','是','是','DR-001','示例供应商','1.8','4','100','瓶','示例饮料'];
     const csvContent = '﻿' + headers.join(',') + '\n' + example.join(',') + '\n';
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
@@ -4326,7 +5286,11 @@ const UI = {
         let imported = 0, skipped = 0;
         for (const row of rows) {
           try {
-            await Store.add('artworks', createArtwork(row));
+            await Store.add('artworks', createArtwork({
+              ...row,
+              approvalStatus: Auth.isAdmin ? '已上架' : '待确认',
+              submittedBy: Auth.currentUser?.displayName || Auth.currentUser?.username || ''
+            }));
             imported++;
           } catch (err) {
             console.warn('导入失败:', row, err);
@@ -4582,16 +5546,22 @@ const UI = {
     const page = $('#page-daily-closing');
     if (!Auth.hasModuleAccess('daily-closing')) { this._noAccess(page); return; }
     const date = this._dailyClosingDate || todayStr();
+    const exportMonth = this._dailyClosingExportMonth || date.slice(0, 7);
     html(page, `
       <div>
         <div class="card-title">📋 日结报表</div>
         <div class="filter-bar">
-          <div class="form-group"><label>日结日期</label><input type="date" id="daily-close-date" value="${date}" onchange="UI._reloadDailyClosing()"></div>
+          <div class="form-group"><label for="daily-close-date">日结日期</label><input type="date" id="daily-close-date" value="${date}" onchange="UI._reloadDailyClosing()"></div>
           <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('daily-close-date').value='${todayStr()}'; UI._reloadDailyClosing()">今天</button>
           <button type="button" class="btn btn-sm btn-primary" onclick="UI._loadDailyClosing()">刷新</button>
+          ${Auth.can('export', 'daily-closing') ? `
+            <div class="form-group"><label for="daily-export-month">历史导出月份</label><input type="month" id="daily-export-month" value="${exportMonth}" max="${todayStr().slice(0, 7)}" onchange="UI._dailyClosingExportMonth=this.value"></div>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingMonth()">导出所选月份</button>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingRevenue()">导出收入明细</button>
+          ` : ''}
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="daily-close-status"></span>
         </div>
-        <div id="daily-closing-body"><div class="loading-state" style="padding:40px"><div class="spinner"></div><span>加载日结数据...</span></div></div>
+        <div id="daily-closing-month-list" style="margin-bottom:16px"></div>
       </div>
     `);
     await this._loadDailyClosing();
@@ -4620,27 +5590,354 @@ const UI = {
     await this._loadDailyClosing();
   },
 
-  async _loadDailyClosing() {
-    const body = $('#daily-closing-body');
-    if (!body) return;
+  async _openDailyClosingDate(date) {
+    if (!date) return;
+    this._dailyClosingDate = date;
+    const input = document.getElementById('daily-close-date');
+    if (input) input.value = date;
+    await this._loadDailyClosing(true);
+  },
+
+  _monthRangeFromDate(date) {
+    const ym = (date || todayStr()).slice(0, 7);
+    const [year, month] = ym.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).getDate();
+    return { ym, start: `${ym}-01`, end: `${ym}-${String(lastDay).padStart(2, '0')}` };
+  },
+
+  _monthLedgerDates(ym) {
+    const today = todayStr();
+    const currentYm = today.slice(0, 7);
+    const [year, month] = ym.split('-').map(Number);
+    const lastDay = new Date(year, month, 0).getDate();
+    const endDay = ym === currentYm ? Number(today.slice(8, 10)) : (ym < currentYm ? lastDay : 0);
+    const dates = [];
+    for (let day = endDay; day >= 1; day--) {
+      dates.push(`${ym}-${String(day).padStart(2, '0')}`);
+    }
+    return dates;
+  },
+
+  _summaryInline(obj, labelMap = {}) {
+    const entries = Object.entries(obj || {})
+      .filter(([, value]) => Math.abs(+value || 0) > 0.0001)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (!entries.length) return '<span style="color:var(--gray-500)">-</span>';
+    return entries.map(([label, value]) => `
+      <div style="white-space:nowrap">${this._esc(labelMap[label] || label)} <strong>¥${this._fmt(value)}</strong></div>
+    `).join('');
+  },
+
+  _renderDailyClosingMonthList(closings, selectedDate, ym, facts = [], cashMovements = []) {
+    const closingsByDate = new Map((closings || []).map(c => [c.date, c]));
+    const factsByDate = (facts || []).reduce((acc, row) => {
+      if (!row.date) return acc;
+      if (!acc.has(row.date)) acc.set(row.date, []);
+      acc.get(row.date).push(row);
+      return acc;
+    }, new Map());
+    const cashByDate = (cashMovements || []).reduce((acc, row) => {
+      if (!row.date) return acc;
+      if (!acc.has(row.date)) acc.set(row.date, []);
+      acc.get(row.date).push(row);
+      return acc;
+    }, new Map());
+    const dates = [...new Set([
+      ...this._monthLedgerDates(ym),
+      ...factsByDate.keys(),
+      ...cashByDate.keys(),
+      ...closingsByDate.keys()
+    ])]
+      .filter(d => String(d || '').startsWith(ym))
+      .sort((a, b) => String(b || '').localeCompare(String(a || '')));
+    const statusClass = (status) => status === '已复核' ? 'tag-success' : status === '已确认' ? 'tag-info' : status === '未结存' ? 'tag-danger' : 'tag-warning';
+    const diffColor = (value) => (+value || 0) === 0 ? 'var(--gray-700)' : (+value || 0) > 0 ? 'var(--green-700)' : 'var(--red)';
+    const tableRows = dates.length ? dates.map(date => {
+      const c = closingsByDate.get(date) || null;
+      const dayFacts = factsByDate.get(date) || [];
+      const dayCashMovements = cashByDate.get(date) || [];
+      const byCategory = dayFacts.length
+        ? this._sumBy(dayFacts, 'category')
+        : (c?.revenueSummary?.byCategory || c?.revenue_summary?.byCategory || {});
+      const byPayment = dayFacts.length
+        ? this._sumBy(dayFacts.filter(r => (+r.netAmount || 0) > 0), 'paymentMethod')
+        : (c?.paymentSummary || c?.payment_summary || {});
+      const systemNet = dayFacts.length
+        ? dayFacts.reduce((s, r) => s + (+r.netAmount || 0), 0)
+        : +(c?.systemNetAmount ?? c?.system_net_amount ?? 0);
+      const confirmed = c ? +(c.confirmedAmount ?? c.confirmed_amount ?? 0) : null;
+      const diff = c ? +(c.differenceAmount ?? c.difference_amount ?? ((confirmed || 0) - systemNet)) : null;
+      const cashDeposit = -this._sumCashMovements(dayCashMovements, m => m.type === 'cash_deposit');
+      const active = date === selectedDate ? ' style="background:var(--green-50)"' : '';
+      const status = c ? (c.status || '草稿') : '未结存';
+      const canQuickClose = Auth.can('create', 'daily-closing') && status !== '已确认' && status !== '已复核';
+      const quickCloseBtn = canQuickClose
+        ? `<button type="button" class="btn btn-sm btn-primary" onclick="UI._quickArchiveDailyClosing('${this._esc(date)}', this)">快速结存</button>`
+        : '';
+      return `
+        <tr${active}>
+          <td><strong>${this._esc(date)}</strong></td>
+          <td><span class="tag ${statusClass(status)}">${this._esc(status)}</span></td>
+          <td><strong>¥${this._fmt(systemNet)}</strong><div style="font-size:12px;color:var(--gray-500)">${dayFacts.length} 条收入事实</div></td>
+          <td>${c ? `<strong>¥${this._fmt(confirmed)}</strong>` : '<span style="color:var(--gray-500)">待结存</span>'}</td>
+          <td>${c ? `<strong style="color:${diffColor(diff)}">¥${this._fmt(diff)}</strong>` : '<span style="color:var(--gray-500)">-</span>'}</td>
+          <td>${this._summaryInline(byCategory)}</td>
+          <td>${this._summaryInline(byPayment)}</td>
+          <td><strong>¥${this._fmt(cashDeposit)}</strong></td>
+          <td>${this._esc(c?.closerName || c?.closer_name || '-')}</td>
+          <td><div class="row-actions">${quickCloseBtn}<button type="button" class="btn btn-sm btn-secondary" onclick="UI._openDailyClosingDate('${this._esc(date)}')">查看</button></div></td>
+        </tr>
+      `;
+    }).join('') : '<tr><td colspan="10" style="color:var(--gray-500)">本月暂无收入事实、柜台现金流水或日结记录</td></tr>';
+
+    return `
+      <div class="card">
+        <div class="card-title">${ym} 日结台账</div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>日期</th><th>结存状态</th><th>系统净收入</th><th>实收确认</th><th>差异</th><th>品类收入</th><th>收款方式</th><th>存现金</th><th>结账人</th><th>操作</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  },
+
+  async _quickArchiveDailyClosing(date, btn) {
+    if (!Auth.can('create', 'daily-closing')) {
+      this.toast('当前账号无权限结存日结', 'error');
+      return;
+    }
+    if (!date) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '结存中...';
+    }
+    try {
+      const [facts, expenses, adjustments, cashMovements, closings] = await Promise.all([
+        Store.getByDateRange('revenueFacts', date, date),
+        Store.getByDateRange('expense', date, date),
+        Store.getAll('transactionAdjustments'),
+        Store.getAll('cashMovements'),
+        Store.getByDateRange('dailyClosings', date, date)
+      ]);
+      const dayFacts = (facts || []).filter(r => r.date === date);
+      const dayExpenses = (expenses || []).filter(r => r.date === date);
+      const dayAdjustments = (adjustments || []).filter(a => UI._fmtBeijingTime(a.createdAt || a.created_at).slice(0, 10) === date);
+      const dayCashMovements = (cashMovements || []).filter(m => m.date === date);
+      const closing = (closings || []).find(c => c.date === date) || null;
+      if (closing?.status === '已复核') {
+        this.toast('该日期已复核，无需快速结存');
+        await this._openDailyClosingDate(date);
+        return;
+      }
+      const systemNet = dayFacts.reduce((s, r) => s + (+r.netAmount || 0), 0);
+      const grossPositive = dayFacts.filter(r => (+r.netAmount || 0) > 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
+      const refundTotal = dayFacts.filter(r => (+r.netAmount || 0) < 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
+      const operationalDayExpenses = dayExpenses.filter(isOperationalExpenseRecord);
+      const bySource = this._sumBy(dayFacts, 'source');
+      const byCategory = this._sumBy(dayFacts, 'category');
+      const byPayment = this._sumBy(dayFacts.filter(r => (+r.netAmount || 0) > 0), 'paymentMethod');
+      const cashOpening = this._sumCashMovements(cashMovements, m => m.date < date);
+      const cashIn = this._sumCashMovements(dayCashMovements, m => (+m.amount || 0) > 0);
+      const cashDeposit = -this._sumCashMovements(dayCashMovements, m => m.type === 'cash_deposit');
+      const cashOut = -this._sumCashMovements(dayCashMovements, m => (+m.amount || 0) < 0 && m.type !== 'cash_deposit');
+      const cashClosing = cashOpening + this._sumCashMovements(dayCashMovements);
+      const adjustmentSummary = dayAdjustments.reduce((acc, a) => {
+        const key = a.action || 'adjustment';
+        acc[key] = (acc[key] || 0) + (+a.amount || 0);
+        return acc;
+      }, {});
+      const record = createDailyClosing({
+        id: closing?.id || undefined,
+        date,
+        systemNetAmount: systemNet,
+        confirmedAmount: systemNet,
+        differenceAmount: 0,
+        revenueSummary: { bySource, byCategory, facts: dayFacts.length, grossPositive, refundTotal },
+        paymentSummary: byPayment,
+        expenseSummary: {
+          expenseOut: operationalDayExpenses.reduce((s, r) => s + (+r.amount || 0), 0),
+          pendingReceipt: operationalDayExpenses.filter(r => r.receiptStatus === '待补' || r.invoiceStatus === '待补').length,
+          count: operationalDayExpenses.length
+        },
+        adjustmentSummary,
+        cashSummary: { cashOpening, cashIn, cashDeposit, cashOut, cashClosing, count: dayCashMovements.length },
+        closerId: Auth.currentUser?.id || '',
+        closerName: Auth.currentUser?.displayName || Auth.currentUser?.username || '',
+        reviewerName: closing?.reviewerName || closing?.reviewer_name || '',
+        status: '已确认',
+        notes: closing?.notes || ''
+      });
+      record.updatedAt = new Date().toISOString();
+      if (closing?.id) {
+        await Store.update('dailyClosings', closing.id, record);
+      } else {
+        await Store.add('dailyClosings', record);
+      }
+      this.toast(`${date} 已快速结存`);
+      await this._openDailyClosingDate(date);
+    } catch (e) {
+      this.toast('快速结存失败：' + (e.message || e), 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '快速结存';
+      }
+    }
+  },
+
+  _showDailyClosingModal(date, content) {
+    document.getElementById('daily-closing-detail-modal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'daily-closing-detail-modal';
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-card daily-closing-detail-modal" role="dialog" aria-modal="true" aria-labelledby="daily-closing-detail-title">
+        <div class="daily-closing-modal-header">
+          <div class="modal-title" id="daily-closing-detail-title">${this._esc(date)} 日结明细</div>
+          <button type="button" class="daily-closing-modal-close" aria-label="关闭日结明细" onclick="this.closest('.modal-overlay').remove()">×</button>
+        </div>
+        ${content}
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">关闭</button></div>
+      </div>`;
+    overlay.addEventListener('click', event => { if (event.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  },
+
+  _dailyClosingSummaryText(obj, labelMap = {}) {
+    return Object.entries(obj || {})
+      .filter(([, value]) => Math.abs(+value || 0) > 0.0001)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+      .map(([label, value]) => `${labelMap[label] || label} ¥${(+value || 0).toFixed(2)}`)
+      .join('；');
+  },
+
+  async _exportDailyClosingRevenue() {
+    if (!Auth.can('export', 'daily-closing')) {
+      this.toast('当前账号无权限导出收入明细', 'error');
+      return;
+    }
+    if (typeof ImportExport === 'undefined') {
+      this.toast('缺少收入导出组件', 'error');
+      return;
+    }
+    const selectedMonth = document.getElementById('daily-export-month')?.value || this._dailyClosingExportMonth || (this._dailyClosingDate || todayStr()).slice(0, 7);
+    this._dailyClosingExportMonth = selectedMonth;
+    const range = this._monthRangeFromDate(`${selectedMonth}-01`);
+    try {
+      await ImportExport.exportRevenueCSV(range.start, range.end, 'daily-closing');
+    } catch (error) {
+      console.error('导出收入明细失败', error);
+      this.toast('导出收入明细失败：' + (error.message || error), 'error');
+    }
+  },
+
+  async _exportDailyClosingMonth() {
+    if (!Auth.can('export', 'daily-closing')) {
+      this.toast('当前账号无权限导出日结报表', 'error');
+      return;
+    }
+    if (typeof XLSX === 'undefined') {
+      this.toast('缺少 Excel 导出组件', 'error');
+      return;
+    }
+    const selectedMonth = document.getElementById('daily-export-month')?.value || this._dailyClosingExportMonth || (this._dailyClosingDate || todayStr()).slice(0, 7);
+    this._dailyClosingExportMonth = selectedMonth;
+    const range = this._monthRangeFromDate(`${selectedMonth}-01`);
+    try {
+      const [facts, closings, cashMovements] = await Promise.all([
+        Store.getByDateRange('revenueFacts', range.start, range.end),
+        Store.getByDateRange('dailyClosings', range.start, range.end),
+        Store.getAll('cashMovements')
+      ]);
+      const factsByDate = (facts || []).reduce((map, row) => {
+        if (!map.has(row.date)) map.set(row.date, []);
+        map.get(row.date).push(row);
+        return map;
+      }, new Map());
+      const closingsByDate = new Map((closings || []).map(row => [row.date, row]));
+      const cashByDate = (cashMovements || []).reduce((map, row) => {
+        if (!map.has(row.date)) map.set(row.date, []);
+        map.get(row.date).push(row);
+        return map;
+      }, new Map());
+      const dates = [...new Set([
+        ...this._monthLedgerDates(range.ym),
+        ...factsByDate.keys(),
+        ...closingsByDate.keys(),
+        ...cashByDate.keys()
+      ])].filter(day => String(day || '').startsWith(range.ym)).sort();
+      const rows = dates.map(day => {
+        const dayFacts = factsByDate.get(day) || [];
+        const closing = closingsByDate.get(day) || null;
+        const dayCash = cashByDate.get(day) || [];
+        const systemNet = dayFacts.length
+          ? dayFacts.reduce((sum, row) => sum + (+row.netAmount || 0), 0)
+          : +(closing?.systemNetAmount ?? closing?.system_net_amount ?? 0);
+        const confirmed = closing ? +(closing.confirmedAmount ?? closing.confirmed_amount ?? 0) : '';
+        const cashOpening = this._sumCashMovements(cashMovements, movement => movement.date < day);
+        const cashIn = this._sumCashMovements(dayCash, movement => (+movement.amount || 0) > 0);
+        const cashDeposit = -this._sumCashMovements(dayCash, movement => movement.type === 'cash_deposit');
+        const cashOut = -this._sumCashMovements(dayCash, movement => (+movement.amount || 0) < 0 && movement.type !== 'cash_deposit');
+        return {
+          '日期': day,
+          '结存状态': closing?.status || '未结存',
+          '系统净收入': systemNet,
+          '实收确认': confirmed,
+          '差异': closing ? +(closing.differenceAmount ?? closing.difference_amount ?? ((+confirmed || 0) - systemNet)) : '',
+          '品类收入': this._dailyClosingSummaryText(dayFacts.length ? this._sumBy(dayFacts, 'category') : (closing?.revenueSummary?.byCategory || closing?.revenue_summary?.byCategory || {})),
+          '收款方式': this._dailyClosingSummaryText(dayFacts.length ? this._sumBy(dayFacts.filter(row => (+row.netAmount || 0) > 0), 'paymentMethod') : (closing?.paymentSummary || closing?.payment_summary || {})),
+          '柜台现金期初': cashOpening,
+          '现金收款': cashIn,
+          '存现金': cashDeposit,
+          '现金退款/冲销': cashOut,
+          '柜台现金期末': cashOpening + this._sumCashMovements(dayCash),
+          '结账人': closing?.closerName || closing?.closer_name || '',
+          '复核人': closing?.reviewerName || closing?.reviewer_name || '',
+          '备注': closing?.notes || ''
+        };
+      });
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet['!cols'] = [12, 12, 14, 14, 12, 32, 32, 16, 14, 14, 16, 16, 14, 14, 28].map(wch => ({ wch }));
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, `${range.ym}日结`);
+      XLSX.writeFile(workbook, `艾维美术馆_${range.ym}_日结报表.xlsx`);
+      this.toast(`已导出 ${range.ym} 日结报表（${rows.length} 天）`);
+    } catch (error) {
+      console.error('导出月度日结失败', error);
+      this.toast('导出日结报表失败：' + (error.message || error), 'error');
+    }
+  },
+
+  async _loadDailyClosing(openDetail = false) {
+    const monthListEl = $('#daily-closing-month-list');
+    if (!monthListEl) return;
     const date = document.getElementById('daily-close-date')?.value || this._dailyClosingDate || todayStr();
     this._dailyClosingDate = date;
     const statusEl = $('#daily-close-status');
     if (statusEl) statusEl.textContent = '加载中...';
+    const monthRange = this._monthRangeFromDate(date);
+    if (monthListEl) monthListEl.innerHTML = '<div class="card"><div class="loading-state" style="padding:24px"><div class="spinner"></div><span>加载本月日结列表...</span></div></div>';
 
-    const [facts, expenses, adjustments, cashMovements, closings] = await Promise.all([
-      Store.getByDateRange('revenueFacts', date, date),
-      Store.getByDateRange('expense', date, date),
-      Store.getAll('transactionAdjustments'),
+    const canEditDaily = Auth.can('create', 'daily-closing');
+    const [monthFacts, expenses, adjustments, cashMovements, monthClosings] = await Promise.all([
+      Store.getByDateRange('revenueFacts', monthRange.start, monthRange.end),
+      canEditDaily ? Store.getByDateRange('expense', date, date) : Promise.resolve([]),
+      canEditDaily ? Store.getAll('transactionAdjustments') : Promise.resolve([]),
       Store.getAll('cashMovements'),
-      Store.getByDateRange('dailyClosings', date, date)
+      Store.getByDateRange('dailyClosings', monthRange.start, monthRange.end)
     ]);
+    if (monthListEl) monthListEl.innerHTML = this._renderDailyClosingMonthList(monthClosings, date, monthRange.ym, monthFacts, cashMovements);
+    if (!openDetail) {
+      if (statusEl) statusEl.textContent = `已加载 ${monthRange.ym}`;
+      return;
+    }
 
-    const dayFacts = (facts || []).filter(r => r.date === date);
+    const dayFacts = (monthFacts || []).filter(r => r.date === date);
     const dayExpenses = (expenses || []).filter(r => r.date === date);
     const dayAdjustments = (adjustments || []).filter(a => UI._fmtBeijingTime(a.createdAt || a.created_at).slice(0, 10) === date);
     const dayCashMovements = (cashMovements || []).filter(m => m.date === date);
-    const closing = (closings || []).find(c => c.date === date) || null;
+    const closing = (monthClosings || []).find(c => c.date === date) || null;
 
     const systemNet = dayFacts.reduce((s, r) => s + (+r.netAmount || 0), 0);
     const grossPositive = dayFacts.filter(r => (+r.netAmount || 0) > 0).reduce((s, r) => s + (+r.netAmount || 0), 0);
@@ -4680,7 +5977,7 @@ const UI = {
       </tr>
     `).join('') : '<tr><td colspan="6" style="color:var(--gray-500)">暂无退款/作废调整</td></tr>';
 
-    html(body, `
+    const detailContent = `
       <div class="stats-grid" style="margin-bottom:16px">
         <div class="stat-card"><div class="stat-label">系统净收入</div><div class="stat-value">¥${this._fmt(systemNet)}</div><div class="stat-sub">${dayFacts.length} 条收入事实</div></div>
         <div class="stat-card"><div class="stat-label">正向收入</div><div class="stat-value">¥${this._fmt(grossPositive)}</div><div class="stat-sub">退款前口径</div></div>
@@ -4720,7 +6017,7 @@ const UI = {
         </div>
       </div>
 
-      <div class="card">
+      ${Auth.can('create', 'daily-closing') ? `<div class="card">
         <div class="card-title">日结确认</div>
         <div class="form-grid">
           <div class="form-group"><label>系统净收入</label><input type="number" id="daily-system-net" value="${systemNet.toFixed(2)}" readonly></div>
@@ -4736,8 +6033,9 @@ const UI = {
         <div class="form-actions full">
           <button type="button" class="btn btn-primary" onclick="UI._saveDailyClosing()">保存日结</button>
         </div>
-      </div>
-    `);
+      </div>` : ''}
+    `;
+    this._showDailyClosingModal(date, detailContent);
 
     this._dailyClosingSnapshot = {
       existingId: closing?.id || '',
@@ -4793,7 +6091,7 @@ const UI = {
       this._dailyClosingSnapshot.existingId = saved.id;
       this.toast('日结已保存');
     }
-    await this._loadDailyClosing();
+    await this._loadDailyClosing(true);
   },
 
   // === 数据报表 ===
@@ -4802,29 +6100,533 @@ const UI = {
     const ym = todayStr().slice(0, 7);
     html(page, `
       <div class="filter-bar">
-        <div class="form-group"><label>年份</label><select id="rpt-year" onchange="Charts._onFilterChange()">${this._yearOptions()}</select></div>
-        <div class="form-group"><label>月份</label><select id="rpt-month" onchange="Charts._onFilterChange()">
+        <div class="form-group"><label>年份</label><select id="rpt-year" disabled onchange="UI._renderV2ManagementSummary();Charts._onFilterChange()">${this._yearOptions()}</select></div>
+        <div class="form-group"><label>月份</label><select id="rpt-month" disabled onchange="UI._renderV2ManagementSummary();Charts._onFilterChange()">
           <option value="">全部</option>
           ${[1,2,3,4,5,6,7,8,9,10,11,12].map(m => {
             const ms = String(m).padStart(2, '0');
             return `<option value="${ms}"${ms === ym.slice(5) ? ' selected' : ''}>${m}月</option>`;
           }).join('')}
         </select></div>
-        <button type="button" class="btn btn-sm btn-secondary" onclick="Charts.renderAll()">刷新图表</button>
+        <button type="button" id="rpt-refresh" disabled class="btn btn-sm btn-secondary" onclick="UI._renderV2ManagementSummary();Charts.renderAll()">刷新图表</button>
       </div>
+      <div id="v2-management-summary"><div class="loading-state"><div class="spinner"></div>加载 2.0 经营汇总…</div></div>
       <div id="report-charts"><div class="loading-state" style="text-align:center;padding:80px"><div class="spinner"></div><span style="margin-left:10px">加载报表数据中...</span></div></div>
     `);
     // 加载图表需要时间，延迟一帧让 loading 先显示
     setTimeout(async () => {
       await Charts.renderAll();
+      await this._renderV2ManagementSummary();
+      ['rpt-year','rpt-month','rpt-refresh'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = false; });
     }, 50);
   },
 
+  async _renderV2ManagementSummary() {
+    const target = $('#v2-management-summary');
+    if (!target) return;
+    const renderId = (this._v2SummaryRenderId || 0) + 1;
+    this._v2SummaryRenderId = renderId;
+    const year = $('#rpt-year')?.value || todayStr().slice(0,4);
+    const month = $('#rpt-month')?.value || '';
+    const prefix = month ? `${year}-${month}` : year;
+    try {
+      const [allSummary, allIssues, allBaseline, allAliasCandidates, allProductGovernance, allCostEvidence, allRevenueCandidates, allCostCandidates, allGalleryCandidates, allWorkshopCandidates, allSpaceCandidates, legacyFacts] = await Promise.all([
+        Store._request('GET', '/rest/v1/business_layer_summary_v2?order=period_month.asc&limit=5000'),
+        Store._request('GET', '/rest/v1/data_governance_issues_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/data_governance_baseline_v2?order=period_month.asc&limit=5000'),
+        Store._request('GET', '/rest/v1/product_alias_candidates_v2?order=affected_amount.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/product_master_governance_v2?order=affected_amount.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/product_cost_evidence_v2?order=evidence_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/revenue_attribution_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/cost_attribution_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/gallery_link_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/workshop_link_candidates_v2?order=business_date.desc&limit=5000'),
+        Store._request('GET', '/rest/v1/space_classification_candidates_v2?order=business_date.desc&limit=5000'),
+        Store.getByYear('revenueFacts', year)
+      ]);
+      if (renderId !== this._v2SummaryRenderId) return;
+      const layerDefs = [
+        ['visit','到馆参观'],['onsite_consumption','现场消费'],['experience_activity','体验活动'],['art_transaction_cooperation','艺术交易与合作']
+      ];
+      const selected = (allSummary || []).filter(r => String(r.periodMonth || '').startsWith(prefix));
+      const rows = layerDefs.map(([code,name]) => selected.filter(r => r.businessLayerCode === code).reduce((a,r) => ({
+        code,name,revenue:a.revenue+(+r.revenueAmount||0),salesCost:a.salesCost+(+r.salesCostAmount||0),periodCost:a.periodCost+(+r.periodCostAmount||0),gross:a.gross+(+r.grossProfit||0),contribution:a.contribution+(+r.operatingContribution||0)
+      }), {code,name,revenue:0,salesCost:0,periodCost:0,gross:0,contribution:0}));
+      const totals = rows.reduce((a,r) => ({ revenue:a.revenue+r.revenue,salesCost:a.salesCost+r.salesCost,periodCost:a.periodCost+r.periodCost,gross:a.gross+r.gross,contribution:a.contribution+r.contribution }), {revenue:0,salesCost:0,periodCost:0,gross:0,contribution:0});
+      const legacy = (legacyFacts || []).filter(r => String(r.date || '').startsWith(prefix)).reduce((s,r) => s + Number(r.netAmount ?? r.amount ?? 0), 0);
+      const diff = totals.revenue - legacy;
+      const issues = (allIssues || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      const baseline = (allBaseline || []).filter(r => String(r.periodMonth || '').startsWith(prefix));
+      this._v2GovernanceExport = { prefix, issues, baseline };
+      this._v2AliasCandidates = allAliasCandidates || [];
+      this._v2AliasCandidateFilter = this._v2AliasCandidateFilter || '';
+      this._v2ProductGovernance = allProductGovernance || [];
+      this._v2CostEvidence = allCostEvidence || [];
+      this._v2ProductGovernanceFilter = this._v2ProductGovernanceFilter || '';
+      this._v2RevenueAttribution = (allRevenueCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2RevenueAttributionPeriod = prefix;
+      this._v2RevenueAttributionFilter = this._v2RevenueAttributionFilter || '';
+      this._v2CostAttribution = (allCostCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2CostAttributionPeriod = prefix;
+      this._v2CostAttributionFilter = this._v2CostAttributionFilter || '';
+      this._v2GalleryLinks = (allGalleryCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2GalleryLinksPeriod = prefix;
+      this._v2GalleryLinksFilter = this._v2GalleryLinksFilter || '';
+      this._v2WorkshopLinks = (allWorkshopCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2WorkshopLinksPeriod = prefix;
+      this._v2WorkshopLinksFilter = this._v2WorkshopLinksFilter || '';
+      this._v2SpaceClassification = (allSpaceCandidates || []).filter(r => String(r.businessDate || '').startsWith(prefix));
+      this._v2SpaceClassificationPeriod = prefix;
+      this._v2SpaceClassificationFilter = this._v2SpaceClassificationFilter || '';
+      const issueCount = key => issues.filter(r => r.issueType === key).length;
+      const issueAmount = key => baseline.filter(r => r.issueType === key).reduce((sum,r) => sum + (+r.affectedAmount || 0), 0);
+      const labels = {unclassified_revenue:'待归类收入',unclassified_cost:'待归类成本',missing_product_cost:'缺成本商品'};
+      target.innerHTML = `
+        <div class="card">
+          <div class="card-title">2.0 业务层经营汇总 <span class="tag tag-info">只读并行口径</span></div>
+          <div class="stat-card-grid" style="margin-bottom:16px">
+            <div class="stat-card"><div class="stat-label">2.0 净收入</div><div class="stat-value">¥${this._fmt(totals.revenue)}</div><div class="stat-sub">${prefix} · 四业务层</div></div>
+            <div class="stat-card"><div class="stat-label">销售成本</div><div class="stat-value">¥${this._fmt(totals.salesCost)}</div><div class="stat-sub">商品销售成本 + 作品结算</div></div>
+            <div class="stat-card"><div class="stat-label">销售毛利</div><div class="stat-value">¥${this._fmt(totals.gross)}</div><div class="stat-sub">净收入 - 销售成本</div></div>
+            <div class="stat-card"><div class="stat-label">经营贡献</div><div class="stat-value">¥${this._fmt(totals.contribution)}</div><div class="stat-sub">再扣期间成本 ¥${this._fmt(totals.periodCost)}</div></div>
+          </div>
+          <div class="table-wrap"><table class="data-table"><thead><tr><th>业务层</th><th>净收入</th><th>销售成本</th><th>期间成本</th><th>销售毛利</th><th>毛利率</th><th>经营贡献</th></tr></thead><tbody>${rows.map(r => `<tr><td><strong>${r.name}</strong></td><td>¥${this._fmt(r.revenue)}</td><td>¥${this._fmt(r.salesCost)}</td><td>¥${this._fmt(r.periodCost)}</td><td>¥${this._fmt(r.gross)}</td><td>${r.revenue ? (r.gross/r.revenue*100).toFixed(1)+'%' : '-'}</td><td>¥${this._fmt(r.contribution)}</td></tr>`).join('')}</tbody></table></div>
+          <p class="form-hint">1.0 净收入 ¥${this._fmt(legacy)}；2.0 四层净收入 ¥${this._fmt(totals.revenue)}；差异 ${diff >= 0 ? '+' : ''}¥${this._fmt(diff)}。2.0 按业务明细和实际到账日归属；待归类收入留在治理清单、不计入四层总计。原 1.0 图表保留在下方用于对照。</p>
+        </div>
+        <div class="card" id="v2-governance-card">
+          <div class="card-title">数据治理基线 <button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2GovernanceIssues()" ${issues.length ? '' : 'disabled'}>导出治理清单</button></div>
+          <div class="stat-card-grid" style="margin-bottom:16px"><div class="stat-card"><div class="stat-label">待归类收入</div><div class="stat-value">${issueCount('unclassified_revenue')}</div><div class="stat-sub">影响金额 ¥${this._fmt(issueAmount('unclassified_revenue'))}</div></div><div class="stat-card"><div class="stat-label">待归类成本</div><div class="stat-value">${issueCount('unclassified_cost')}</div><div class="stat-sub">影响金额 ¥${this._fmt(issueAmount('unclassified_cost'))}</div></div><div class="stat-card"><div class="stat-label">缺成本商品/作品</div><div class="stat-value">${issueCount('missing_product_cost')}</div><div class="stat-sub">需补成本证据</div></div></div>
+          ${issues.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>问题 ID</th><th>日期</th><th>优先级</th><th>问题</th><th>项目/商品</th><th>金额</th><th>来源</th></tr></thead><tbody>${issues.slice(0,50).map(r => `<tr><td><code>${this._escHtml(r.issueId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><span class="tag ${r.priority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(r.priority)}</span></td><td>${this._escHtml(labels[r.issueType] || r.issueType)}</td><td>${this._escHtml(r.itemName)}</td><td>¥${this._fmt(r.amount)}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">当前期间未发现待归类或缺成本问题</div>'}
+          ${issues.length > 50 ? '<p class="form-hint">仅显示最近 50 条，请按来源记录继续治理。</p>' : ''}
+        </div>
+        ${this._productAliasCandidatesHtml()}
+        ${this._productGovernanceHtml()}
+        ${this._revenueAttributionHtml()}
+        ${this._costAttributionHtml()}
+        ${this._galleryLinksHtml()}
+        ${this._workshopLinksHtml()}
+        ${this._spaceClassificationHtml()}`;
+    } catch (error) {
+      if (renderId !== this._v2SummaryRenderId) return;
+      target.innerHTML = `<div class="card"><div class="card-title">2.0 经营汇总</div><div class="empty-state">当前账号无权读取 2.0 管理事实，或汇总尚未迁移。原 1.0 图表仍可继续使用。</div></div>`;
+    }
+  },
+
+  _exportV2GovernanceIssues() {
+    const snapshot = this._v2GovernanceExport;
+    const rows = snapshot?.issues || [];
+    if (!rows.length) return this.toast('当前筛选期间没有可导出的治理问题', 'error');
+    const headers = ['问题ID','优先级','问题类型','问题分组','业务日期','项目/商品','影响金额','来源表','来源ID','明细键','问题说明','稳定问题键'];
+    const quote = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers, ...rows.map(r => [r.issueId,r.priority,r.issueType,r.issueGroup,r.businessDate,r.itemName,r.amount,r.sourceTable,r.sourceId,r.sourceLineKey,r.issueDetail,r.issueKey])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `数据治理基线-${snapshot.prefix}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 条治理问题`);
+  },
+
+  _productAliasCandidatesHtml() {
+    const allRows = this._v2AliasCandidates || [];
+    const filter = this._v2AliasCandidateFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      matched: '已精确匹配',
+      unique_candidate: '唯一候选',
+      ambiguous: '存在歧义',
+      no_candidate: '无候选'
+    };
+    const tagClass = { matched:'tag-success', unique_candidate:'tag-info', ambiguous:'tag-warning', no_candidate:'tag-danger' };
+    const count = status => allRows.filter(r => r.candidateStatus === status).length;
+    return `<div class="card" id="v2-alias-candidates-card">
+      <div class="card-title">历史商品别名候选 <span class="tag tag-info">只读建议</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2AliasCandidates()" ${rows.length ? '' : 'disabled'}>导出候选清单</button></div>
+      <p class="form-hint">覆盖全部历史零售明细，不受上方年/月筛选影响。售价只用于精确同名商品之间的辅助消歧；候选不会自动写入商品别名或改写历史流水。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">已精确匹配</div><div class="stat-value">${count('matched')}</div><div class="stat-sub">已有别名或历史映射</div></div>
+        <div class="stat-card"><div class="stat-label">唯一候选</div><div class="stat-value">${count('unique_candidate')}</div><div class="stat-sub">等待人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">存在歧义</div><div class="stat-value">${count('ambiguous')}</div><div class="stat-sub">禁止自动处理</div></div>
+        <div class="stat-card"><div class="stat-label">无候选</div><div class="stat-value">${count('no_candidate')}</div><div class="stat-sub">需补主数据或人工判断</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="alias-candidate-status" onchange="UI._filterV2AliasCandidates(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-alias-candidates-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>历史名称</th><th>售价</th><th>状态</th><th>建议标准商品</th><th>候选数</th><th>影响明细/金额</th><th>期间</th></tr></thead><tbody>${rows.slice(0,50).map(r => `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td><strong>${this._escHtml(r.aliasName)}</strong></td><td>¥${this._fmt(r.unitPrice)}</td><td><span class="tag ${tagClass[r.candidateStatus] || 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${r.suggestedStandardName ? `${this._escHtml(r.suggestedStandardName)}${r.suggestedPackageSpec ? ` · ${this._escHtml(r.suggestedPackageSpec)}` : ''}` : '-'}</td><td>${r.candidateCount}</td><td>${r.lineCount} 条 / ¥${this._fmt(r.affectedAmount)}</td><td>${this._escHtml(r.firstBusinessDate)} 至 ${this._escHtml(r.lastBusinessDate)}</td></tr>`).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示影响金额最高的 50 组，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前状态没有历史商品别名候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2AliasCandidates(status) {
+    this._v2AliasCandidateFilter = status || '';
+    const card = $('#v2-alias-candidates-card');
+    if (card) card.outerHTML = this._productAliasCandidatesHtml();
+  },
+
+  _exportV2AliasCandidates() {
+    const filter = this._v2AliasCandidateFilter || '';
+    const rows = (this._v2AliasCandidates || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的商品别名候选', 'error');
+    const headers = ['候选ID','历史名称','标准化名称','历史售价','状态','匹配依据','置信度','候选数','建议商品ID','建议标准名','建议规格','建议业务类型','明细数','影响记录数','销售数量','影响金额','最早日期','最晚日期','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers, ...rows.map(r => [r.candidateId,r.aliasName,r.normalizedAlias,r.unitPrice,r.candidateStatus,r.candidateBasis,r.confidence,r.candidateCount,r.suggestedProductId,r.suggestedStandardName,r.suggestedPackageSpec,r.suggestedBusinessTypeCode,r.lineCount,r.affectedRecordCount,r.totalQuantity,r.affectedAmount,r.firstBusinessDate,r.lastBusinessDate,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `历史商品别名候选-${filter || '全部'}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 组商品别名候选`);
+  },
+
+  _productGovernanceHtml() {
+    const allRows = this._v2ProductGovernance || [];
+    const evidence = this._v2CostEvidence || [];
+    const filter = this._v2ProductGovernanceFilter || '';
+    const rows = filter ? allRows.filter(r => r.governanceStatus === filter) : allRows;
+    const labels = {
+      complete: '资料完整',
+      classification_review: '分类待补',
+      cost_evidence_review: '成本证据待补',
+      classification_and_cost_review: '分类与成本待补'
+    };
+    const costLabels = {
+      verified_sale_snapshots: '历史成交快照完整', partial_sale_snapshots: '部分成交有快照',
+      alias_reference_requires_period: '别名成本待确认期间', current_only_no_backdate: '仅有当前成本',
+      cost_evidence_missing: '无成本证据', current_reference: '当前成本参考', no_sales_cost_missing: '未销售且缺成本'
+    };
+    const needsCost = allRows.filter(r => r.unverifiedCostLineCount > 0 || r.missingCurrentCost).length;
+    const needsClassification = allRows.filter(r => r.classificationIssueCount > 0).length;
+    const verifiedLines = allRows.reduce((sum,r) => sum + (+r.snapshotEvidenceCount || 0), 0);
+    const unverifiedLines = allRows.reduce((sum,r) => sum + (+r.unverifiedCostLineCount || 0), 0);
+    const evidenceCount = type => evidence.filter(r => r.evidenceType === type).length;
+    return `<div class="card" id="v2-product-governance-card">
+      <div class="card-title">商品分类与成本证据 <span class="tag tag-info">只读复核</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2ProductGovernance()" ${rows.length ? '' : 'disabled'}>导出商品治理清单</button></div>
+      <p class="form-hint">销售成本快照只证明对应成交日；别名成本必须确认适用期间；商品当前成本仅作为更新日起参考，不自动倒推更早销售。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">分类待补商品</div><div class="stat-value">${needsClassification}</div><div class="stat-sub">标准名、规格、业务类型或标记</div></div>
+        <div class="stat-card"><div class="stat-label">成本证据待补商品</div><div class="stat-value">${needsCost}</div><div class="stat-sub">未验证历史明细 ${unverifiedLines} 条</div></div>
+        <div class="stat-card"><div class="stat-label">已验证历史明细</div><div class="stat-value">${verifiedLines}</div><div class="stat-sub">来自销售时成本快照</div></div>
+        <div class="stat-card"><div class="stat-label">成本证据记录</div><div class="stat-value">${evidence.length}</div><div class="stat-sub">成交 ${evidenceCount('sale_snapshot')} · 别名 ${evidenceCount('alias_cost_snapshot')} · 当前 ${evidenceCount('current_master_cost')}</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>治理状态</label><select id="product-governance-status" onchange="UI._filterV2ProductGovernance(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-product-governance-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>治理 ID</th><th>商品</th><th>优先级/状态</th><th>分类缺口</th><th>成本证据</th><th>历史成本观察</th><th>销售影响</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const missing = [r.missingStandardName ? '标准名' : '', r.missingPackageSpec ? '规格' : '', r.missingBusinessType ? '业务类型' : '', r.beverageClassificationConflict ? '饮料标记冲突' : '', r.missingCurrentCost ? '当前成本' : ''].filter(Boolean).join('、') || '无';
+        const observed = r.snapshotEvidenceCount ? `¥${this._fmt(r.snapshotCostMin)}${r.snapshotCostCount > 1 ? `–¥${this._fmt(r.snapshotCostMax)}` : ''}<div class="form-hint">${this._escHtml(r.snapshotObservedFrom)} 至 ${this._escHtml(r.snapshotObservedTo)}</div>` : '-';
+        return `<tr><td><code>${this._escHtml(r.governanceId)}</code></td><td><strong>${this._escHtml(r.productName)}</strong><div class="form-hint">${this._escHtml(r.productId)}</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(r.reviewPriority)}</span> ${this._escHtml(labels[r.governanceStatus] || r.governanceStatus)}</td><td>${this._escHtml(missing)}</td><td>${this._escHtml(costLabels[r.costEvidenceStatus] || r.costEvidenceStatus)}<div class="form-hint">当前成本 ¥${this._fmt(r.currentCost)}</div></td><td>${observed}</td><td>${r.salesLineCount} 条 / ¥${this._fmt(r.affectedAmount)}<div class="form-hint">未验证 ${r.unverifiedCostLineCount} 条</div></td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示销售影响最高的 50 项，可导出当前状态的完整清单。</p>' : ''}` : '<div class="empty-state">当前状态没有商品治理项目</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2ProductGovernance(status) {
+    this._v2ProductGovernanceFilter = status || '';
+    const card = $('#v2-product-governance-card');
+    if (card) card.outerHTML = this._productGovernanceHtml();
+  },
+
+  _exportV2ProductGovernance() {
+    const filter = this._v2ProductGovernanceFilter || '';
+    const rows = (this._v2ProductGovernance || []).filter(r => !filter || r.governanceStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的商品治理项目', 'error');
+    const headers = ['治理ID','优先级','治理状态','商品ID','商品名称','标准名称','包装规格','业务类型','是否饮料','缺标准名','缺规格','缺业务类型','饮料标记冲突','缺当前成本','当前成本','成本证据状态','销售明细数','未验证成本明细数','成交快照数','历史成本种数','历史成本最小值','历史成本最大值','观察开始日','观察结束日','建议历史单位成本','影响记录数','销售数量','影响金额','最早销售日','最晚销售日','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers, ...rows.map(r => [r.governanceId,r.reviewPriority,r.governanceStatus,r.productId,r.productName,r.standardName,r.packageSpec,r.businessTypeCode,r.isBeverage,r.missingStandardName,r.missingPackageSpec,r.missingBusinessType,r.beverageClassificationConflict,r.missingCurrentCost,r.currentCost,r.costEvidenceStatus,r.salesLineCount,r.unverifiedCostLineCount,r.snapshotEvidenceCount,r.snapshotCostCount,r.snapshotCostMin,r.snapshotCostMax,r.snapshotObservedFrom,r.snapshotObservedTo,r.suggestedHistoricalUnitCost,r.affectedRecordCount,r.salesQuantity,r.affectedAmount,r.firstBusinessDate,r.lastBusinessDate,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')], { type:'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `商品分类与成本证据-${filter || '全部'}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 项商品治理记录`);
+  },
+
+  _revenueAttributionHtml() {
+    const allRows = this._v2RevenueAttribution || [];
+    const filter = this._v2RevenueAttributionFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      manual_link:'已有人工归属', pending_manual_link:'人工归属待补', ambiguous_manual_links:'人工归属冲突',
+      unique_rule:'唯一规则候选', ambiguous_rules:'规则冲突', no_candidate:'无候选'
+    };
+    const count = status => allRows.filter(r => r.candidateStatus === status).length;
+    const conflictCount = count('ambiguous_rules') + count('ambiguous_manual_links');
+    const unresolvedAmount = allRows.filter(r => !['manual_link'].includes(r.candidateStatus)).reduce((sum,r) => sum + Math.abs(+r.affectedAmount || 0),0);
+    return `<div class="card" id="v2-revenue-attribution-card">
+      <div class="card-title">历史收入归属复核 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2RevenueAttribution()" ${rows.length ? '' : 'disabled'}>导出收入归属候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2RevenueAttributionPeriod)}：人工链接优先；规则只比较最高优先级。同级规则指向不同业务类型时保留冲突，不自动修改收入流水或事实口径。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">已有人工归属</div><div class="stat-value">${count('manual_link')}</div><div class="stat-sub">等待后续批次采用解释</div></div>
+        <div class="stat-card"><div class="stat-label">唯一规则候选</div><div class="stat-value">${count('unique_rule')}</div><div class="stat-sub">需人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">归属冲突</div><div class="stat-value">${conflictCount}</div><div class="stat-sub">禁止自动归属</div></div>
+        <div class="stat-card"><div class="stat-label">未解决影响金额</div><div class="stat-value">¥${this._fmt(unresolvedAmount)}</div><div class="stat-sub">含无候选和待补人工链接</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="revenue-attribution-status" onchange="UI._filterV2RevenueAttribution(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-revenue-attribution-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期</th><th>收入说明</th><th>金额</th><th>状态</th><th>建议归属</th><th>匹配依据</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const suggestion = r.suggestedBusinessTypeCode ? `${this._escHtml(r.suggestedBusinessLayerName || r.suggestedBusinessLayerCode)} / ${this._escHtml(r.suggestedBusinessTypeName || r.suggestedBusinessTypeCode)}` : '-';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><strong>${this._escHtml(r.itemName)}</strong><div class="form-hint">${this._escHtml(r.projectName || '')}</div></td><td>¥${this._fmt(r.affectedAmount)}</td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${suggestion}</td><td>${this._escHtml(r.matchedField || '-')}<div class="form-hint">${this._escHtml(r.matchedValue || '')} · ${r.topRuleCount || r.manualLinkCount || 0} 条依据</div></td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)} / ${this._escHtml(r.sourceLineKey)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的收入归属候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2RevenueAttribution(status) {
+    this._v2RevenueAttributionFilter = status || '';
+    const card = $('#v2-revenue-attribution-card');
+    if (card) card.outerHTML = this._revenueAttributionHtml();
+  },
+
+  _exportV2RevenueAttribution() {
+    const filter = this._v2RevenueAttributionFilter || '';
+    const rows = (this._v2RevenueAttribution || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的收入归属候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','收入说明','项目','影响金额','来源表','来源ID','明细键','候选依据','候选数','命中规则数','最高优先级规则数','置信度','建议业务层','建议业务类型','匹配字段','匹配值','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.itemName,r.projectName,r.affectedAmount,r.sourceTable,r.sourceId,r.sourceLineKey,r.candidateBasis,r.candidateCount,r.matchedRuleCount,r.topRuleCount,r.confidence,r.suggestedBusinessLayerCode,r.suggestedBusinessTypeCode,r.matchedField,r.matchedValue,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+    const link = document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`历史收入归属候选-${this._v2RevenueAttributionPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 条收入归属候选`);
+  },
+
+  _costAttributionHtml() {
+    const allRows = this._v2CostAttribution || [];
+    const filter = this._v2CostAttributionFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      manual_link:'已有人工归属', pending_manual_link:'人工归属待补', unique_rule:'唯一规则候选',
+      partial_rule:'部分规则候选', ambiguous_rules:'规则冲突', no_candidate:'无候选'
+    };
+    const count = status => allRows.filter(r => r.candidateStatus === status).length;
+    const conflictCount = allRows.filter(r => r.candidateStatus === 'ambiguous_rules' || r.projectMatchStatus === 'ambiguous_projects').length;
+    const unresolvedAmount = allRows.filter(r => r.candidateStatus !== 'manual_link' || ['ambiguous_projects','unmatched_project'].includes(r.projectMatchStatus)).reduce((sum,r) => sum + Math.abs(+r.affectedAmount || 0),0);
+    return `<div class="card" id="v2-cost-attribution-card">
+      <div class="card-title">历史支出与成本归属复核 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2CostAttribution()" ${rows.length ? '' : 'disabled'}>导出支出归属候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2CostAttributionPeriod)}：保留原支出类别；人工链接优先，规则只比较最高优先级。成本类型、业务层、能力轴和项目候选均不会自动改写原始支出。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">已有人工归属</div><div class="stat-value">${count('manual_link')}</div><div class="stat-sub">有效成本类型及维度</div></div>
+        <div class="stat-card"><div class="stat-label">唯一规则候选</div><div class="stat-value">${count('unique_rule')}</div><div class="stat-sub">需人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">归属冲突</div><div class="stat-value">${conflictCount}</div><div class="stat-sub">含规则或项目冲突</div></div>
+        <div class="stat-card"><div class="stat-label">未解决影响金额</div><div class="stat-value">¥${this._fmt(unresolvedAmount)}</div><div class="stat-sub">含部分候选、无候选和项目待复核</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="cost-attribution-status" onchange="UI._filterV2CostAttribution(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-cost-attribution-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期/原类别</th><th>支出说明</th><th>金额</th><th>状态</th><th>建议归属</th><th>项目关联</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const dims = [r.suggestedCostTypeName || r.suggestedCostTypeCode, r.suggestedBusinessLayerName || r.suggestedBusinessLayerCode, r.suggestedBusinessTypeName || r.suggestedBusinessTypeCode, r.suggestedCapabilityAxisName || r.suggestedCapabilityAxisCode].filter(Boolean).map(v => this._escHtml(v)).join(' / ') || '-';
+        const project = r.projectMatchStatus === 'unique_project' ? this._escHtml(r.suggestedProjectName) : r.projectMatchStatus === 'ambiguous_projects' ? '同名项目冲突' : r.projectMatchStatus === 'unmatched_project' ? '原项目待登记' : '共享 / 未指定';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}<div class="form-hint">原类别：${this._escHtml(r.originalCategory)}</div></td><td><strong>${this._escHtml(r.description || r.originalProject || '支出')}</strong><div class="form-hint">${this._escHtml(r.relatedActivity || '')}</div></td><td>¥${this._fmt(r.affectedAmount)}</td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${dims}<div class="form-hint">${this._escHtml(r.matchedField || '-')} · ${r.topRuleCount || (r.candidateBasis === 'record_business_links' ? 1 : 0)} 条依据</div></td><td>${project}<div class="form-hint">${this._escHtml(r.originalProject || r.relatedActivity || '')}</div></td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的支出归属候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2CostAttribution(status) {
+    this._v2CostAttributionFilter = status || '';
+    const card = $('#v2-cost-attribution-card');
+    if (card) card.outerHTML = this._costAttributionHtml();
+  },
+
+  _exportV2CostAttribution() {
+    const filter = this._v2CostAttributionFilter || '';
+    const rows = (this._v2CostAttribution || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的支出归属候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','原支出类型','原项目','原支出类别','支出说明','关联活动','影响金额','来源表','来源ID','明细键','候选依据','候选数','命中规则数','最高优先级规则数','置信度','建议成本类型','建议业务层','建议业务类型','建议能力轴','匹配字段','匹配值','项目匹配状态','项目候选数','建议项目ID','建议项目名称','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.originalType,r.originalProject,r.originalCategory,r.description,r.relatedActivity,r.affectedAmount,r.sourceTable,r.sourceId,r.sourceLineKey,r.candidateBasis,r.candidateCount,r.matchedRuleCount,r.topRuleCount,r.confidence,r.suggestedCostTypeCode,r.suggestedBusinessLayerCode,r.suggestedBusinessTypeCode,r.suggestedCapabilityAxisCode,r.matchedField,r.matchedValue,r.projectMatchStatus,r.projectCandidateCount,r.suggestedProjectId,r.suggestedProjectName,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});
+    const link = document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`历史支出归属候选-${this._v2CostAttributionPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);
+    this.toast(`已导出 ${rows.length} 条支出归属候选`);
+  },
+
+  _galleryLinksHtml() {
+    const allRows = this._v2GalleryLinks || [];
+    const filter = this._v2GalleryLinksFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {
+      linked_with_snapshot:'作品与快照完整', linked_missing_snapshot:'已关联但缺快照', invalid_artwork_link:'作品链接失效',
+      unique_artwork_no:'编号唯一候选', unique_title_artist:'名称/艺术家唯一候选', unique_title:'仅名称唯一候选',
+      ambiguous_artworks:'作品冲突', no_artwork_candidate:'无作品候选'
+    };
+    const uniqueCount = allRows.filter(r => ['unique_artwork_no','unique_title_artist','unique_title'].includes(r.candidateStatus)).length;
+    const problemCount = allRows.filter(r => ['invalid_artwork_link','ambiguous_artworks','no_artwork_candidate'].includes(r.candidateStatus)).length;
+    const missingSettlement = allRows.filter(r => r.settlementEvidenceStatus !== 'frozen_snapshot').length;
+    return `<div class="card" id="v2-gallery-links-card">
+      <div class="card-title">画廊历史作品与结算证据 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2GalleryLinks()" ${rows.length ? '' : 'disabled'}>导出画廊关联候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2GalleryLinksPeriod)}：作品 ID、作品编号及“名称＋艺术家”按精确证据分级。成交时结算价快照优先；当前作品价格只作复核参考，不回填历史。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">快照完整</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'linked_with_snapshot').length}</div><div class="stat-sub">作品关联及成交证据完整</div></div>
+        <div class="stat-card"><div class="stat-label">唯一作品候选</div><div class="stat-value">${uniqueCount}</div><div class="stat-sub">仍需人工确认</div></div>
+        <div class="stat-card"><div class="stat-label">作品冲突</div><div class="stat-value">${problemCount}</div><div class="stat-sub">含失效、歧义和无候选</div></div>
+        <div class="stat-card"><div class="stat-label">缺结算证据</div><div class="stat-value">${missingSettlement}</div><div class="stat-sub">当前价格不能替代历史快照</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="gallery-link-status" onchange="UI._filterV2GalleryLinks(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-gallery-links-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期</th><th>原作品信息</th><th>成交/净额</th><th>状态</th><th>建议作品</th><th>结算证据</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const suggestion = r.suggestedArtworkId ? `${this._escHtml(r.suggestedArtworkTitle)} / ${this._escHtml(r.suggestedArtworkArtist)}<div class="form-hint">${this._escHtml(r.suggestedArtworkNo)} · ${this._escHtml(r.suggestedArtworkId)}</div>` : '-';
+        const evidence = r.settlementEvidenceStatus === 'frozen_snapshot' ? `成交快照 ¥${this._fmt(r.settlementEvidenceAmount)}` : r.settlementEvidenceStatus === 'current_master_reference' ? `当前参考 ¥${this._fmt(r.settlementEvidenceAmount)}` : '缺历史结算证据';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}</td><td><strong>${this._escHtml(r.originalArtworkName || '未命名作品')}</strong><div class="form-hint">${this._escHtml(r.originalArtworkNo || '无编号')} · ${this._escHtml(r.originalArtist || '艺术家待补')}</div></td><td>¥${this._fmt(r.grossAmount)}<div class="form-hint">净额 ¥${this._fmt(r.realizedNetAmount)}</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${suggestion}</td><td>${evidence}</td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的画廊关联候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2GalleryLinks(status) {
+    this._v2GalleryLinksFilter = status || '';
+    const card = $('#v2-gallery-links-card');
+    if (card) card.outerHTML = this._galleryLinksHtml();
+  },
+
+  _exportV2GalleryLinks() {
+    const filter = this._v2GalleryLinksFilter || '';
+    const rows = (this._v2GalleryLinks || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的画廊关联候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','原作品ID','原作品编号','原作品名称','原艺术家','成交数量','成交金额','实现净额','原结算价快照','作品候选数','建议作品ID','建议作品编号','建议作品名称','建议艺术家','匹配依据','置信度','结算证据状态','结算证据金额','证据时间','来源表','来源ID','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.originalArtworkId,r.originalArtworkNo,r.originalArtworkName,r.originalArtist,r.saleQuantity,r.grossAmount,r.realizedNetAmount,r.settlementPriceSnapshot,r.artworkCandidateCount,r.suggestedArtworkId,r.suggestedArtworkNo,r.suggestedArtworkTitle,r.suggestedArtworkArtist,r.matchBasis,r.confidence,r.settlementEvidenceStatus,r.settlementEvidenceAmount,r.settlementEvidenceAt,r.sourceTable,r.sourceId,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`画廊历史关联候选-${this._v2GalleryLinksPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条画廊关联候选`);
+  },
+
+  _workshopLinksHtml() {
+    const allRows = this._v2WorkshopLinks || [];
+    const filter = this._v2WorkshopLinksFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {ready_candidate:'可复核候选',cost_review:'成本待审',missing_direct_cost:'缺直接成本',ambiguous_projects:'项目冲突',unregistered_project:'项目未登记',missing_project:'缺项目名称'};
+    const projectProblems = allRows.filter(r => ['ambiguous_projects','unregistered_project','missing_project'].includes(r.candidateStatus)).length;
+    return `<div class="card" id="v2-workshop-links-card">
+      <div class="card-title">工坊历史项目与直接成本 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2WorkshopLinks()" ${rows.length ? '' : 'disabled'}>导出工坊关联候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2WorkshopLinksPeriod)}：项目只做精确同名候选；直接成本只列同月、同项目的期间支出。待归类成本不计入确认金额，不估算、不跨月分摊。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">可复核候选</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'ready_candidate').length}</div><div class="stat-sub">项目与直接成本证据完整</div></div>
+        <div class="stat-card"><div class="stat-label">成本待审</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'cost_review').length}</div><div class="stat-sub">存在待归类或非活动成本</div></div>
+        <div class="stat-card"><div class="stat-label">项目问题</div><div class="stat-value">${projectProblems}</div><div class="stat-sub">缺名称、未登记或同名冲突</div></div>
+        <div class="stat-card"><div class="stat-label">缺直接成本</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'missing_direct_cost').length}</div><div class="stat-sub">不自动估算</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="workshop-link-status" onchange="UI._filterV2WorkshopLinks(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-workshop-links-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期/活动</th><th>原项目</th><th>收入</th><th>状态</th><th>建议项目</th><th>直接成本候选</th><th>来源</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const project = r.suggestedProjectId ? `${this._escHtml(r.suggestedProjectName)}<div class="form-hint">${this._escHtml(r.suggestedProjectId)}</div>` : '-';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}<div class="form-hint">${this._escHtml(r.activityName)}</div></td><td><strong>${this._escHtml(r.originalProjectName || '待补')}</strong></td><td>¥${this._fmt(r.affectedAmount)}<div class="form-hint">${this._fmt(r.participantCount)} 人</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td><td>${project}</td><td>确认 ¥${this._fmt(r.confirmedDirectCostAmount)}<div class="form-hint">待审成本 ¥${this._fmt(r.pendingDirectCostAmount)} · ${r.directCostCandidateCount} 条</div></td><td>${this._escHtml(r.sourceTable)} / ${this._escHtml(r.sourceId)} / ${this._escHtml(r.sourceLineKey)}</td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的工坊关联候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2WorkshopLinks(status) {
+    this._v2WorkshopLinksFilter = status || '';
+    const card = $('#v2-workshop-links-card');
+    if (card) card.outerHTML = this._workshopLinksHtml();
+  },
+
+  _exportV2WorkshopLinks() {
+    const filter = this._v2WorkshopLinksFilter || '';
+    const rows = (this._v2WorkshopLinks || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的工坊关联候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','业务日期','活动名称','活动类型','参与人数','收入金额','原项目名称','项目候选数','建议项目ID','建议项目名称','项目置信度','直接成本候选数','确认直接成本数','待审成本数','确认直接成本','待审成本','来源表','来源ID','明细键','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.businessDate,r.activityName,r.businessTypeName,r.participantCount,r.affectedAmount,r.originalProjectName,r.projectCandidateCount,r.suggestedProjectId,r.suggestedProjectName,r.projectConfidence,r.directCostCandidateCount,r.confirmedDirectCostCount,r.pendingDirectCostCount,r.confirmedDirectCostAmount,r.pendingDirectCostAmount,r.sourceTable,r.sourceId,r.sourceLineKey,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`工坊历史关联候选-${this._v2WorkshopLinksPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条工坊关联候选`);
+  },
+
+  _spaceClassificationHtml() {
+    const allRows = this._v2SpaceClassification || [];
+    const filter = this._v2SpaceClassificationFilter || '';
+    const rows = filter ? allRows.filter(r => r.candidateStatus === filter) : allRows;
+    const labels = {complete:'信息完整',ready_candidate:'可复核候选',classification_review:'分类待审',cooperation_review:'合作方式待审',contract_review:'合同待审'};
+    const businessLabels = {space_rental:'空间租赁/合作',brand_event:'品牌活动/企业合作',uncategorized_revenue:'待确认项目'};
+    const contractLabels = {present:'已有合同编号',not_required:'免费项目',missing_review:'付费项目待核',missing_required:'应有合同但缺失',duplicate:'合同编号重复'};
+    const manualCount = allRows.filter(r => ['classification_review','cooperation_review'].includes(r.candidateStatus)).length;
+    return `<div class="card" id="v2-space-classification-card">
+      <div class="card-title">空间与合作历史分类 <span class="tag tag-info">只读候选</span><button type="button" class="btn btn-sm btn-secondary" style="float:right" onclick="UI._exportV2SpaceClassification()" ${rows.length ? '' : 'disabled'}>导出空间分类候选</button></div>
+      <p class="form-hint">${this._escHtml(this._v2SpaceClassificationPeriod)}：分别复核业务类型、合作方式、合同编号和经营状态。只有明确的租赁或品牌快闪场景提供高置信建议；混合用途、重复合同和资料缺失均保留人工判断。</p>
+      <div class="stat-card-grid" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-label">信息完整</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'complete').length}</div><div class="stat-sub">四个维度已确认</div></div>
+        <div class="stat-card"><div class="stat-label">可复核候选</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'ready_candidate').length}</div><div class="stat-sub">现有字段可给出明确建议</div></div>
+        <div class="stat-card"><div class="stat-label">需人工分类</div><div class="stat-value">${manualCount}</div><div class="stat-sub">业务类型或合作方式待审</div></div>
+        <div class="stat-card"><div class="stat-label">合同待审</div><div class="stat-value">${allRows.filter(r => r.candidateStatus === 'contract_review').length}</div><div class="stat-sub">缺失或编号重复</div></div>
+      </div>
+      <div class="filter-bar" style="margin-bottom:12px"><div class="form-group"><label>候选状态</label><select id="space-classification-status" onchange="UI._filterV2SpaceClassification(this.value)"><option value="">全部</option>${Object.entries(labels).map(([value,label]) => `<option value="${value}"${filter === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div></div>
+      <div id="v2-space-classification-body">${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>候选 ID</th><th>日期/项目</th><th>执行证据</th><th>业务类型</th><th>合作方式</th><th>合同</th><th>经营状态</th><th>应收/已收</th><th>状态</th></tr></thead><tbody>${rows.slice(0,50).map(r => {
+        const originalType = businessLabels[r.originalBusinessTypeCode] || r.originalBusinessTypeCode || '待补';
+        const suggestedType = businessLabels[r.suggestedBusinessTypeCode] || r.suggestedBusinessTypeCode || '-';
+        return `<tr><td><code>${this._escHtml(r.candidateId)}</code></td><td>${this._escHtml(r.businessDate)}<div><strong>${this._escHtml(r.projectName || '未命名项目')}</strong></div><div class="form-hint">${this._escHtml(r.space)} · ${this._escHtml(r.client || '无合作方')}</div></td><td>${this._escHtml(r.executionType || '-')}<div class="form-hint">${this._escHtml(r.executionStatus || '-')} · ${this._escHtml(r.rentalType || '-')}</div></td><td>${this._escHtml(originalType)}<div class="form-hint">${r.businessTypeStatus === 'confirmed' ? '已确认' : `建议：${this._escHtml(suggestedType)} · ${this._fmt((+r.businessTypeConfidence || 0) * 100)}%`}</div></td><td>${this._escHtml(r.originalCooperationMode || '待补')}<div class="form-hint">${r.cooperationStatus === 'confirmed' ? '已确认' : `建议：${this._escHtml(r.suggestedCooperationMode || '人工判断')}`}</div></td><td>${this._escHtml(r.originalContractNo || '待补')}<div class="form-hint">${this._escHtml(contractLabels[r.contractStatus] || r.contractStatus)}${r.contractUsageCount > 1 ? ` · ${r.contractUsageCount} 个项目重复` : ''}</div></td><td>${this._escHtml(r.originalBusinessStatus || '待补')}<div class="form-hint">${r.businessStatusStatus === 'confirmed' ? '已确认' : `建议：${this._escHtml(r.suggestedBusinessStatus || '人工判断')}`}</div></td><td>¥${this._fmt(r.receivableAmount)} / ¥${this._fmt(r.receivedAmount)}<div class="form-hint">待收 ¥${this._fmt(r.outstandingAmount)}</div></td><td><span class="tag ${r.reviewPriority === 'P1' ? 'tag-warning' : 'tag-info'}">${this._escHtml(labels[r.candidateStatus] || r.candidateStatus)}</span><div class="form-hint">${this._escHtml(r.reviewNote)}</div></td></tr>`;
+      }).join('')}</tbody></table></div>${rows.length > 50 ? '<p class="form-hint">仅显示最近 50 条，可导出当前状态的完整候选清单。</p>' : ''}` : '<div class="empty-state">当前期间没有该状态的空间分类候选</div>'}</div>
+    </div>`;
+  },
+
+  _filterV2SpaceClassification(status) {
+    this._v2SpaceClassificationFilter = status || '';
+    const card = $('#v2-space-classification-card');
+    if (card) card.outerHTML = this._spaceClassificationHtml();
+  },
+
+  _exportV2SpaceClassification() {
+    const filter = this._v2SpaceClassificationFilter || '';
+    const rows = (this._v2SpaceClassification || []).filter(r => !filter || r.candidateStatus === filter);
+    if (!rows.length) return this.toast('当前状态没有可导出的空间分类候选', 'error');
+    const headers = ['候选ID','优先级','候选状态','问题数','开始日期','结束日期','空间','项目名称','合作方','执行类型','执行状态','租金类型','应收金额','已收金额','待收金额','原业务类型','业务类型状态','建议业务类型','类型置信度','原合作方式','合作方式状态','建议合作方式','原合同编号','合同状态','合同使用数','原经营状态','经营状态状态','建议经营状态','负责人','来源表','来源ID','复核说明'];
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const lines = [headers,...rows.map(r => [r.candidateId,r.reviewPriority,r.candidateStatus,r.issueCount,r.businessDate,r.endDate,r.space,r.projectName,r.client,r.executionType,r.executionStatus,r.rentalType,r.receivableAmount,r.receivedAmount,r.outstandingAmount,r.originalBusinessTypeCode,r.businessTypeStatus,r.suggestedBusinessTypeCode,r.businessTypeConfidence,r.originalCooperationMode,r.cooperationStatus,r.suggestedCooperationMode,r.originalContractNo,r.contractStatus,r.contractUsageCount,r.originalBusinessStatus,r.businessStatusStatus,r.suggestedBusinessStatus,r.projectOwner,r.sourceTable,r.sourceId,r.reviewNote])];
+    const blob = new Blob(['\uFEFF' + lines.map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`空间合作历史分类候选-${this._v2SpaceClassificationPeriod}-${filter || '全部'}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条空间分类候选`);
+  },
+
   // === 数据管理 ===
+  _governanceBatchCardHtml() {
+    const capability = Auth.isAdmin ? '可预览 · 可审计 · 可撤销' : '可预览 · 可提交 · 管理员审批';
+    return `<div class="card manage-section" id="governance-batches-card">
+        <h3>🧾 治理变更批次 <span class="tag tag-info">${capability}</span></h3>
+        <p class="manage-desc">将收入或成本归属清单中的“唯一规则”候选 ID 分批加入。应用只写解释层，不修改收入、支出及其他原始流水。</p>
+        <div class="form-grid" style="margin-bottom:14px">
+          <div class="form-group"><label>批次名称</label><input id="governance-batch-name" maxlength="120" placeholder="例如：2026 年 9 月收入归属第一批"></div>
+          <div class="form-group"><label>说明</label><input id="governance-batch-description" maxlength="500" placeholder="范围、依据或复核说明"></div>
+          <div class="form-group full"><label>候选 ID（每行一个，也可用逗号分隔）</label><textarea id="governance-candidate-ids" rows="4" placeholder="revenuecand_...&#10;costcand_..."></textarea></div>
+          <div class="form-actions full"><button type="button" class="btn btn-primary" onclick="UI._createGovernanceBatch()">创建草稿批次</button></div>
+        </div>
+        <div id="governance-batches-list"><div class="empty-state">正在加载治理批次...</div></div>
+      </div>`;
+  },
+
+  _operationsRolloutCardHtml() {
+    const mode = Auth.operationsMode;
+    const updatedAt = Auth.operationsRolloutUpdatedAt;
+    const updatedLabel = updatedAt ? String(updatedAt).slice(0, 19).replace('T', ' ') : '尚无变更记录';
+    return `<div class="card manage-section operations-rollout-card" id="operations-rollout-card">
+        <h3>🚦 2.0 运营管理灰度开关 <span class="tag tag-info">${this._escHtml(Auth.operationsRolloutLabel)}</span></h3>
+        <p class="manage-desc">控制“运营管理”入口和页面访问范围。关闭时不影响收入、支出、空间、画廊等 1.0 功能；运营敏感接口仍按服务端角色权限校验。</p>
+        <div class="operations-rollout-status">
+          <strong>当前范围：${this._escHtml(Auth.operationsRolloutLabel)}</strong>
+          <span>最近更新时间：${this._escHtml(updatedLabel)}</span>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label for="operations-rollout-mode">开放范围</label><select id="operations-rollout-mode">
+            <option value="off"${mode === 'off' ? ' selected' : ''}>关闭（所有账号隐藏）</option>
+            <option value="admin"${mode === 'admin' ? ' selected' : ''}>管理员试运行</option>
+            <option value="staff"${mode === 'staff' ? ' selected' : ''}>内部试运行（管理员与编辑）</option>
+          </select></div>
+          <div class="form-group"><label for="operations-rollout-reason">变更原因</label><input id="operations-rollout-reason" maxlength="300" placeholder="至少 4 个字，将写入审计日志"></div>
+          <div class="form-actions full"><button type="button" class="btn btn-primary" onclick="UI._saveOperationsRollout()">保存灰度范围</button></div>
+        </div>
+      </div>`;
+  },
+
+  _trialObservabilityCardHtml() {
+    return `<div class="card manage-section trial-observability-card" id="trial-observability-card">
+        <h3>🩺 2.0 试运行观测与问题闭环 <span id="trial-gate-tag" class="tag tag-info">检查中</span></h3>
+        <p class="manage-desc">集中检查版本、数据库、迁移、灰度、API 错误和耗时。P0/P1 必须完成修正并由管理员复验，才可通过 G0。</p>
+        <div id="trial-runtime-summary"><div class="empty-state">正在读取运行状态...</div></div>
+        <details class="trial-issue-form"><summary>登记试运行问题</summary>
+          <div class="form-grid" style="margin-top:14px">
+            <div class="form-group"><label for="trial-issue-severity">级别</label><select id="trial-issue-severity"><option>P0</option><option>P1</option><option selected>P2</option><option>P3</option></select></div>
+            <div class="form-group"><label for="trial-issue-title">问题标题</label><input id="trial-issue-title" maxlength="160" placeholder="明确描述触发条件和异常"></div>
+            <div class="form-group"><label for="trial-issue-owner">负责人</label><input id="trial-issue-owner" maxlength="120" placeholder="姓名或角色"></div>
+            <div class="form-group"><label for="trial-issue-due">截止日期</label><input id="trial-issue-due" type="date"></div>
+            <div class="form-group full"><label for="trial-issue-evidence">证据</label><textarea id="trial-issue-evidence" rows="2" maxlength="2000" placeholder="错误时间、接口、来源 ID、截图或日志位置"></textarea></div>
+            <div class="form-group full"><label for="trial-issue-impact">影响</label><textarea id="trial-issue-impact" rows="2" maxlength="1000" placeholder="影响范围、金额、角色或业务流程"></textarea></div>
+            <div class="form-actions full"><button type="button" class="btn btn-primary" onclick="UI._createTrialIssue()">登记问题</button></div>
+          </div>
+        </details>
+        <div id="trial-issues-list"><div class="empty-state">正在加载问题台账...</div></div>
+      </div>`;
+  },
+
   async renderManagePage() {
     const page = $('#page-manage');
     if (!Auth.hasModuleAccess('manage')) { this._noAccess(page); return; }
-    html(page, `
+    const governanceCard = this._governanceBatchCardHtml();
+    const observabilityCard = this._trialObservabilityCardHtml();
+    if (!Auth.isAdmin) {
+      html(page, `${observabilityCard}${governanceCard}`);
+      await Promise.all([this._loadTrialRunConsole(), this._loadGovernanceBatches()]);
+      return;
+    }
+    html(page, `${this._operationsRolloutCardHtml()}${observabilityCard}${governanceCard}
 <div class="card manage-section">
         <h3>📤 导出数据</h3>
         <p class="manage-desc">选择导出时间范围（留空为全部数据）：</p>
@@ -4866,7 +6668,183 @@ const UI = {
       </div>
           `);
     await this._updateManageStats();
+    await Promise.all([this._loadTrialRunConsole(), this._loadGovernanceBatches()]);
     this._checkDBStatus();
+  },
+
+  async _loadTrialRunConsole() {
+    const summaryTarget = $('#trial-runtime-summary');
+    const issueTarget = $('#trial-issues-list');
+    if (!summaryTarget || !issueTarget) return;
+    try {
+      const [runtime, issues] = await Promise.all([
+        Store._request('GET', '/rest/v1/runtime-observability'),
+        Store._request('GET', '/rest/v1/trial-run-issues')
+      ]);
+      this._trialRunIssues = issues || [];
+      const gate = runtime.gate || {};
+      const gateTag = $('#trial-gate-tag');
+      if (gateTag) {
+        gateTag.className = `tag ${gate.ready ? 'tag-success' : 'tag-warning'}`;
+        gateTag.textContent = gate.ready ? 'G0 可通过' : 'G0 已阻断';
+      }
+      const requests = runtime.requests || {};
+      const migration = runtime.migration || {};
+      summaryTarget.innerHTML = `<div class="trial-runtime-grid">
+        <article><span>应用版本</span><strong>${this._escHtml(runtime.application?.version || 'unknown')}</strong><small>运行 ${Math.floor((runtime.application?.uptimeSeconds || 0) / 60)} 分钟</small></article>
+        <article><span>数据库</span><strong>${runtime.database?.ok ? '正常' : '异常'}</strong><small>${this._fmt(runtime.database?.latencyMs || 0)} ms</small></article>
+        <article><span>迁移结构</span><strong>${migration.presentRelations || 0}/${migration.requiredRelations || 0}</strong><small>${migration.missingRelations?.length ? `缺少 ${migration.missingRelations.length} 项` : `${migration.forwardFiles || 0} 正向 · ${migration.rollbackFiles || 0} 回滚`}</small></article>
+        <article><span>灰度状态</span><strong>${this._escHtml(runtime.rollout?.mode || 'off')}</strong><small>2.0 入口范围</small></article>
+        <article><span>API 错误</span><strong>${requests.serverErrors || 0}</strong><small>窗口 ${requests.windowSize || 0} · 客户端错误 ${requests.clientErrors || 0}</small></article>
+        <article><span>P95 耗时</span><strong>${this._fmt(requests.p95Ms || 0)} ms</strong><small>慢请求 ${requests.slowRequests || 0} · 阈值 ${requests.slowThresholdMs || 0} ms</small></article>
+      </div>
+      ${gate.blockers?.length ? `<div class="trial-gate-blockers"><strong>G0 阻断项</strong>${gate.blockers.map(item => `<span>${this._escHtml(item)}</span>`).join('')}</div>` : '<div class="trial-gate-ready">数据库结构完整，当前没有未复验的 P0/P1。</div>'}
+      <details><summary>最近错误与慢请求</summary><div class="trial-request-events">${[...(requests.recentErrors || []), ...(requests.recentSlow || [])].slice(0, 12).map(row => `<code>${this._escHtml(row.at)} · ${this._escHtml(row.method)} ${this._escHtml(row.path)} · ${row.status} · ${this._fmt(row.durationMs)} ms</code>`).join('') || '<span class="form-hint">当前观测窗口没有记录</span>'}</div></details>`;
+      this._renderTrialIssues(issueTarget, issues || []);
+    } catch (error) {
+      summaryTarget.innerHTML = `<div class="empty-state">运行状态加载失败：${this._escHtml(error.message || error)}</div>`;
+      issueTarget.innerHTML = '<div class="empty-state">问题台账暂不可用</div>';
+    }
+  },
+
+  _renderTrialIssues(target, issues) {
+    if (!issues.length) {
+      target.innerHTML = '<div class="empty-state">当前没有试运行问题</div>';
+      return;
+    }
+    const statusLabels = { open: '待处理', fixing: '修正中', fixed: '待复验', verified: '已复验' };
+    target.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>级别/状态</th><th>问题与证据</th><th>负责人</th><th>修正与复验</th><th>操作</th></tr></thead><tbody>${issues.map(issue => {
+      const actions = [];
+      if (['open','fixing'].includes(issue.status)) actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','assign')">指派</button><button class="btn btn-sm btn-primary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','fix')">提交修正</button>`);
+      if (issue.status === 'fixed' && Auth.isAdmin) actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','verify')">完成复验</button>`);
+      if (['fixed','verified'].includes(issue.status)) actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._trialIssueAction('${this._escAttr(issue.id)}','reopen')">重开</button>`);
+      return `<tr><td><span class="operations-priority ${String(issue.severity).toLowerCase()}">${this._escHtml(issue.severity)}</span><div class="form-hint">${this._escHtml(statusLabels[issue.status] || issue.status)}</div></td><td><strong>${this._escHtml(issue.title)}</strong><div class="form-hint">证据：${this._escHtml(issue.evidence)}</div><div class="form-hint">影响：${this._escHtml(issue.impact)}</div></td><td>${this._escHtml(issue.owner)}<div class="form-hint">${issue.dueDate || '未设截止日期'}</div></td><td>${issue.fixVersion ? `<strong>${this._escHtml(issue.fixVersion)}</strong><div class="form-hint">${this._escHtml(issue.fixNotes)}</div>` : '尚未修正'}${issue.verificationResult ? `<div class="form-hint">复验：${this._escHtml(issue.verificationResult)}</div>` : ''}<details><summary>${issue.eventCount || 0} 个事件</summary><div class="form-hint">${(issue.events || []).map(event => `${this._escHtml(event.action)} · ${this._escHtml(event.actorName || event.actorId)} · ${this._escHtml(String(event.createdAt || '').slice(0,19).replace('T',' '))}`).join('<br>')}</div></details></td><td><div class="row-actions">${actions.join('') || '—'}</div></td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  },
+
+  async _createTrialIssue() {
+    const payload = {
+      severity: $('#trial-issue-severity')?.value,
+      title: $('#trial-issue-title')?.value.trim(),
+      evidence: $('#trial-issue-evidence')?.value.trim(),
+      impact: $('#trial-issue-impact')?.value.trim(),
+      owner: $('#trial-issue-owner')?.value.trim(),
+      dueDate: $('#trial-issue-due')?.value || null
+    };
+    if (!payload.title || !payload.evidence || !payload.impact || !payload.owner) return this.toast('请完整填写标题、证据、影响和负责人', 'error');
+    try {
+      await Store._request('POST', '/rest/v1/trial-run-issues', payload);
+      this.toast('试运行问题已登记');
+      for (const id of ['trial-issue-title','trial-issue-evidence','trial-issue-impact']) if ($('#' + id)) $('#' + id).value = '';
+      await this._loadTrialRunConsole();
+    } catch (error) { this.toast('问题登记失败：' + (error.message || error), 'error'); }
+  },
+
+  async _trialIssueAction(id, action) {
+    const issue = (this._trialRunIssues || []).find(row => row.id === id);
+    if (!issue) return this.toast('问题记录不存在', 'error');
+    let payload = {};
+    if (action === 'assign') {
+      const owner = prompt('负责人：', issue.owner || ''); if (owner === null) return;
+      const dueDate = prompt('截止日期（YYYY-MM-DD，可留空）：', issue.dueDate || ''); if (dueDate === null) return;
+      payload = { owner, dueDate: dueDate || null };
+    } else if (action === 'fix') {
+      const fixVersion = prompt('修正版本：', issue.fixVersion || ''); if (fixVersion === null) return;
+      const fixNotes = prompt('修正说明与证据：', issue.fixNotes || ''); if (fixNotes === null) return;
+      payload = { fixVersion, fixNotes };
+    } else if (action === 'verify') {
+      const verificationResult = prompt('复验范围与结果：', '复验通过：'); if (verificationResult === null) return;
+      payload = { verificationResult };
+    } else if (action === 'reopen') {
+      const reason = prompt('重开原因：', '复验发现问题仍存在：'); if (reason === null) return;
+      payload = { reason };
+    }
+    try {
+      await Store._request('POST', `/rest/v1/trial-run-issues?id=${encodeURIComponent(id)}&action=${encodeURIComponent(action)}`, payload);
+      this.toast('问题状态已更新');
+      await this._loadTrialRunConsole();
+    } catch (error) { this.toast('问题更新失败：' + (error.message || error), 'error'); }
+  },
+
+  async _saveOperationsRollout() {
+    if (!Auth.isAdmin) return this.toast('仅管理员可变更运营管理灰度范围', 'error');
+    const mode = $('#operations-rollout-mode')?.value || '';
+    const reason = $('#operations-rollout-reason')?.value.trim() || '';
+    if (reason.length < 4) return this.toast('请填写至少 4 个字的变更原因', 'error');
+    try {
+      await Auth.updateOperationsRollout(mode, reason);
+      window.refreshModuleAccess?.();
+      const operationsPage = $('#page-operations');
+      if (operationsPage?.classList.contains('active') && !Auth.canAccessOperations()) {
+        document.querySelector('.tab-btn[data-tab="revenue"]')?.click();
+      }
+      this.toast(`运营管理已切换为“${Auth.operationsRolloutLabel}”`);
+      await this.renderManagePage();
+    } catch (error) {
+      this.toast('灰度范围保存失败：' + (error.message || error), 'error');
+    }
+  },
+
+  async _createGovernanceBatch() {
+    const name = $('#governance-batch-name')?.value.trim() || '';
+    const description = $('#governance-batch-description')?.value.trim() || '';
+    const candidateIds = ($('#governance-candidate-ids')?.value || '').split(/[\s,，;；]+/).map(x => x.trim()).filter(Boolean);
+    if (!name) return this.toast('请输入治理批次名称', 'error');
+    if (!candidateIds.length) return this.toast('请至少填写一个候选 ID', 'error');
+    try {
+      await Store._request('POST', '/rest/v1/governance-batches?action=create', { name, description, candidateIds });
+      if ($('#governance-batch-name')) $('#governance-batch-name').value = '';
+      if ($('#governance-batch-description')) $('#governance-batch-description').value = '';
+      if ($('#governance-candidate-ids')) $('#governance-candidate-ids').value = '';
+      this.toast(`已创建包含 ${candidateIds.length} 条候选的草稿批次`);
+      await this._loadGovernanceBatches();
+    } catch (error) { this.toast('创建失败：' + (error.message || error), 'error'); }
+  },
+
+  async _loadGovernanceBatches() {
+    const target = $('#governance-batches-list');
+    if (!target) return;
+    try {
+      const batches = await Store._request('GET', '/rest/v1/governance-batches');
+      this._governanceBatches = batches || [];
+      const statusLabels = {draft:'草稿',pending_review:'待审核',approved:'已批准',rejected:'已拒绝',applied:'已应用',reverted:'已撤销'};
+      if (!batches.length) { target.innerHTML = '<div class="empty-state">尚无治理批次。请从治理候选清单复制唯一规则候选 ID 后创建草稿。</div>'; return; }
+      target.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>批次</th><th>状态</th><th>项目/金额</th><th>dry-run 结果</th><th>审计</th><th>操作</th></tr></thead><tbody>${batches.map(batch => {
+        const summary = batch.dryRunSummary || {};
+        const actions = [];
+        if (batch.status === 'draft') {
+          actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','dry-run')">dry-run</button>`);
+          if (batch.dryRunAt && Number(summary.invalidItemCount || 0) === 0) actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','submit')">提交审核</button>`);
+        } else if (batch.status === 'pending_review') {
+          if (Auth.isAdmin) actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','approve')">批准</button><button class="btn btn-sm btn-secondary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','reject')">拒绝</button>`);
+          else actions.push('<span class="form-hint">等待管理员审批</span>');
+        } else if (batch.status === 'approved' && Auth.isAdmin) actions.push(`<button class="btn btn-sm btn-primary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','apply')">应用批次</button>`);
+        else if (batch.status === 'applied' && Auth.isAdmin) actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._governanceBatchAction('${this._escAttr(batch.id)}','revert')">撤销批次</button>`);
+        if (batch.dryRunAt) actions.push(`<button class="btn btn-sm btn-secondary" onclick="UI._exportGovernanceBatch('${this._escAttr(batch.id)}')">导出影响报告</button>`);
+        return `<tr><td><strong>${this._escHtml(batch.name)}</strong><div class="form-hint"><code>${this._escHtml(batch.id)}</code></div><div class="form-hint">${this._escHtml(batch.description || '')}</div></td><td><span class="tag ${batch.status === 'applied' ? 'tag-success' : ['rejected','reverted'].includes(batch.status) ? 'tag-warning' : 'tag-info'}">${this._escHtml(statusLabels[batch.status] || batch.status)}</span></td><td>${batch.itemCount} 条<div class="form-hint">影响金额 ¥${this._fmt(batch.affectedAmount)}</div></td><td>${batch.dryRunAt ? `有效 ${summary.validItemCount || 0} · 无效 ${summary.invalidItemCount || 0}<div class="form-hint">新增解释 ${summary.createCount || 0} · 原始流水变更 ${summary.sourceFactsChanged || 0}</div>` : '尚未预览'}</td><td>${batch.eventCount} 个事件<div class="form-hint">创建 ${this._escHtml(String(batch.createdAt || '').slice(0,19).replace('T',' '))}</div><details><summary>项目与事件</summary><div class="form-hint">${(batch.items || []).map(item => `${this._escHtml(item.candidateId)} · ${this._escHtml(item.validationStatus)}`).join('<br>')}</div><div class="form-hint">${(batch.events || []).map(event => `${this._escHtml(event.action)} · ${this._escHtml(event.actorName || event.actorId)}`).join('<br>')}</div></details></td><td><div class="row-actions">${actions.join('')}</div></td></tr>`;
+      }).join('')}</tbody></table></div>`;
+    } catch (error) { target.innerHTML = `<div class="empty-state">治理批次加载失败：${this._escHtml(error.message || error)}</div>`; }
+  },
+
+  async _governanceBatchAction(id, action) {
+    const confirmText = action === 'apply' ? '确认应用该治理批次？系统只写入业务归属解释层，并保留完整审计。' : action === 'revert' ? '确认撤销该治理批次？仅恢复本批次创建或替换的解释层记录。' : '';
+    if (confirmText && !confirm(confirmText)) return;
+    const notes = {approve:'管理员已复核 dry-run 影响报告',reject:'管理员拒绝该批次'};
+    try {
+      await Store._request('POST', `/rest/v1/governance-batches?id=${encodeURIComponent(id)}&action=${encodeURIComponent(action)}`, notes[action] ? { note: notes[action] } : {});
+      const actionLabels = {'dry-run':'影响预览完成',submit:'已提交审核',approve:'批次已批准',reject:'批次已拒绝',apply:'批次已应用',revert:'批次已撤销'};
+      this.toast(actionLabels[action] || '操作完成');
+      await this._loadGovernanceBatches();
+    } catch (error) { this.toast('操作失败：' + (error.message || error), 'error'); }
+  },
+
+  _exportGovernanceBatch(id) {
+    const batch = (this._governanceBatches || []).find(x => x.id === id);
+    if (!batch) return this.toast('治理批次不存在', 'error');
+    const headers = ['批次ID','批次名称','批次状态','候选类型','候选ID','来源表','来源ID','明细键','验证状态','验证错误','影响金额','建议业务层','建议业务类型','建议成本类型','建议能力轴','应用前解释','应用后解释'];
+    const rows = (batch.items || []).map(item => { const p=item.proposedPayload||{}; return [batch.id,batch.name,batch.status,item.candidateType,item.candidateId,item.sourceTable,item.sourceId,item.sourceLineKey,item.validationStatus,(item.validationErrors||[]).join('；'),item.affectedAmount,p.businessLayerCode,p.businessTypeCode,p.costTypeCode,p.capabilityAxisCode,JSON.stringify(item.beforePayload||null),JSON.stringify(item.appliedPayload||null)]; });
+    const quote = value => `"${String(value ?? '').replace(/"/g,'""')}"`;
+    const blob = new Blob(['\uFEFF' + [headers,...rows].map(line => line.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`治理批次影响报告-${batch.id}.csv`;link.click();URL.revokeObjectURL(link.href);this.toast(`已导出 ${rows.length} 条治理变更`);
   },
 
   async _updateManageStats() {
