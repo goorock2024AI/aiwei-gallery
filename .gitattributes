@@ -1,0 +1,4 @@
+# Preserve vendor assets byte-for-byte when adopting the production baseline.
+00_工作台/运营数据管理/app/lib/chart.umd.min.js -text
+00_工作台/运营数据管理/app/lib/supabase.umd.min.js -text
+00_工作台/运营数据管理/app/lib/xlsx.full.min.js -text
