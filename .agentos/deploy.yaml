@@ -1,0 +1,18 @@
+schema_version: agentos.deploy.v0.1
+project_id: goorock2024AI--aiwei-gallery
+enabled: true
+branch: codex/shared-auto-deploy
+compose_files:
+  - .agentos/compose.production.yaml
+services:
+  - api
+  - nginx
+init_services: []
+migration: null
+health_checks:
+  - url: http://127.0.0.1:8081/healthz
+    status: 200
+  - url: http://127.0.0.1:8081/
+    status: 200
+  - url: http://127.0.0.1:8081/rest/v1/revenue_facts?limit=1
+    status: 401
