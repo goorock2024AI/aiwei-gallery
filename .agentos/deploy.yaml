@@ -10,7 +10,7 @@ services:
 init_services: []
 migration:
   service: api
-  command: [node, /app/coffee-migrate.js]
+  command: [node, /app/scripts/deploy-report-migrate.js]
 health_checks:
   - url: http://127.0.0.1:8081/rest/v1/operations-reports?type=weekly
     status: 401

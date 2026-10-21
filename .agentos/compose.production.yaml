@@ -14,6 +14,7 @@ services:
     volumes:
       - uploads-data:/uploads
       - report-archive:/report-archive
+      - /opt/aiwei/config:/run/aiwei-config:ro
     healthcheck:
       test: [CMD-SHELL, 'wget -qO- http://127.0.0.1:3000/healthz >/dev/null']
       interval: 10s
@@ -30,6 +31,7 @@ services:
       - ../00_工作台/运营数据管理/app/index.html:/usr/share/nginx/html/index.html:ro
       - ../00_工作台/运营数据管理/app/analysis.html:/usr/share/nginx/html/analysis.html:ro
       - ../00_工作台/运营数据管理/app/operations-report.html:/usr/share/nginx/html/operations-report.html:ro
+      - ../00_工作台/运营数据管理/app/daily-brief.html:/usr/share/nginx/html/daily-brief.html:ro
       - ../00_工作台/运营数据管理/app/js:/usr/share/nginx/html/js:ro
       - ../00_工作台/运营数据管理/app/css:/usr/share/nginx/html/css:ro
       - ../00_工作台/运营数据管理/app/lib:/usr/share/nginx/html/lib:ro
