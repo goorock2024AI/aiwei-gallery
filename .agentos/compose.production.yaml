@@ -10,8 +10,10 @@ services:
       DB_PASS: ${DB_PASSWORD:?server production.env must contain DB_PASSWORD}
       PORT: 3000
       UPLOAD_DIR: /uploads
+      REPORT_ARCHIVE_DIR: /report-archive
     volumes:
       - uploads-data:/uploads
+      - report-archive:/report-archive
     healthcheck:
       test: [CMD-SHELL, 'wget -qO- http://127.0.0.1:3000/healthz >/dev/null']
       interval: 10s
@@ -49,3 +51,6 @@ volumes:
   uploads-data:
     external: true
     name: aiwei_uploads-data
+
+  report-archive:
+    name: aiwei_report-archive

@@ -12,6 +12,8 @@ migration:
   service: api
   command: [node, /app/coffee-migrate.js]
 health_checks:
+  - url: http://127.0.0.1:8081/rest/v1/operations-reports?type=weekly
+    status: 401
   - url: http://127.0.0.1:8081/js/inventory-inbox.js
     status: 200
   - url: http://127.0.0.1:8081/css/inventory-inbox.css
