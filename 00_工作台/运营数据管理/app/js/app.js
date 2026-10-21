@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-const APP_VERSION = '2.0.0-rc.17';
-  const LAST_UPDATE = '2026-10-15';
+const APP_VERSION = '2.0.0-rc.18';
+  const LAST_UPDATE = '2026-10-21';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
     const icpEl = document.getElementById('sidebar-icp');
@@ -59,6 +59,7 @@ const APP_VERSION = '2.0.0-rc.17';
         case 'space': await UI.renderSpacePage(); break;
         case 'daily-closing': await UI.renderDailyClosingPage(); break;
         case 'project-list': await UI.renderProjectListPage(); break;
+        case 'inventory': await InventoryInbox.render(); break;
         case 'operations': await OperationsDashboard.render(); break;
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;

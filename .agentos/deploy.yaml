@@ -8,8 +8,16 @@ services:
   - api
   - nginx
 init_services: []
-migration: null
+migration:
+  service: api
+  command: [node, /app/coffee-migrate.js]
 health_checks:
+  - url: http://127.0.0.1:8081/js/inventory-inbox.js
+    status: 200
+  - url: http://127.0.0.1:8081/css/inventory-inbox.css
+    status: 200
+  - url: http://127.0.0.1:8081/rest/v1/coffee-inventory
+    status: 401
   - url: http://127.0.0.1:8081/healthz
     status: 200
   - url: http://127.0.0.1:8081/

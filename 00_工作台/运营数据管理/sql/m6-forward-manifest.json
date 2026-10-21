@@ -106,9 +106,17 @@
     {
       "path": "sql/20261015_expense_pdf_revisions.sql",
       "sha256": "b4a08596e55db28cba2a162cbd234646a9076a3b48decdaac653610ec2b2e0a6"
+    },
+    {
+      "path": "sql/20261021_coffee_inventory.sql",
+      "sha256": "93b46a661fc44ef718532808125ef7bbfbef00cb05b282926fad3d3eb4b1561d"
     }
   ],
   "rollback": [
+    {
+      "path": "sql/20261021_coffee_inventory_rollback.sql",
+      "sha256": "6385e1265559be10969dab153bce9c1ded740e7ef109fa15b0e8a02e9fce61ce"
+    },
     {
       "path": "sql/20261015_expense_pdf_revisions_rollback.sql",
       "sha256": "81c9f4abeb720d4a63dd1e573cc7fa44a9624b379cca6e4a691255162ddab3de"

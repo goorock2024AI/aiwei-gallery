@@ -1479,6 +1479,7 @@ const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensu
 const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGovernanceBatches = require('./governance-batches')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
+const handleCoffeeInventory = require('./coffee-inventory')({ pool, getRequester, ensureRole, sendJSON, sendError });
 const handleOperationsReports = require('./operations-reports')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
 const handleItemAnalysis = require('./operations-item-analysis')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
 const trialObservability = require('./trial-observability')({
@@ -1520,6 +1521,8 @@ const server = http.createServer((req, res) => {
       trialObservability.handleTrialRunIssues(req, res, urlInfo.query);
     } else if (parts[2] === 'operations-rollout') {
       handleOperationsRollout(req, res);
+    } else if (parts[2] === 'coffee-inventory') {
+      handleCoffeeInventory(req, res);
     } else if (parts[2] === 'operations-reports') {
       handleOperationsReports(req, res, urlInfo.query);
     } else if (parts[2] === 'operations-item-analysis') {
