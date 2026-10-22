@@ -7,7 +7,8 @@ async function send(pool,row,{config=process.env,fetcher=fetch,now=new Date()}={
  if(config.DAILY_SEND_ENABLED!=='true')return {state:'disabled'};const target=webhook(config);if(!target)return {state:'not_configured'};
  if(row.business_date!==core.day(now))throw Error('自动发送仅限当日日报；历史修订不会自动补发');
  const outcomes=[];
- for(const part of ['text','image']){
+ // Group delivery is text-only until the redesigned image is approved.
+ for(const part of ['text']){
   const db=await pool.connect();let dispatch;
   try{await db.query('BEGIN');await db.query("INSERT INTO operations_daily_dispatch(brief_id,channel_hash,part,state) VALUES($1,$2,$3,'retry') ON CONFLICT DO NOTHING",[row.id,target.channel,part]);
    dispatch=(await db.query('SELECT * FROM operations_daily_dispatch WHERE brief_id=$1 AND channel_hash=$2 AND part=$3 FOR UPDATE',[row.id,target.channel,part])).rows[0];
@@ -25,6 +26,6 @@ async function send(pool,row,{config=process.env,fetcher=fetch,now=new Date()}={
   }catch{/* Do not log credential-bearing URLs. Unknown delivery is not safe to retry blindly. */}
   await pool.query("UPDATE operations_daily_dispatch SET state=$4,last_code=$5,next_attempt_at=CASE WHEN $4='retry' THEN NOW()+interval '5 minutes' ELSE NULL END,updated_at=NOW() WHERE brief_id=$1 AND channel_hash=$2 AND part=$3",[row.id,target.channel,part,state,code]);outcomes.push({part,state});if(state!=='accepted')break;
  }
- return {state:outcomes.length===2&&outcomes.every(r=>r.state==='accepted')?'accepted':'attention',parts:outcomes};
+ return {state:outcomes.length===1&&outcomes.every(r=>r.state==='accepted')?'accepted':'attention',parts:outcomes};
 }
 module.exports={webhook,summary,send};
