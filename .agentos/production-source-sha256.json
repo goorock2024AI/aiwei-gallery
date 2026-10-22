@@ -43,7 +43,7 @@
   "report-archive.js": "44c97bdc647a51b56547c43311fbe7b2d3f60e19801136e4dc0abbd8060cb09b",
   "weekly-management.js": "496ec1ba3e300c7477e6d0bd7743b86aec050033bf8b54b9fc832f334dbc208a",
   "weekly-management-store.js": "f7b2989766932be9a6dd1764a6a43febe9d05eb04d6317e6cf98daf6df76c48c",
-  "weekly-management-api.js": "2fd533d871c9bfe59de75d40993b84c881b77e325f28050e3ced4f0287391406",
+  "weekly-management-api.js": "2c1ca2644253773b39e92ca998ed56677e6b1ded29352efbe4d50952ef9c5162",
   "weekly-management-dispatch.js": "60e5d2ebb1dd5204fbb0538a6d2d168a36f634ad5a2f6ee6b4b1f03e01244837",
   "weekly-management-config.js": "42b3080987ec42cb11263635ae076af26f80903f40ba9779a60e4569682990fb",
   "scripts/weekly-management-worker.js": "365ffe766c3ab392c3d32e003dcd788dbe327f89159fc01fc9f22e370290b590",

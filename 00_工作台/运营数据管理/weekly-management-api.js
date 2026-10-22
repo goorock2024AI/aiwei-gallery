@@ -21,8 +21,8 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
    return sendJSON(res,200,{operatorInput:await store.operatorInput(pool,start),runs,previous:prior,delivery,attempts,schedule:{timezone:'Asia/Shanghai',approved:true,cutoff:'周一12:00',prepare:'13:00',agent:'14:00',review:'15:00',publish:'16:00',enabled:config.WEEKLY_PREPARE_ENABLED==='true',owner:'管理员'},sendEnabled:config.WEEKLY_SEND_ENABLED==='true',channel:'与经营日报相同的内部群（启用前核对服务器配置）',memberReceipt:'接口接受不代表成员收到',todos});
   }
   if(req.method!=='POST')return sendError(res,405,'不支持该操作');
-  let raw='';for await(const chunk of req){raw+=chunk.toString('utf8');if(Buffer.byteLength(raw)>200000)throw Object.assign(Error('内容过大'),{status:413});}
-  const body=JSON.parse(raw);
+  const chunks=[];let bytes=0;for await(const chunk of req){const buffer=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);bytes+=buffer.length;if(bytes>200000)throw Object.assign(Error('内容过大'),{status:413});chunks.push(buffer);}
+  const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if(['send','retry'].includes(body.action)){
    if(!ensureRole(res,user,['admin']))return;
    const result=await require('./weekly-management-dispatch').dispatch(pool,body.id,{config,actor:user.id,retry:body.action==='retry'});return sendJSON(res,200,result);
