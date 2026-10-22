@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Aiwei delivery after 18:20 and revisit unresolved incidents
+[Timer]
+OnCalendar=*-*-* 18:21:00 Asia/Shanghai
+OnCalendar=*-*-* 19..23:00:00 Asia/Shanghai
+OnCalendar=*-*-* 09,12:00:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1s
+Unit=aiwei-daily-check.service
+[Install]
+WantedBy=timers.target

@@ -14,6 +14,6 @@ function sections(p){
  const tomorrow=[`· 天气预报：${w.status==='ok'?w.tomorrowText+'。':'暂未取得。'}`,c?.suggestedGrams>0?'· 优先落实咖啡豆补货，做好现场接待准备。':'· 核对备料安排，做好现场接待准备。'].join('\n');
  return [['今日经营',income],['今日天气',weather],['备料提醒',stock],['今日复盘',review],['明日重点',tomorrow]];
 }
-function note(p){return p.finalized?'':`※ 本期为${clock(p.generatedAt)}暂报，日结完成后更新。`;}
+function note(p){const time=Number.isNaN(Date.parse(p.cutoffTime))?p.generatedAt:p.cutoffTime;const date=Number.isNaN(Date.parse(time))?p.date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(time));return '统计截止：'+date+' '+clock(time)+'（北京时间）｜'+(p.finalized?'日结已完成':'暂报，日结未完成');}
 function text(p){return `艾维美术馆｜${p.date}经营日报\n今日复盘 · 明日提示\n\n`+sections(p).map(([title,body],i)=>`${['📊','🌦','☕','📝','📌'][i]} ${title}\n${body}`).join('\n\n')+(note(p)?'\n\n'+note(p):'');}
 module.exports={sections,note,text,version:'1.0'};

@@ -2,7 +2,7 @@
 // Physical consumption, not net accounting revenue. Refunds do not unmake coffee.
 const HOUR = 3600000, DAY = 24 * HOUR;
 const DEFAULTS = { gramsPerCup: 20, leadHours: 60, targetDays: 6, packGrams: null,
-  freshDays: null, openDays: null, arrivalAgeDays: null, openHour: 10, closeHour: 18, excludedNames: [] };
+  freshDays: null, openDays: null, arrivalAgeDays: null, openHour: 10, closeHour: 17.5, excludedNames: [] };
 const calendarSource = 'https://www.beijing.gov.cn/fuwu/bmfw/sy/jrts/202511/t20251104_4258838.html';
 const holidays = [['2026-01-01','2026-01-03'],['2026-02-15','2026-02-23'],['2026-04-04','2026-04-06'],['2026-05-01','2026-05-05'],['2026-06-19','2026-06-21'],['2026-09-25','2026-09-27'],['2026-10-01','2026-10-07']];
 const workdays = ['2026-01-04','2026-02-14','2026-02-28','2026-05-09','2026-09-20','2026-10-10'];

@@ -1,0 +1,9 @@
+[Unit]
+Description=Evening and next-day Aiwei daily reconciliation (Beijing time)
+[Timer]
+OnCalendar=*-*-* 09..23:00/5:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1s
+Unit=aiwei-daily-review.service
+[Install]
+WantedBy=timers.target

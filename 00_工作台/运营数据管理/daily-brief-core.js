@@ -50,7 +50,7 @@ function assemble(collected,date,now,weather,previous){
  const metrics=summarize(collected.finance),closing=metrics.closing;
  if(date===day(now))previous=null;
  const finalized=closing.length>0&&closing.every(s=>['已确认','已复核','已结账','已日结','已完成'].includes(s));
- const snapshot={schemaVersion:1,date,generatedAt:now,cutoffTime:'18:00 Asia/Shanghai',closeTime:'17:30',sourceHash:collected.sourceHash,
+ const snapshot={schemaVersion:1,date,generatedAt:now,cutoffTime:now,closeTime:'17:30',sourceHash:collected.sourceHash,
  finalized,metrics,finance:collected.finance,weather:previous?.weather||weather,coffee:previous?.coffee??collected.coffee,
  quality:{dayClosingComplete:finalized,weatherMissing:(previous?.weather||weather).status!=='ok',historicalStockUnavailable:!previous&&date!==day(now)}};
  snapshot.analysis=fallback(snapshot);return snapshot;
