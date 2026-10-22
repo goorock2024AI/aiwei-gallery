@@ -1,0 +1,9 @@
+[Unit]
+Description=Aiwei weekly preparation and published text outbox (no AI authoring or auto publication)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec aiwei-api-1 node /app/scripts/weekly-management-worker.js
+TimeoutStartSec=240

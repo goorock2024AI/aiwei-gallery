@@ -31,6 +31,7 @@ services:
       - ../00_工作台/运营数据管理/app/index.html:/usr/share/nginx/html/index.html:ro
       - ../00_工作台/运营数据管理/app/analysis.html:/usr/share/nginx/html/analysis.html:ro
       - ../00_工作台/运营数据管理/app/operations-report.html:/usr/share/nginx/html/operations-report.html:ro
+      - ../00_工作台/运营数据管理/app/weekly-management.html:/usr/share/nginx/html/weekly-management.html:ro
       - ../00_工作台/运营数据管理/app/daily-brief.html:/usr/share/nginx/html/daily-brief.html:ro
       - ../00_工作台/运营数据管理/app/js:/usr/share/nginx/html/js:ro
       - ../00_工作台/运营数据管理/app/css:/usr/share/nginx/html/css:ro

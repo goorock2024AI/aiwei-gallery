@@ -33,7 +33,7 @@ async function context(db, start, end) {
     basis: '月度指标按自然月从经营事实重新计算；周报仅提供历史判断、假设、行动和待核实事项，跨月周不得整周累加。',
     reports: rows.map(r => ({ id:r.id, title:r.title, summary:r.summary, start:r.start_date, end:r.end_date,
       crossesBoundary:r.start_date<start||r.end_date>end, packetId:r.packet_id, sourceSha256:r.sha256,
-      sections:r.content.sections, actions:r.content.actions, weekly:r.content.weekly,
+      sections:r.content.sections, actions:r.content.actions, weekly:r.content.weekly, management:r.content.management||null,
       reportVersion:r.content.reportVersion||1, artifact:r.content.artifact||null }))
   };
 }

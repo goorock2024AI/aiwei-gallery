@@ -12,6 +12,10 @@ async function collectPacket(db,current,previous,context=''){
   const id=crypto.randomUUID(),payload={schemaVersion:1,metricVersion:'operations-report-20261011',id,generatedAt:new Date().toISOString(),current:{start:current.start,end:current.end},previous:{start:previous.start,end:previous.end},context,questions:['馆内总人均收入与四项人均收入如何变化？','套票销量变化及普通票和单售咖啡的同步变化？','销量变化中客流与销量转化分别贡献多少？','毛利变化是否可计算，已知毛利和成本缺口是什么？'],methodology:['到馆=普通门票数量+套票数量；免费未登记访客未覆盖','销量转化非购买人数转化；套票咖啡权益非实际核销杯量','四项范围=套票、非饮料文创、工坊、画廊；完整馆内收入另含普通票、咖啡与饮料','未知成本不补零，部分覆盖毛利不得当完整毛利；空间独立；待归属退款不强制分配','同日与前后变化非因果；对比须考虑营业日、展览、假日、促销'],business,funnel,products,periodExpenses,refundDays,fingerprints,complete:true};
   payload.schemaVersion=2;payload.ruleVersion=metrics.RULE_VERSION;payload.metrics=metrics.calculate(payload);
   payload.weeklyReviews=await require('./report-archive').context(db,current.start,current.end);
+  if((Date.parse(current.end)-Date.parse(current.start))/86400000===6&&new Date(current.start+'T12:00:00Z').getUTCDay()===1){
+   const initialized=(await db.query("SELECT to_regclass('public.operations_weekly_runs') ready")).rows[0].ready;
+   if(initialized)payload.managementContext=await require('./weekly-management-store').collect(db,payload);
+  }
   payload.sha256=crypto.createHash('sha256').update(require("./operations-reports").canonical(payload)).digest('hex');
 
  return payload;

@@ -1482,6 +1482,7 @@ const handleGovernanceBatches = require('./governance-batches')({ pool, getReque
 const handleCoffeeInventory = require('./coffee-inventory')({ pool, getRequester, ensureRole, sendJSON, sendError });
 const handleDailyBriefs = require('./daily-brief-api')({ pool, getRequester, ensureRole, sendJSON, sendError });
 const handleOperationsReports = require('./operations-reports')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
+const handleWeeklyManagement = require('./weekly-management-api')({pool,getRequester,ensureRole,sendJSON,sendError});
 const handleItemAnalysis = require('./operations-item-analysis')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
 const trialObservability = require('./trial-observability')({
   pool, getRequester, ensureRole, sendJSON, sendError,
@@ -1526,6 +1527,8 @@ const server = http.createServer((req, res) => {
       handleCoffeeInventory(req, res);
     } else if (parts[2] === 'daily-briefs') {
       handleDailyBriefs(req, res, urlInfo.query);
+    } else if (parts[2] === 'weekly-management') {
+      handleWeeklyManagement(req,res,urlInfo.query);
     } else if (parts[2] === 'operations-reports') {
       handleOperationsReports(req, res, urlInfo.query);
     } else if (parts[2] === 'operations-item-analysis') {

@@ -10,9 +10,12 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-  const APP_VERSION = '1.1.0';
-  const LAST_UPDATE = '2026-07-07 16:30';
+const APP_VERSION = '2.0.0-rc.22';
+  const LAST_UPDATE = '2026-10-22';
+  const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
+    const icpEl = document.getElementById('sidebar-icp');
+    if (icpEl) icpEl.textContent = ICP_BEIAN;
     const el = document.getElementById('sidebar-version');
     if (el) el.textContent = 'v' + APP_VERSION;
     const upEl = document.getElementById('sidebar-updated');
@@ -28,6 +31,10 @@
 
     // 未登录不允许切换
     if (!Auth.isLoggedIn) { return; }
+    if (!Auth.hasModuleAccess(tab)) {
+      if (tab === 'operations') UI.toast('运营管理入口当前未对该账号开放', 'error');
+      return;
+    }
 
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
@@ -35,6 +42,12 @@
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     const page = document.getElementById('page-' + tab);
     if (page) page.classList.add('active');
+
+    // 移动端抽屉：选中 tab 后自动关闭
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.classList.remove('open');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (overlay) overlay.classList.remove('show');
 
     // 异步渲染
     try {
@@ -44,11 +57,18 @@
         case 'expense': await UI.renderExpensePage(); break;
         case 'gallery': await UI.renderGalleryPage(); break;
         case 'space': await UI.renderSpacePage(); break;
+        case 'daily-closing': await UI.renderDailyClosingPage(); break;
+        case 'project-list': await UI.renderProjectListPage(); break;
+        case 'inventory': await InventoryInbox.render(); break;
+        case 'operations': await OperationsDashboard.render(); break;
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;
         case 'products': await UI.renderProductPage(); break;
         case 'users': await UI.renderUsersPage(); break;
         case 'logs': await UI.renderLogsPage(); break;
+        default:
+          UI.toast('未知页面：' + tab + '（请强刷浏览器 Ctrl+Shift+R）', 'error');
+          break;
       }
     } catch (err) {
       console.error('渲染错误：', err);
@@ -74,7 +94,7 @@
           $('#login-overlay').style.display = 'none';
           $('#change-pwd-overlay').style.display = 'flex';
         } else {
-          _enterApp();
+          await _enterApp();
         }
       } catch (err) {
         if (errEl) errEl.textContent = err.message;
@@ -97,7 +117,7 @@
         await Auth.changePassword(pwd);
         UI.toast('密码修改成功');
         $('#change-pwd-overlay').style.display = 'none';
-        _enterApp();
+        await _enterApp();
       } catch (err) {
         if (errEl) errEl.textContent = err.message;
       } finally {
@@ -123,20 +143,45 @@
     }
   });
 
+  // 移动端：汉堡按钮打开/关闭侧边栏抽屉
+  function _toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (!sidebar) return;
+    sidebar.classList.toggle('open');
+    overlay?.classList.toggle('show');
+  }
+  document.addEventListener('click', function(e) {
+    if (e.target.closest('#sidebar-overlay')) {
+      const sidebar = document.getElementById('sidebar');
+      sidebar?.classList.remove('open');
+      document.getElementById('sidebar-overlay')?.classList.remove('show');
+    }
+  });
+  document.getElementById('sidebar-toggle')?.addEventListener('click', _toggleSidebar);
+
+  function _applyModuleAccess() {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      const tab = btn.dataset.tab;
+      if (tab) btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
+    });
+    const operationsButton = document.querySelector('.tab-btn[data-tab="operations"]');
+    if (operationsButton) {
+      operationsButton.querySelector('.operations-rollout-badge')?.remove();
+      operationsButton.title = '经营分析报告 · 月度与专项';
+    }
+  }
+  window.refreshModuleAccess = _applyModuleAccess;
+
   // 进入主应用
-  function _enterApp() {
+  async function _enterApp() {
     $('#login-overlay').style.display = 'none';
     $('#change-pwd-overlay').style.display = 'none';
     $('#app').style.display = '';
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    // 角色权限控制：各 tab 按 hasModuleAccess 显示/隐藏
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      const tab = btn.dataset.tab;
-      if (tab) {
-        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
-      }
-    });
+    await Auth.loadOperationsRollout();
+    _applyModuleAccess();
     // 正常初始化
     _initApp();
   }
@@ -162,16 +207,11 @@
     // 已登录
     $('#sidebar-user').style.display = 'flex';
     $('#sidebar-username').textContent = Auth.currentUser.displayName;
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      const tab = btn.dataset.tab;
-      if (tab) {
-        btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
-      }
-    });
     if (Auth.currentUser.needPasswordChange) {
+      $('#login-overlay').style.display = 'none';
       $('#change-pwd-overlay').style.display = 'flex';
       return;
     }
-    await _initApp();
+    await _enterApp();
   });
 })();

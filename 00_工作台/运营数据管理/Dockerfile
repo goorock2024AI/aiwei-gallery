@@ -8,6 +8,10 @@ RUN npm ci --omit=dev && \
 
 COPY server.js expense-entry.js expense-pdf-entry.js gallery-entry.js space-entry.js governance-batches.js coffee-inventory.js coffee-forecast.js operations-item-analysis.js operations-reports.js operations-report-metrics.js operations-report-html.js trial-observability.js VERSION ./
 COPY report-archive.js operations-report-packet.js ./
+COPY weekly-management.js weekly-management-store.js weekly-management-api.js weekly-management-dispatch.js ./
+COPY weekly-management-config.js ./
+COPY scripts/weekly-management-worker.js scripts/weekly-management-migrate.js ./scripts/
+COPY sql/20261022_weekly_management.sql ./sql/
 COPY scripts/archive-weekly-deployment.js ./scripts/archive-weekly-deployment.js
 COPY daily-brief-policy.js daily-brief-lifecycle.js daily-brief-runner.js daily-brief-template.js daily-brief-core.js daily-brief-render.js daily-brief-connectors.js daily-brief-store.js daily-brief-api.js daily-brief-dispatch.js ./
 COPY scripts/align-coffee-closing.js scripts/deploy-report-migrate.js scripts/daily-brief-worker.js scripts/daily-brief-migrate.js ./scripts/

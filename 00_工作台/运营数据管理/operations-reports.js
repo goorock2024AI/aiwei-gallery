@@ -25,13 +25,14 @@ function validateReport(body){
  if(!Array.isArray(body.sections)||body.sections.length<4||body.sections.length>16)throw fail('报告须包含4至16个分析章节');
  const sections=body.sections.map(s=>({title:text(s?.title,160),body:text(s?.body,14000)}));
  if(!Array.isArray(body.actions)||!body.actions.length||body.actions.length>12)throw fail('请提供可执行建议');
- const actions=body.actions.map(a=>({action:text(a?.action,1200),measure:text(a?.measure,1200)}));
+ const actions=body.actions.map(a=>({action:text(a?.action,1200),measure:text(a?.measure,1200),...(body.management?{owner:text(a.owner||'待指定',120),due:text(a.due,10),nextReview:text(a.nextReview,1200)}:{})}));
  const reportType=body.reportType||'special';if(!['monthly','special','weekly'].includes(reportType))throw fail('报告类型无效');
  const topic=body.topic==null?'':text(body.topic,120),ruleVersion=body.ruleVersion||metrics.RULE_VERSION;if(ruleVersion!==metrics.RULE_VERSION)throw fail('基准规则版本不受支持');
  const supersedes=body.supersedes||null;if(supersedes!==null&&(typeof supersedes!=='string'||supersedes.length>100))throw fail('修订来源无效');
  const weekly=reportType==='weekly'?validateWeekly(body.weekly):undefined;
  if(weekly&&(sections.length!==5||actions.length>3))throw fail('标准周报须有四章经营分析、一个附录和最多三项行动');
- return {packetId:body.packetId,title,summary,sections,actions,reportType,topic,ruleVersion,supersedes,...(weekly?{weekly}:{})};
+ if(body.management&&(!weekly||body.management.version!=='weekly-management-1.0'))throw fail('周报经营闭环版本无效');
+ return {packetId:body.packetId,title,summary,sections,actions,reportType,topic,ruleVersion,supersedes,...(weekly?{weekly}:{}),...(body.management?{management:body.management}:{})};
 }
 module.exports=function({pool,getRequester,ensureRole,sendJSON,sendError,toCamel,readOperationsRollout,rolloutEnabledForRole}){
  const readBody=async req=>{let body='';for await(const chunk of req){body+=chunk.toString('utf8');if(Buffer.byteLength(body)>200000)throw fail('内容过大',413);}try{return JSON.parse(body);}catch{throw fail('JSON格式错误');}};
@@ -57,15 +58,31 @@ module.exports=function({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
    if(!ensureRole(res,user,['admin']))return;
    const report=validateReport(body),id=crypto.randomUUID();db=await pool.connect();await db.query('BEGIN');
    const source=(await db.query('SELECT * FROM operations_analysis_packets WHERE id=$1',[report.packetId])).rows[0];if(!source)throw fail('来源数据包不存在',404);
+   let weeklyRun;
+   if(report.reportType==='weekly'){
+    if(!body.runId||!report.management)throw fail('请先通过周报工作台准备、分析并复核，再发布',409);
+    const done=(await db.query('SELECT * FROM operations_weekly_runs WHERE id=$1',[body.runId])).rows[0];
+    if(done?.state==='published'){
+     if(canonical(done.analysis.report)!==canonical(report))throw fail('已发布内容不能覆盖，请新增修订',409);
+     await db.query('ROLLBACK');return sendJSON(res,200,{id:done.report_id,packetId:report.packetId,reused:true});
+    }
+    weeklyRun=await require('./weekly-management-store').gatePublish(db,report,source,body.runId);
+   }
    const start=source.start_date,end=source.end_date,last=new Date(Date.UTC(Number(start.slice(0,4)),Number(start.slice(5,7)),0)).toISOString().slice(0,10);if(report.reportType==='monthly'&&(start.slice(8)!=='01'||end!==last))throw fail('月度报告需使用完整自然月数据包');
    if(report.reportType==='weekly'&&((Date.parse(end)-Date.parse(start))/86400000!==6||new Date(start+'T00:00:00Z').getUTCDay()!==1))throw fail('周报须使用周一至周日完整七天数据包');
    if(report.reportType==='weekly'&&report.weekly.sources.some(s=>!/^\d{4}-\d{2}-\d{2}$/.test(s.published)||s.published>end))throw fail('周报预测来源不得晚于报告期末');
    await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[report.reportType==='monthly'?'monthly:'+start:report.reportType==='weekly'?'weekly:'+start:report.supersedes||crypto.randomUUID()]);
    let reportVersion=1;if(report.supersedes){const old=(await db.query(`SELECT r.*,${reportTypeSQL} report_type,p.start_date,p.end_date FROM operations_analysis_reports r JOIN operations_analysis_packets p ON p.id=r.packet_id WHERE r.id=$1`,[report.supersedes])).rows[0];if(!old)throw fail('修订报告不存在',404);if(old.report_type!==report.reportType||old.start_date!==start||old.end_date!==end)throw fail('修订须对应同类型、同经营期间的报告');if((await db.query("SELECT id FROM operations_analysis_reports WHERE content->>'supersedes'=$1",[report.supersedes])).rows.length)throw fail('该报告已有修订版，请修订最新版本',409);reportVersion=(old.content.reportVersion||1)+1;}
    else if(report.reportType==='monthly'&&(await db.query(`SELECT r.id FROM operations_analysis_reports r JOIN operations_analysis_packets p ON p.id=r.packet_id WHERE ${reportTypeSQL}='monthly' AND p.start_date=$1 AND NOT EXISTS(SELECT 1 FROM operations_analysis_reports n WHERE n.content->>'supersedes'=r.id)`,[start])).rows.length)throw fail('该月已有报告，请指定原报告进行修订',409);
+   if(report.reportType==='weekly'&&!report.supersedes&&(await db.query("SELECT r.id FROM operations_analysis_reports r JOIN operations_analysis_packets p ON p.id=r.packet_id WHERE r.content->>'reportType'='weekly' AND p.start_date=$1",[start])).rows.length)throw fail('该周已有报告，请指定最新版本进行修订',409);
    const publishedAt=new Date().toISOString(),content={...report,packetId:undefined,title:undefined,summary:undefined,reportVersion};
    const artifact=archive.write({id,title:report.title,summary:report.summary,content,packetId:report.packetId,startDate:start,endDate:end,compareStart:source.compare_start,compareEnd:source.compare_end,publishedAt,sha256:source.sha256,displayMetrics:metrics.display(source.payload)});pendingArtifact=artifact;content.artifact=artifact;
    await db.query('INSERT INTO operations_analysis_reports(id,packet_id,title,summary,content,published_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)',[id,report.packetId,report.title,report.summary,JSON.stringify(content),user.id]);
+   if(weeklyRun){
+    await db.query("UPDATE operations_weekly_runs SET state='published',report_id=$2 WHERE id=$1",[weeklyRun.id,id]);
+    await require('./weekly-management-store').event(db,weeklyRun.id,'publish',user.id,{reportId:id,sourceSha256:source.sha256});
+    await require('./weekly-management-dispatch').enqueue(db,{id,summary:report.summary,startDate:start,endDate:end,content});
+   }
    await db.query(`INSERT INTO operation_logs(id,user_id,action,table_name,record_id,details) VALUES($1,$2,'publish_operations_report','operations_analysis_reports',$3,$4::jsonb)`,[crypto.randomUUID(),user.id,id,JSON.stringify({packetId:report.packetId,title:report.title})]);await db.query('COMMIT');committed=true;return sendJSON(res,201,{id,packetId:report.packetId});
   }
   if(body.action!=='packet')throw fail('操作无效');
