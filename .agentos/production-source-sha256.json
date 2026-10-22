@@ -50,6 +50,6 @@
   "scripts/weekly-management-migrate.js": "b4654d9cfb32e5ac5bf5b39375bed79748b2d59d3aee886ed049cbb4d9e2aea5",
   "scripts/deploy-report-migrate.js": "01dc168dd82e6947015f85288a799ff0dc0bb71ce8febd4fefa84b27828bde29",
   "sql/20261022_weekly_management.sql": "2dc333b259a91363a1bacda3d4be7f2cb94f54b579e50fea16ffc49ecef35464",
-  "app/weekly-management.html": "222334bc4f1c58cb56f4a47109630eb8d7ea04e2cf045840c6c8af31f6ffc59a",
-  "app/js/weekly-management-page.js": "ce254921270eeb4eb5e36f12c2f98b155478f9db41d2cb3e2b063a27082dce15"
+  "app/weekly-management.html": "6725fb80de0f97a2c77a66daee6e38b56e1e7107aec6538596fc06db08620392",
+  "app/js/weekly-management-page.js": "ef4a0059ba1c9ad19606c424134eeeb137659148d3b930ada0f64a9cf1f1214d"
 }
