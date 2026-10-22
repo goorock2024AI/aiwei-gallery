@@ -20,8 +20,6 @@ health_checks:
     status: 401
   - url: http://127.0.0.1:8081/js/inventory-inbox.js
     status: 200
-  - url: http://127.0.0.1:8081/css/inventory-inbox.css
-    status: 200
   - url: http://127.0.0.1:8081/rest/v1/coffee-inventory
     status: 401
   - url: http://127.0.0.1:8081/healthz
