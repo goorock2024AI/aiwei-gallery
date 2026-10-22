@@ -16,6 +16,18 @@ function feedback(v){
  if(effect!=='unconfirmed'&&!['done','partial'].includes(execution))throw fail('尚未执行不能判断已经有效');
  return {execution,effect,evidence:evidence.slice(0,3000),result:required(v.result||'待确认','观察结果'),recommendation};
 }
+function cleanInput(value,packet){
+ const input=packet.managementContext.operatorInput;if(!input?.text?.trim())return null;
+ if(!value||value.inputId!==input.id||value.textHash!==input.textHash)throw fail('请先由Agent清理本次运营补充，不能跳过或沿用旧版整理');
+ if(!Array.isArray(value.items)||value.items.length<1||value.items.length>24)throw fail('运营补充须区分陈述、判断、猜测、建议及待核实事项');
+ const kinds=['operator_report','opinion','hypothesis','proposal','needs_confirmation'];
+ const items=value.items.map(item=>{
+  if(!kinds.includes(item.kind))throw fail('运营补充分类无效');
+  const sourceExcerpt=required(item.sourceExcerpt,'原文依据',1800);if(!input.text.includes(sourceExcerpt))throw fail('整理结果的原文依据不在本次补充中');
+  return {kind:item.kind,sourceExcerpt,interpretation:required(item.interpretation,'整理结果',1800),verification:item.kind==='operator_report'?'operator_reported_unverified':'not_a_confirmed_fact'};
+ });
+ return {version:'operator-input-review-1.0',inputId:input.id,textHash:input.textHash,items};
+}
 function validateAnalysis(value,packet){
  if(!value||!Array.isArray(value.judgments)||value.judgments.length<2||value.judgments.length>3)throw fail('请提供两至三项经营判断');
  const judgments=value.judgments.map(j=>{if(!['fact','explanation','hypothesis'].includes(j.kind))throw fail('请区分事实、合理解释、待验证原因');return {kind:j.kind,judgment:required(j.judgment,'判断'),evidence:required(j.evidence,'证据'),implication:required(j.implication,'经营含义')};});
@@ -38,7 +50,7 @@ function validateAnalysis(value,packet){
  const previous=packet.managementContext.previous;
  const issuedTarget=previous?.issuedTarget??previous?.management?.nextTarget;if(issuedTarget!=null&&currentTarget!==issuedTarget)throw fail('本周指标须承接上一期保存值，不得覆盖');
  const actionReviewAdvice=(packet.managementContext.actionReviews||[]).map(r=>{const advice=(value.actionReviewAdvice||[]).find(a=>a.index===r.index);if(!advice)return {index:r.index,recommendation:'pending',reason:'待管理员补充证据后复核'};if(!['pending','continue','adjust','stop'].includes(advice.recommendation))throw fail('复核建议无效');return {index:r.index,recommendation:advice.recommendation,reason:required(advice.reason,'复核建议依据')};});
- return {version:VERSION,judgments,forecast,actions,currentTarget,nextTarget,targetAuthority:'director',monthAllocations:allocations,actionReviewAdvice,
+ return {version:VERSION,operatorInputReview:cleanInput(value.operatorInputReview,packet),judgments,forecast,actions,currentTarget,nextTarget,targetAuthority:'director',monthAllocations:allocations,actionReviewAdvice,
   reviewText:required(value.reviewText,'上期行动复核与经营评价'),importantCorrection:value.importantCorrection===true,correctionReason:value.importantCorrection?required(value.correctionReason,'重要更正原因',300):null};
 }
 function trajectory(records){

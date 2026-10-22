@@ -12,6 +12,16 @@ async function actionFeedback(db,reportId,index,cutoff=new Date().toISOString())
  }
  return matches.sort((a,b)=>+new Date(b.created_at)-+new Date(a.created_at))[0]||null;
 }
+async function operatorInput(db,start,cutoff=new Date().toISOString()){
+ const row=(await db.query("SELECT id,actor,detail,created_at FROM operations_weekly_events WHERE kind='operator_input' AND detail->>'start'=$1 AND created_at<=$2 ORDER BY created_at DESC,id DESC LIMIT 1",[start,cutoff])).rows[0];
+ return row?{id:row.id,text:row.detail.text,textHash:row.detail.textHash,submittedAt:row.created_at,submittedBy:row.actor,sourceKind:'operator_free_text',requiresAgentReview:!!row.detail.text.trim()}:null;
+}
+async function submittedInput(db,requestId,start,text){
+ const row=(await db.query("SELECT w.id,p.payload packet,e.detail FROM operations_weekly_events e JOIN operations_weekly_runs w ON w.id=e.run_id JOIN operations_analysis_packets p ON p.id=w.packet_id WHERE e.kind='input_submitted' AND e.detail->>'requestId'=$1",[requestId])).rows[0];
+ if(!row)return null;
+ if(row.detail.start!==start||row.detail.textHash!==core.hash({text}))throw Object.assign(Error('同一次提交标识对应的内容不同，请重新提交'),{status:409});
+ return {id:row.id,packet:row.packet,reused:true};
+}
 async function collect(db,packet){
  const range=domain.week(packet.current.start),cutoff=packet.generatedAt;if(range.end!==packet.current.end)throw Error('资料必须是完整周');
  const history=(await db.query(latestSQL,[range.start,cutoff])).rows;
@@ -52,7 +62,8 @@ async function collect(db,packet){
  const forecast=previous?.issuedForecast;
  const previousForecast=forecast&&forecast.start===range.start&&forecast.end===range.end&&forecast.basis===domain.BASIS?{...domain.difference(domain.income(packet.metrics.current),forecast.value),reportId:forecast.reportId,methodVersion:forecast.methodVersion,basis:forecast.basis,eligible:+new Date(forecast.publishedAt)<=+new Date(range.start+'T16:00:00+08:00')&&forecast.sampleCutoff<range.start}:null;
  const calendar={rule:'普通周一闭馆，节假日周一开馆，长假后首个工作日补休；节日及临时例外以有证据的实际安排为准，未确认不统计真实营业天数',days:Array.from({length:14},(_,i)=>{const date=core.add(range.start,i),weekday=new Date(date+'T12:00:00Z').getUTCDay();return {date,weekday:weekday||7,weekend:weekday===0||weekday===6,background:daily.reports.find(r=>r.date===date)?.background||null,holidayAndActualOpen:'须结合官方日历及实际例外复核'};})};
- const context={version:domain.VERSION,cutoff,previous,actionReviews:reviews,daily,calendar,monthGoals,monthActuals:months,previousForecast,forecastHistory:domain.trajectory(records),
+ const input=await operatorInput(db,range.start,cutoff);
+ const context={version:domain.VERSION,cutoff,operatorInput:input,operatorInputInstructions:['先清理运营人员自由输入，再用于经营分析；原文不是结构化事实或执行证明','区分运营人员陈述、个人判断、猜测、建议和待核实事项；保留对应原句，不补写未提到的情况','对照正式收入、日报及上期行动；未提及的行动保持待确认，不把自述执行或主观有效当成独立证实','有非空输入时，analysis.operatorInputReview须承接inputId/textHash并提供分类、原句、整理结果；不能仅复述或直接把意见当结论'],previous,actionReviews:reviews,daily,calendar,monthGoals,monthActuals:months,previousForecast,forecastHistory:domain.trajectory(records),
   financeBasis:'正式统一快照按业务日期取全馆收入；日报只作背景；跨月按自然月重取，不整周累加',todos:[]};
  if(!daily.complete)context.todos.push('日报资料未齐或未完成日结/修订：缺失'+daily.missing.length+'天，暂报'+daily.provisional.length+'天，待修订'+daily.stale.length+'天');
  if(reviews.some(r=>r.feedback.execution==='pending'))context.todos.push('上期行动缺反馈，执行和效果均待确认');
@@ -60,7 +71,7 @@ async function collect(db,packet){
  if(!previousForecast)context.todos.push('未取得上期同范围同口径的结构化预测，保留历史原文，不反解析展示数字');
  return JSON.parse(JSON.stringify(context));
 }
-const sourceSignature=c=>core.hash({previous:c.previous,actionReviews:c.actionReviews,daily:c.daily,monthGoals:c.monthGoals,monthActuals:c.monthActuals,forecastHistory:c.forecastHistory});
+const sourceSignature=c=>core.hash({operatorInput:c.operatorInput??null,previous:c.previous,actionReviews:c.actionReviews,daily:c.daily,monthGoals:c.monthGoals,monthActuals:c.monthActuals,forecastHistory:c.forecastHistory});
 const financeSignature=p=>core.hash(JSON.parse(JSON.stringify({current:p.current,previous:p.previous,business:p.business,funnel:p.funnel,products:p.products,periodExpenses:p.periodExpenses,refundDays:p.refundDays,metrics:p.metrics})));
 async function event(db,runId,kind,actor,detail){await db.query('INSERT INTO operations_weekly_events(id,run_id,kind,actor,detail) VALUES($1,$2,$3,$4,$5::jsonb)',[crypto.randomUUID(),runId,kind,actor,JSON.stringify(detail)]);}
 async function prepare(db,start,actor){
@@ -73,7 +84,7 @@ async function assertFresh(db,packet){
  const fresh=await require('./operations-report-packet').collectPacket(db,packet.current,packet.previous,packet.context);
  if(financeSignature(fresh)!==financeSignature(packet)||sourceSignature(fresh.managementContext)!==sourceSignature(packet.managementContext))throw Object.assign(Error('资料已补录或修订，请重新准备并复核；原快照仍保留'),{status:409});
 }
-function management(packet,analysis){const c=packet.managementContext;return {...analysis,cutoff:c.cutoff,sourceContextHash:sourceSignature(c),actual:domain.income(packet.metrics.current),previousActual:domain.income(packet.metrics.previous),previousForecast:c.previousForecast,actionReviews:c.actionReviews.map(r=>({...r,advice:analysis.actionReviewAdvice.find(a=>a.index===r.index)})),daily:c.daily,monthActuals:c.monthActuals,monthGoals:c.monthGoals,forecastHistory:c.forecastHistory};}
+function management(packet,analysis){const c=packet.managementContext;return {...analysis,cutoff:c.cutoff,operatorInput:c.operatorInput??null,sourceContextHash:sourceSignature(c),actual:domain.income(packet.metrics.current),previousActual:domain.income(packet.metrics.previous),previousForecast:c.previousForecast,actionReviews:c.actionReviews.map(r=>({...r,advice:analysis.actionReviewAdvice.find(a=>a.index===r.index)})),daily:c.daily,monthActuals:c.monthActuals,monthGoals:c.monthGoals,forecastHistory:c.forecastHistory};}
 function overview(m){const d=m.previousForecast,delta=core.money(m.actual-m.currentTarget);return [
  ['本周实际收入',m.actual.toFixed(2)+'元',`上周${m.previousActual.toFixed(2)}元，变化${core.money(m.actual-m.previousActual)}元`],
  ['本周收入指标完成情况',m.currentTarget.toFixed(2)+'元；完成'+(m.currentTarget>0?(m.actual/m.currentTarget*100).toFixed(1)+'%':'率不适用'),`差额${delta}元`],
@@ -87,4 +98,4 @@ async function gatePublish(db,report,source,runId){
  await assertFresh(db,source.payload);if(!source.payload.managementContext.daily.complete)throw Object.assign(Error('日报资料不足，不能发布完整正式周报'),{status:409});
  return run;
 }
-module.exports={collect,sourceSignature,financeSignature,event,prepare,assertFresh,management,overview,gatePublish,actionFeedback};
+module.exports={operatorInput,submittedInput,collect,sourceSignature,financeSignature,event,prepare,assertFresh,management,overview,gatePublish,actionFeedback};

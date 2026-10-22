@@ -18,7 +18,7 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
    if(runs[0]?.state==='reviewed')todos.push('待管理员正式发布（16:00节点）');
    const missed=(await pool.query("SELECT detail FROM operations_weekly_events WHERE kind='cutoff_missed' AND detail->>'start'=$1 LIMIT 1",[start])).rows[0];
    if(!runs.length&&missed)todos.push('12:00截止快照未取得，不能倒填；请管理员决定按实际截止重新准备');
-   return sendJSON(res,200,{runs,previous:prior,delivery,attempts,schedule:{timezone:'Asia/Shanghai',approved:true,cutoff:'周一12:00',prepare:'13:00',agent:'14:00',review:'15:00',publish:'16:00',enabled:config.WEEKLY_PREPARE_ENABLED==='true',owner:'管理员'},sendEnabled:config.WEEKLY_SEND_ENABLED==='true',channel:'与经营日报相同的内部群（启用前核对服务器配置）',memberReceipt:'接口接受不代表成员收到',todos});
+   return sendJSON(res,200,{operatorInput:await store.operatorInput(pool,start),runs,previous:prior,delivery,attempts,schedule:{timezone:'Asia/Shanghai',approved:true,cutoff:'周一12:00',prepare:'13:00',agent:'14:00',review:'15:00',publish:'16:00',enabled:config.WEEKLY_PREPARE_ENABLED==='true',owner:'管理员'},sendEnabled:config.WEEKLY_SEND_ENABLED==='true',channel:'与经营日报相同的内部群（启用前核对服务器配置）',memberReceipt:'接口接受不代表成员收到',todos});
   }
   if(req.method!=='POST')return sendError(res,405,'不支持该操作');
   let raw='';for await(const chunk of req){raw+=chunk.toString('utf8');if(Buffer.byteLength(raw)>200000)throw Object.assign(Error('内容过大'),{status:413});}
@@ -28,6 +28,18 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
    const result=await require('./weekly-management-dispatch').dispatch(pool,body.id,{config,actor:user.id,retry:body.action==='retry'});return sendJSON(res,200,result);
   }
   db=await pool.connect();await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+  if(body.action==='submit-input'){
+   req.weeklySubmission=body;
+   const range=domain.week(body.start);if(range.end>=core.day(new Date()))throw Object.assign(Error('请在该周结束后提交'),{status:400});
+   if(typeof body.text!=='string'||body.text.length>6000)throw Object.assign(Error('补充内容最多6000字'),{status:400});
+   if(typeof body.requestId!=='string'||!(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(body.requestId)))throw Object.assign(Error('提交标识无效'),{status:400});
+   const existing=await store.submittedInput(db,body.requestId,body.start,body.text);if(existing){await db.query('COMMIT');return sendJSON(res,200,existing);}
+   const detail={start:body.start,text:body.text,textHash:core.hash({text:body.text})};
+   await db.query("INSERT INTO operations_weekly_events(id,run_id,kind,actor,detail) VALUES($1,NULL,'operator_input',$2,$3::jsonb)",[body.requestId,user.id,JSON.stringify(detail)]);
+   await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',['weekly-prepare:'+body.start]);
+   const result=await store.prepare(db,body.start,user.id);await store.event(db,result.id,'input_submitted',user.id,{requestId:body.requestId,start:body.start,textHash:detail.textHash});
+   await db.query('COMMIT');return sendJSON(res,201,result);
+  }
   if(body.action==='feedback'){
    if(!Number.isInteger(body.index)||body.index<0||body.index>2)throw Object.assign(Error('行动序号无效'),{status:400});
    const report=(await db.query("SELECT content FROM operations_analysis_reports WHERE id=$1 AND content->>'reportType'='weekly'",[body.reportId])).rows[0];
@@ -56,5 +68,7 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
    await db.query("UPDATE operations_weekly_runs SET state='reviewed',reviewed_by=$2,reviewed_at=NOW() WHERE id=$1",[run.id,user.id]);await store.event(db,run.id,'review',user.id,{confirmed:true,sourceSha256:run.payload.sha256});await db.query('COMMIT');return sendJSON(res,200,{id:run.id,state:'reviewed',report:run.analysis.report});
   }
   throw Object.assign(Error('操作无效'),{status:400});
- }catch(e){if(db)await db.query('ROLLBACK').catch(()=>{});sendError(res,e.status||400,e.status?e.message:'周报操作失败，请检查输入及初始化状态');}finally{db?.release();}
+ }catch(e){if(db)await db.query('ROLLBACK').catch(()=>{});
+  if(e.code==='23505'&&req.method==='POST'&&req.weeklySubmission){try{const b=req.weeklySubmission,existing=await store.submittedInput(pool,b.requestId,b.start,b.text);if(existing)return sendJSON(res,200,existing);}catch(conflict){return sendError(res,conflict.status||409,conflict.message);}}
+  sendError(res,e.status||400,e.status?e.message:'周报操作失败，请检查输入及初始化状态');}finally{db?.release();}
 };
