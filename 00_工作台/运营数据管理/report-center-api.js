@@ -22,7 +22,7 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
   if(!ensureRole(res,user,['admin']))return;
   let chunks=[],size=0;for await(const chunk of req){size+=chunk.length;if(size>10000)throw fail('内容过大',413);chunks.push(Buffer.from(chunk));}
   let body;try{body=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw fail('请求格式无效');}
-  if(!body||body.action!=='set-target'||!validMonth(body.month)||typeof body.amount!=='number'||!Number.isFinite(body.amount)||body.amount<=0||body.amount>999999999||Math.abs(body.amount*100-Math.round(body.amount*100))>0.00001)throw fail('请输入有效月份及大于零、最多两位小数的收入目标');
+  if(!body||body.action!=='set-target'||!validMonth(body.month)||typeof body.amount!=='number'||!Number.isFinite(body.amount)||body.amount<=0||body.amount>999999999||core.money(body.amount)!==body.amount)throw fail('请输入有效月份及大于零、最多两位小数的收入目标');
   if(typeof body.version!=='string'||!/^[a-f0-9]{64}$/.test(body.version))throw fail('请先刷新目标数据');
   const reason=typeof body.reason==='string'?body.reason.trim():'';if(reason.length>1000)throw fail('调整原因过长');
   db=await pool.connect();await db.query('BEGIN');await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',['operations-month-targets']);

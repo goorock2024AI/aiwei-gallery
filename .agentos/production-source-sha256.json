@@ -52,7 +52,7 @@
   "sql/20261022_weekly_management.sql": "2dc333b259a91363a1bacda3d4be7f2cb94f54b579e50fea16ffc49ecef35464",
   "app/weekly-management.html": "57654427d99d93a67d9d6be764eeb283f74ac48323f28a143ed895eae3641c8c",
   "app/js/weekly-management-page.js": "f2372001c29fdd1a0bed45fc7873e6883ec87a5b8a995b3112091c53fe76004b",
-  "report-center-api.js": "b4671d122ddc61745c0138c16a2286f38d5891d6d39f4b0d692cb717938628ce",
+  "report-center-api.js": "98916818ccf0936fbea76f8a4e2c0afdae559127c8692b73c6787ed522bc864e",
   "app/js/operations-report-hub.js": "1e9927104be66bad6d6c8caa5f5bf77f09af0ab00083648fc35715f6a0159195",
   "app/css/operations-report-hub.css": "9308bd8c9c86c612af2970041ffc73e6d77f0f5ccfe5dacae42d8f93929a212e"
 }
