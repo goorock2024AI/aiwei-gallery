@@ -7,7 +7,7 @@ RUN npm ci --omit=dev && \
     npm cache clean --force
 
 COPY server.js expense-entry.js expense-pdf-entry.js gallery-entry.js space-entry.js governance-batches.js coffee-inventory.js coffee-forecast.js operations-item-analysis.js operations-reports.js operations-report-metrics.js operations-report-html.js trial-observability.js VERSION ./
-COPY report-archive.js operations-report-packet.js ./
+COPY report-archive.js operations-report-packet.js report-center-api.js ./
 COPY weekly-management.js weekly-management-store.js weekly-management-api.js weekly-management-dispatch.js ./
 COPY weekly-management-config.js ./
 COPY scripts/weekly-management-worker.js scripts/weekly-management-migrate.js ./scripts/

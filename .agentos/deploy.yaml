@@ -12,13 +12,13 @@ migration:
   service: api
   command: [node, /app/scripts/deploy-report-migrate.js]
 health_checks:
-  - url: http://127.0.0.1:8081/weekly-management.html
+  - url: http://127.0.0.1:8081/css/operations-report-hub.css
     status: 200
   - url: http://127.0.0.1:8081/rest/v1/weekly-management?start=2026-10-12
     status: 401
   - url: http://127.0.0.1:8081/rest/v1/operations-reports?type=weekly
     status: 401
-  - url: http://127.0.0.1:8081/js/inventory-inbox.js
+  - url: http://127.0.0.1:8081/js/operations-report-hub.js
     status: 200
   - url: http://127.0.0.1:8081/rest/v1/coffee-inventory
     status: 401
@@ -30,5 +30,5 @@ health_checks:
     status: 200
   - url: http://127.0.0.1:8081/js/app.js
     status: 200
-  - url: http://127.0.0.1:8081/rest/v1/revenue_facts?limit=1
+  - url: http://127.0.0.1:8081/rest/v1/report-center?month=2026-10
     status: 401

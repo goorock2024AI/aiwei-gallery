@@ -18,8 +18,12 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
     res.writeHead(200,{'Content-Type':q.format==='html'?'text/html;charset=utf-8':'image/png','Content-Disposition':`attachment; filename="daily-${row.business_date}-v${row.revision}.${q.format}"`,'Cache-Control':'private, no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"});return res.end(bytes);}
    const {finance,...payload}=row.payload;if(!['admin','editor'].includes(user.role))delete payload.sourceHash;return sendJSON(res,200,{id:row.id,revision:row.revision,...payload});
   }
-  if(q.date)core.validateDate(q.date);const limit=Number(q.limit||20);if(!Number.isInteger(limit)||limit<1||limit>50)return sendError(res,400,'分页数量无效');
-  const rows=(await pool.query(`SELECT DISTINCT ON(business_date) id,business_date,revision,payload->'finalized' finalized,created_at FROM operations_daily_briefs ${q.date?'WHERE business_date=$2':''} ORDER BY business_date DESC,revision DESC LIMIT $1`,q.date?[limit,q.date]:[limit])).rows;
-  sendJSON(res,200,{reports:rows});
+  if(q.date)core.validateDate(q.date);if(q.month&&!/^(20\d{2})-(0[1-9]|1[0-2])$/.test(q.month))return sendError(res,400,'月份无效');
+  const limit=Number(q.limit||20),offset=Number(q.offset||0);if(!Number.isInteger(limit)||limit<1||limit>50||!Number.isInteger(offset)||offset<0||offset>100000)return sendError(res,400,'分页参数无效');
+  const params=[],where=[];if(q.date){params.push(q.date);where.push('business_date=$'+params.length);}if(q.month){params.push(q.month);where.push('substring(business_date,1,7)=$'+params.length);}
+  const clause=where.length?'WHERE '+where.join(' AND '):'';
+  const total=Number((await pool.query(`SELECT COUNT(DISTINCT business_date)::int count FROM operations_daily_briefs ${clause}`,params)).rows[0].count);
+  const rows=(await pool.query(`SELECT * FROM (SELECT DISTINCT ON(business_date) id,business_date,revision,supersedes,payload->'finalized' finalized,created_at FROM operations_daily_briefs ${clause} ORDER BY business_date DESC,revision DESC) d ORDER BY business_date DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`,[...params,limit,offset])).rows;
+  sendJSON(res,200,{reports:rows,total,limit,offset});
  }catch(e){sendError(res,400,'日报请求失败，请检查日期或功能初始化状态');}
 };

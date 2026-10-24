@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-const APP_VERSION = '2.0.0-rc.23';
-  const LAST_UPDATE = '2026-10-22';
+const APP_VERSION = '2.0.0-rc.24';
+  const LAST_UPDATE = '2026-10-24';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
     const icpEl = document.getElementById('sidebar-icp');
@@ -168,7 +168,7 @@ const APP_VERSION = '2.0.0-rc.23';
     const operationsButton = document.querySelector('.tab-btn[data-tab="operations"]');
     if (operationsButton) {
       operationsButton.querySelector('.operations-rollout-badge')?.remove();
-      operationsButton.title = '经营分析报告 · 月度与专项';
+      operationsButton.title = '经营分析报告 · 日报、周报与月度目标';
     }
   }
   window.refreshModuleAccess = _applyModuleAccess;

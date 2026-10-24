@@ -1169,8 +1169,8 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
-          if (dbTable === 'app_config' && data.key === 'operations_rollout') {
-            return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(data.key)) {
+            return sendError(res, 405, '此配置只能通过专用管理接口修改');
           }
           if (!data.created_at) data.created_at = new Date().toISOString();
           data = normalizeTimestamps(data);
@@ -1211,8 +1211,8 @@ async function handleREST(req, res, urlInfo) {
       } else {
         return sendError(res, 400, 'Missing id filter');
       }
-      if (dbTable === 'app_config' && filterVal === 'operations_rollout') {
-        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(filterVal)) {
+        return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
 
       let body = '';
@@ -1221,8 +1221,8 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
-          if (dbTable === 'app_config' && data.key === 'operations_rollout') {
-            return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(data.key)) {
+            return sendError(res, 405, '此配置只能通过专用管理接口修改');
           }
           data = normalizeTimestamps(data);
           const guard = guardEditorWrite(requester, dbTable, method, data);
@@ -1253,8 +1253,8 @@ async function handleREST(req, res, urlInfo) {
     // --- DELETE /rest/v1/table?id=eq.xxx ---
     else if (method === 'DELETE') {
       if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可删除数据');
-      if (dbTable === 'app_config' && (parts[3] === 'operations_rollout' || query.key === 'eq.operations_rollout')) {
-        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(parts[3]) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history'].includes(query.key))) {
+        return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
       let idVal;
       if (query.id && query.id.startsWith('eq.')) {
@@ -1270,8 +1270,8 @@ async function handleREST(req, res, urlInfo) {
         }
         return sendError(res, 400, 'Missing id filter');
       }
-      if (dbTable === 'app_config' && (idVal === 'operations_rollout' || query.key === 'eq.operations_rollout')) {
-        return sendError(res, 405, '运营管理灰度开关只能通过专用接口修改');
+      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(idVal) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history'].includes(query.key))) {
+        return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
 
       await querySaleWrite(dbTable, `DELETE FROM "${dbTable}" WHERE "id" = $1`, [idVal], requester);
@@ -1480,6 +1480,7 @@ const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensu
 const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGovernanceBatches = require('./governance-batches')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
 const handleCoffeeInventory = require('./coffee-inventory')({ pool, getRequester, ensureRole, sendJSON, sendError });
+const handleReportCenter = require('./report-center-api')({pool,getRequester,ensureRole,sendJSON,sendError});
 const handleDailyBriefs = require('./daily-brief-api')({ pool, getRequester, ensureRole, sendJSON, sendError });
 const handleOperationsReports = require('./operations-reports')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
 const handleWeeklyManagement = require('./weekly-management-api')({pool,getRequester,ensureRole,sendJSON,sendError});
@@ -1525,6 +1526,8 @@ const server = http.createServer((req, res) => {
       handleOperationsRollout(req, res);
     } else if (parts[2] === 'coffee-inventory') {
       handleCoffeeInventory(req, res);
+    } else if (parts[2] === 'report-center') {
+      handleReportCenter(req,res,urlInfo.query);
     } else if (parts[2] === 'daily-briefs') {
       handleDailyBriefs(req, res, urlInfo.query);
     } else if (parts[2] === 'weekly-management') {
