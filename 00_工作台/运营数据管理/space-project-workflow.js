@@ -1,4 +1,5 @@
 'use strict';
+const profiles=require('./space-contract-profiles');
 const crypto=require('node:crypto'),schema=require('./app/js/space-project-schema'),document=require('./space-contract-document'),accounting=require('./space-accounting');
 const text=(v,max=6000)=>{if(v===undefined||v===null)return '';if(typeof v!=='string'||v.length>max||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(v))throw Error('文本内容无效或过长');return v.trim();};
 const date=v=>{if(v)accounting.date(v);return v||'';};
@@ -13,6 +14,7 @@ function sanitize(input){
  p.publicity=(input.publicity||[]).map(r=>Object.fromEntries(['point','material','quantity','width','height','unit','orientation','period','responsibilities','specification'].map(k=>[k,text(r[k],k==='specification'?2000:1000)])));
  p.tasks=(input.tasks||[]).map(r=>({id:text(r.id,100)||crypto.randomUUID(),title:text(r.title,500),owner:text(r.owner,200),dueDate:date(text(r.dueDate,10)),status:['待办','进行中','已完成','不适用'].includes(r.status)?r.status:'待办',evidence:text(r.evidence,2000)}));
  p.expenseIds=[...new Set((input.expenseIds||[]).map(x=>text(x,100)))];
+ if(input.profileSelection)p.profileSelection=input.profileSelection;
  return p;
 }
 function defaults(project){return {terms:{projectName:project.project_name,venueName:'艾维美术馆',spaceName:project.space,exhibitStart:project.date,exhibitEnd:project.end_date||project.date,totalAmount:String(project.receivable_amount||''),contractNo:project.contract_no||''},owner:project.project_owner||'',payments:[],publicity:[],tasks:[],expenseIds:[]};}
@@ -22,6 +24,7 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
   const user=await getRequester(req);if(!ensureRole(res,user,['admin','editor']))return;
   if(!['GET','POST'].includes(req.method))return sendError(res,405,'仅支持查询及保存');
   db=await pool.connect();
+  if(q.profiles==='1')return await profiles.handle({req,res,db,user,sendJSON,sendError});
   if(req.method==='GET'&&!q.id){const rows=(await db.query('SELECT space_usage_id,version,payload,updated_at FROM space_project_workflows ORDER BY updated_at DESC')).rows;return sendJSON(res,200,{workflows:rows.map(toCamel)});}
   const id=text(q.id,100);if(!id)throw Error('请选择项目');
   if(req.method==='GET'){
@@ -35,7 +38,7 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
    }
    const expenses=(await db.query('SELECT e.id,e.date,e.amount,e.category,e.description,e.reimbursement_status FROM expense e JOIN space_project_expenses l ON l.expense_id=e.id WHERE l.space_usage_id=$1 ORDER BY e.date',[id])).rows;
    const events=(await db.query("SELECT action,version,created_at,after_payload->>'notes' notes,after_payload->>'nextAction' next_action FROM space_project_workflow_events WHERE space_usage_id=$1 ORDER BY created_at DESC,id DESC LIMIT 30",[id])).rows;
-   await db.query('COMMIT');const payload=workflow?.payload||defaults(project);return sendJSON(res,200,{project:toCamel(project),version:workflow?.version||0,payload,documents:documents.map(toCamel),expenses:expenses.map(toCamel),events:events.map(toCamel),opportunity:schema.isOpportunity(project),templateVersion:schema.version,preview:document.model(payload)});
+   const catalog=await profiles.load(db);await db.query('COMMIT');const payload=workflow?.payload||defaults(project);if(!payload.profileSelection){payload.profileSelection={organizationId:!payload.terms.partyAName?catalog.organizations[0]?.id||'':'',venueId:!payload.terms.venueAddress?catalog.venues[0]?.id||'':'',version:catalog.version};profiles.apply(payload,catalog,workflow?.payload);}else if(!workflow)profiles.apply(payload,catalog);return sendJSON(res,200,{project:toCamel(project),version:workflow?.version||0,payload,documents:documents.map(toCamel),expenses:expenses.map(toCamel),events:events.map(toCamel),opportunity:schema.isOpportunity(project),templateVersion:schema.version,profiles:catalog,preview:document.model(payload)});
   }
   let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;if(size>400000)throw Error('填报内容过大');chunks.push(chunk);}const body=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');
   if(!['save','generate','confirm-cooperation'].includes(body.action))throw Error('操作无效');
@@ -45,7 +48,7 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
   if(body.version!==(old?.version||0)){const e=Error('资料已被其他人更新，请刷新后核对');e.status=409;throw e;}
   let saved;
   if(body.action==='save'){
-   const payload=sanitize(body.payload);if(old?.payload.confirmation)payload.confirmation=old.payload.confirmation;
+   const payload=sanitize(body.payload);profiles.apply(payload,await profiles.load(db),old?.payload);if(old?.payload.confirmation)payload.confirmation=old.payload.confirmation;
    if(payload.expenseIds.length){const valid=(await db.query("SELECT id FROM expense WHERE id=ANY($1::text[]) AND COALESCE(type,'运营支出')<>'备用金借入' AND (reimbursement_status IS NULL OR reimbursement_status<>$2)",[payload.expenseIds,'已作废'])).rows;if(valid.length!==payload.expenseIds.length)throw Error('所选支出不存在或已作废');}
    await db.query('DELETE FROM space_project_expenses WHERE space_usage_id=$1',[id]);for(const eid of payload.expenseIds)await db.query('INSERT INTO space_project_expenses(space_usage_id,expense_id,linked_by) VALUES($1,$2,$3)',[id,eid,user.id]);
    saved=(await db.query('INSERT INTO space_project_workflows(space_usage_id,payload,version,updated_by) VALUES($1,$2,1,$3) ON CONFLICT(space_usage_id) DO UPDATE SET payload=excluded.payload,version=space_project_workflows.version+1,updated_by=excluded.updated_by,updated_at=now() RETURNING *',[id,JSON.stringify(payload),user.id])).rows[0];

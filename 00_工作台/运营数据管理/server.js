@@ -1127,6 +1127,7 @@ async function handleREST(req, res, urlInfo) {
         params.push('已复核');
       }
 
+      if (dbTable === 'app_config') {conditions.push(`"key" <> $${paramIdx++}`);params.push('space_contract_profiles');}
       if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
 
       // order=date.desc
@@ -1147,6 +1148,7 @@ async function handleREST(req, res, urlInfo) {
         params = [];
       }
 
+      if (isSingle && dbTable === 'app_config' && parts[3] === 'space_contract_profiles') return sendJSON(res, 406, []);
       const result = await pool.query(sql, params);
       if (isSingle) {
         if (result.rows.length === 0) return sendJSON(res, 406, []);
@@ -1172,7 +1174,7 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
-          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(data.key)) {
+          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(data.key)) {
             return sendError(res, 405, '此配置只能通过专用管理接口修改');
           }
           if (!data.created_at) data.created_at = new Date().toISOString();
@@ -1214,7 +1216,7 @@ async function handleREST(req, res, urlInfo) {
       } else {
         return sendError(res, 400, 'Missing id filter');
       }
-      if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(filterVal)) {
+      if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(filterVal)) {
         return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
 
@@ -1224,7 +1226,7 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
-          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(data.key)) {
+          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(data.key)) {
             return sendError(res, 405, '此配置只能通过专用管理接口修改');
           }
           data = normalizeTimestamps(data);
@@ -1256,7 +1258,7 @@ async function handleREST(req, res, urlInfo) {
     // --- DELETE /rest/v1/table?id=eq.xxx ---
     else if (method === 'DELETE') {
       if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可删除数据');
-      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(parts[3]) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history'].includes(query.key))) {
+      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(parts[3]) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history','eq.space_contract_profiles'].includes(query.key))) {
         return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
       let idVal;
@@ -1273,7 +1275,7 @@ async function handleREST(req, res, urlInfo) {
         }
         return sendError(res, 400, 'Missing id filter');
       }
-      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history'].includes(idVal) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history'].includes(query.key))) {
+      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(idVal) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history','eq.space_contract_profiles'].includes(query.key))) {
         return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
 
