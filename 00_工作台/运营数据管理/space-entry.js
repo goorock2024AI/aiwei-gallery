@@ -1,9 +1,10 @@
 const crypto = require('node:crypto');
+const spaceSchema = require('./app/js/space-project-schema');
 
 module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake }) {
   const editable = ['date','end_date','space','project_name','type','client','status','rental_type','receivable_amount','expected_payment_date','notes','business_layer_code','business_type_code','cooperation_mode','project_owner','contract_no','business_status'];
   const typeCodes = new Set(['space_rental', 'brand_event', 'uncategorized_revenue']);
-  const businessStatuses = new Set(['线索', '洽谈', '已签约', '执行中', '已完成', '已取消', '待确认']);
+  const businessStatuses = new Set(['线索', '洽谈', '待签署', '暂缓', '未成交', '已签约', '执行中', '已完成', '已取消', '待确认']);
   const suggestedType = type => {
     if (['场地租赁', '长期经营', '会议活动'].includes(type)) return 'space_rental';
     if (['品牌快闪', '企业团建', '沙龙'].includes(type)) return 'brand_event';
@@ -44,12 +45,14 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
         payment.payment_date = String(payment.payment_date || '');
         payment.amount = Math.round(Number(payment.amount) * 100) / 100;
         if (!validDate(payment.payment_date)) throw new Error('请选择有效到账日期');
+        if (payment.payment_date > new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date())) throw new Error('实际到账日期不能晚于今天');
         if (!Number.isFinite(payment.amount) || payment.amount <= 0) throw new Error('到账金额必须大于 0');
         const received = Number((await client.query('SELECT COALESCE(SUM(amount),0) amount FROM space_payments WHERE space_usage_id=$1', [projectId])).rows[0].amount);
         const remaining = Math.round(Math.max(0, Number(project.receivable_amount) - received) * 100) / 100;
         if (payment.amount > remaining) throw new Error('到账金额不能超过待收金额');
         const id = String(payment.id || crypto.randomUUID());
         const saved = (await client.query(`INSERT INTO space_payments(id,space_usage_id,payment_date,amount,payment_method,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`, [id, projectId, payment.payment_date, payment.amount, String(payment.payment_method || '转账').slice(0, 50), String(payment.notes || '').slice(0, 500)])).rows[0];
+        if (saved.payment_method === '现金') await client.query("INSERT INTO cash_movements(id,date,type,amount,source_type,source_id,operator_id,operator_name,reason,notes) VALUES($1,$2,'cash_sale',$3,'space',$4,$5,$6,'场地现金租金到账','由场地收款事务生成')", ['cash_space_'+id,saved.payment_date,saved.amount,id,user.id,user.display_name||user.username||'']);
         await log(client, user, 'payment_create', projectId, { source: 'space-entry-v2', originalProjectId: projectId, payment: saved, receivedBefore: received, receivedAfter: received + payment.amount });
         await client.query('COMMIT');
         return sendJSON(res, 201, { payment: toCamel(saved), remainingAmount: Math.round((remaining - payment.amount) * 100) / 100 });
@@ -65,21 +68,31 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
       }
       const project = { ...(previous || {}), id };
       for (const key of editable) if (input[key] !== undefined) project[key] = input[key];
+      project.business_status = String(project.business_status || (previous ? previous.business_status || '' : '线索'));
+      const opportunity = spaceSchema.isOpportunity(project);
+      if (!previous && !opportunity) throw new Error('请先建立线索或洽谈项目，再通过明确合作确认登记签约依据');
+      if (previous && spaceSchema.isOpportunity(previous) && !opportunity) throw new Error('请在项目工作台通过明确合作确认登记签约依据');
+      if (previous && !spaceSchema.isOpportunity(previous) && opportunity) throw new Error('正式或历史合作不能直接退回洽谈，请核对合同变更与收支');
+      project.date = project.date || '';
       project.end_date = project.end_date || project.date;
-      if (!validDate(project.date) || !validDate(project.end_date) || project.end_date < project.date) throw new Error('请选择有效的项目起止日期');
+      if ((!opportunity || project.date) && !validDate(project.date)) throw new Error('请选择有效的项目开始日期');
+      if ((!opportunity || project.end_date) && !validDate(project.end_date)) throw new Error('请选择有效的项目结束日期');
+      if (project.end_date < project.date) throw new Error('结束日期不能早于开始日期');
+      if (opportunity) project.status = '筹备中';
       if (!String(project.project_name || '').trim()) throw new Error('请输入项目/活动名称');
       project.receivable_amount = Math.round(Number(project.receivable_amount || 0) * 100) / 100;
       if (!Number.isFinite(project.receivable_amount) || project.receivable_amount < 0) throw new Error('应收金额不能为负数');
       if (project.rental_type === '免费') project.receivable_amount = 0;
-      if (project.rental_type === '付费' && project.receivable_amount <= 0) throw new Error('付费项目必须填写应收金额');
+      if (!opportunity && project.rental_type === '付费' && project.receivable_amount <= 0) throw new Error('付费合同必须填写应收金额');
       project.business_layer_code = 'art_transaction_cooperation';
       project.business_type_code = String(project.business_type_code || suggestedType(project.type));
-      project.business_status = String(project.business_status || suggestedStatus(project.status));
       if (!typeCodes.has(project.business_type_code)) throw new Error('请选择有效业务类型');
-      if (!businessStatuses.has(project.business_status)) throw new Error('请选择有效经营状态');
+      if (project.business_status && !businessStatuses.has(project.business_status)) throw new Error('请选择有效经营状态');
+      if (previous) await require('./space-accounting').guardProject(client, project);
       if (!String(project.cooperation_mode || '').trim()) throw new Error('请选择合作方式');
       if (['已签约', '执行中', '已完成'].includes(project.business_status) && project.rental_type === '付费' && !String(project.contract_no || '').trim()) throw new Error('付费签约项目必须填写合同编号');
       if (['已确认', '进行中'].includes(project.status)) {
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['space-booking:' + project.space]);
         const conflict = (await client.query(`SELECT id,project_name,date,end_date FROM space_usage WHERE space=$1 AND status IN ('已确认','进行中') AND $2<=COALESCE(NULLIF(end_date,''),date) AND $3>=date AND id<>$4 LIMIT 1 FOR UPDATE`, [project.space, project.date, project.end_date, id])).rows[0];
         if (conflict) throw new Error(`时间冲突：${project.space} 已被「${conflict.project_name}」占用`);
       }

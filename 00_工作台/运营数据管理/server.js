@@ -1078,6 +1078,9 @@ async function handleREST(req, res, urlInfo) {
 
   const method = req.method.toUpperCase();
   const requester = await getRequester(req);
+  if (requester && ['space_usage','space_payments'].includes(dbTable) && !['GET','OPTIONS'].includes(method)) {
+    return sendError(res,405,'场地订单及收款请通过场地专用入口登记，保留执行与收款关联');
+  }
   if (!canAccessTable(requester, dbTable, method)) {
     return sendError(res, requester ? 403 : 401, requester ? '无权限访问该数据' : '未登录或登录已过期');
   }
@@ -1478,6 +1481,8 @@ function serveStatic(req, res, pathname) {
 const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleSpaceAccounting = require('./space-accounting').handler({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
+const handleSpaceProjectWorkflow = require('./space-project-workflow').handler({pool,getRequester,ensureRole,sendJSON,sendError,toCamel});
 const handleGovernanceBatches = require('./governance-batches')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
 const handleCoffeeInventory = require('./coffee-inventory')({ pool, getRequester, ensureRole, sendJSON, sendError });
 const handleReportCenter = require('./report-center-api')({pool,getRequester,ensureRole,sendJSON,sendError});
@@ -1542,6 +1547,10 @@ const server = http.createServer((req, res) => {
       handleGalleryEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'space-entry') {
       handleSpaceEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'space-project-workflow') {
+      return handleSpaceProjectWorkflow(req, res, urlInfo.query);
+    } else if (parts[2] === 'space-accounting') {
+      handleSpaceAccounting(req, res, urlInfo.query);
     } else if (parts[2] === 'governance-batches') {
       handleGovernanceBatches(req, res, urlInfo.query);
     } else if (parts[2] === 'login' && req.method === 'POST') {

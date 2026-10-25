@@ -8,6 +8,14 @@ RUN npm ci --omit=dev && \
 
 COPY server.js expense-entry.js expense-pdf-entry.js gallery-entry.js space-entry.js governance-batches.js coffee-inventory.js coffee-forecast.js operations-item-analysis.js operations-reports.js operations-report-metrics.js operations-report-html.js trial-observability.js VERSION ./
 COPY report-archive.js operations-report-packet.js report-center-api.js ./
+COPY space-accounting.js ./
+COPY space-project-workflow.js space-contract-document.js ./
+COPY app/js/space-project-schema.js ./app/js/
+COPY templates ./templates
+COPY scripts/space-project-workflow-migrate.js ./scripts/
+COPY sql/20261025_space_project_workflow.sql ./sql/
+COPY scripts/space-execution-migrate.js ./scripts/
+COPY sql/20261024_space_execution.sql ./sql/
 COPY weekly-management.js weekly-management-store.js weekly-management-api.js weekly-management-dispatch.js ./
 COPY weekly-management-config.js ./
 COPY scripts/weekly-management-worker.js scripts/weekly-management-migrate.js ./scripts/

@@ -34,4 +34,5 @@ function correction(date,comparison,now,reason){
  const time=new Date(now).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
  return `艾维美术馆｜${date}日报更正\n`+comparison.changes.map(c=>`· ${c.item}：${c.old}${c.unit} → ${c.new}${c.unit}`+(c.difference==null?'':`，差额${c.difference>=0?'+':''}${c.difference}${c.unit}`)).join('\n')+`\n修订时间：${time}（北京时间）\n原因：${reason||'来源记录发生变化，具体原因待核实。'}`;
 }
-module.exports={proposed,policy,at,within,compare,correction,moneyImportant};
+function accountingBasisChanged(before,next){return (before?.metrics?.spaceAccounting?.basis||'space-cash-before-execution')!==(next?.metrics?.spaceAccounting?.basis||'space-cash-before-execution');}
+module.exports={proposed,policy,at,within,compare,correction,moneyImportant,accountingBasisChanged};

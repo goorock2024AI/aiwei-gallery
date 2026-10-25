@@ -14,9 +14,10 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
    const values=Object.fromEntries(settings.map(r=>[r.key,r.value])),targets=values.daily_brief_month_targets||{},history=values.operations_month_target_history||[];
    const today=core.day(new Date()),start=month+'-01',end=new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7)),0)).toISOString().slice(0,10),cutoff=end<today?end:today;
    const facts=start>today?null:(await db.query('SELECT COUNT(*)::int count,COALESCE(SUM(net_amount),0)::float8 income,MAX(business_date) last_date FROM business_revenue_facts_v2 WHERE business_date BETWEEN $1 AND $2',[start,cutoff])).rows[0];
+   const spaceAccounting=start>today?null:await require('./space-accounting').summary(db,start,cutoff);
    await db.query('COMMIT');
    const actual=facts?core.money(facts.income):null,target=typeof targets[month]==='number'?targets[month]:null;
-   return sendJSON(res,200,{month,targets,version:version(targets),history:history.filter(r=>r.month.startsWith(month.slice(0,4))),actual,target,completion:actual!=null&&target>0?actual/target:null,gap:actual!=null&&target!=null?core.money(target-actual):null,cutoff:start>today?null:cutoff,lastBusinessDate:facts?.last_date||null,factCount:facts?.count??null,generatedAt:new Date().toISOString(),basis:'统一收入事实，按业务日期归属；截至查询时点，未完成日结的数据可能修订',canSetTargets:user.role==='admin'});
+   return sendJSON(res,200,{month,targets,version:version(targets),history:history.filter(r=>r.month.startsWith(month.slice(0,4))),actual,target,completion:actual!=null&&target>0?actual/target:null,gap:actual!=null&&target!=null?core.money(target-actual):null,cutoff:start>today?null:cutoff,lastBusinessDate:facts?.last_date||null,factCount:facts?.count??null,spaceAccounting,generatedAt:new Date().toISOString(),basis:'经营收入按业务日期归属；场地仅计入已确认的使用金额，实际收款另列。历史未核对场地款不计入已执行收入；未完成日结或执行确认的数据可能修订',canSetTargets:user.role==='admin'});
   }
   if(req.method!=='POST')return sendError(res,405,'仅支持读取和保存月度目标');
   if(!ensureRole(res,user,['admin']))return;

@@ -1,0 +1,78 @@
+'use strict';
+// Browser plugin not available: use the existing local PostgreSQL and real Edge workflow.
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{spawn}=require('node:child_process'),{Client,Pool}=require('pg');
+const root=path.resolve(__dirname,'..'),cfg=JSON.parse(fs.readFileSync(process.env.AIWEI_TEST_CONFIG||path.join(root,'tmp/m3-05-test.json'))),out=process.env.AIWEI_EXECUTION_OUTPUT||path.join(root,'tmp/space-accounting');
+assert.equal(cfg.host,'127.0.0.1');assert.equal(cfg.port,55435);fs.mkdirSync(out,{recursive:true});
+const admin=new Client({host:cfg.host,port:cfg.port,user:'postgres',database:'postgres',password:cfg.password}),name='aiwei_space_execution_'+Date.now(),base='http://127.0.0.1:3159';
+let pool,child,browser,created=false,checks=0;const tokens={};
+async function api(route,method='GET',body,role='admin',status=200){const signedFixture=route==='space-entry'&&method==='POST'&&body?.project?.businessStatus==='已签约';const wire=signedFixture?{...body,project:{...body.project,businessStatus:'洽谈',status:'筹备中'}}:body;const r=await fetch(base+'/rest/v1/'+route,{method,headers:{'Content-Type':'application/json',...(tokens[role]?{Authorization:'Bearer '+tokens[role]}:{})},...(body?{body:JSON.stringify(wire)}:{})});const j=await r.json();assert.equal(r.status,status,route+' '+JSON.stringify(j));if(signedFixture&&r.status===201)await pool.query("UPDATE space_usage SET business_status='已签约',status=$2 WHERE id=$1",[body.project.id,body.project.status]);checks++;return j;}
+const migration='sql/20261024_space_execution.sql';
+const sourceFingerprint=async()=>JSON.stringify((await pool.query("SELECT 'revenue' t,md5(jsonb_agg(r ORDER BY id)::text) hash FROM revenue r UNION ALL SELECT 'payments',md5(jsonb_agg(p ORDER BY id)::text) FROM space_payments p UNION ALL SELECT 'closings',md5(jsonb_agg(c ORDER BY id)::text) FROM daily_closings c")).rows);
+(async()=>{await admin.connect();try{
+ await admin.query('CREATE DATABASE '+name+' TEMPLATE aiwei_m3_05_test');created=true;pool=new Pool({host:cfg.host,port:cfg.port,user:'postgres',database:name,password:cfg.password});
+ for(const f of ['sql/20261011_operations_analysis_reports.sql','sql/20261021_coffee_inventory.sql','sql/20261021_daily_briefs.sql','sql/20261022_daily_delivery_loop.sql','sql/20261022_weekly_management.sql'])await pool.query(fs.readFileSync(path.join(root,f),'utf8'));
+ const before=await sourceFingerprint();const oldNonSpace=(await pool.query("SELECT * FROM business_revenue_facts_v2 WHERE source_table<>'space_payments' AND NOT (source_table='revenue' AND source_line_key='venue_amount') ORDER BY fact_id")).rows;
+ await pool.query(fs.readFileSync(path.join(root,migration),'utf8'));await pool.query(fs.readFileSync(path.join(root,migration),'utf8'));
+ assert.equal(await sourceFingerprint(),before);assert.deepEqual((await pool.query('SELECT * FROM business_revenue_facts_v2 ORDER BY fact_id')).rows,oldNonSpace);
+ const log=fs.openSync(path.join(out,'api.log'),'w');child=spawn(process.execPath,['server.js'],{cwd:root,windowsHide:true,stdio:['ignore',log,log],env:{...process.env,HOST:'127.0.0.1',PORT:'3159',STATIC_DIR:path.join(root,'app'),DB_HOST:cfg.host,DB_PORT:String(cfg.port),DB_NAME:name,DB_PASS:cfg.password,AUTH_SECRET:'isolated-space-execution',REPORT_ARCHIVE_DIR:path.join(out,'archive')}});
+ let ready=false;for(let i=0;i<100;i++){try{if((await fetch(base+'/healthz')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert(ready,'isolated API must start');
+ for(const role of ['admin','editor','viewer'])tokens[role]=(await api('login','POST',{username:'m305-'+role,password:cfg.password},'none')).token;
+ await api('space-accounting','GET',null,'none',401);await api('space-accounting','POST',{action:'schedule'},'viewer',403);await api('space-accounting?end=2026-02-30','GET',null,'viewer',400);
+ const project={id:'se-main',date:'2026-09-29',endDate:'2026-10-24',space:'SE测试空间',projectName:'场地分期跨月测试',type:'场地租赁',client:'隔离测试',status:'已确认',rentalType:'付费',receivableAmount:6000,businessTypeCode:'space_rental',cooperationMode:'租赁',businessStatus:'已签约',contractNo:'SE-001'};
+ await api('space-entry','POST',{project},'editor',201);
+ await api('space-entry?id=se-main&action=payment','POST',{payment:{id:'se-pay1',paymentDate:'2026-09-26',amount:3000}},'editor',201);
+ await api('space-accounting?id=se-main','POST',{action:'schedule',lines:[{date:'2026-09-29',amount:2000},{date:'2026-10-01',amount:2000},{date:'2026-10-24',amount:2000}]},'editor',201);
+ let data=await api('space-accounting?id=se-main&start=2026-09-26&end=2026-09-26');let p=data.projects.find(p=>p.id==='se-main');assert.equal(p.receipts,3000);assert.equal(p.executed,0);assert.equal(p.receivedUnexecuted,3000);
+ assert.equal((await pool.query("SELECT COUNT(*)::int n FROM business_revenue_facts_v2 WHERE source_id='se-pay1'")).rows[0].n,0);
+ let lines=data.lines;await api('space-accounting?id=se-main','POST',{action:'schedule',lines:[{date:'2026-10-02',amount:1}]},'editor',400);
+ await api('space-accounting?id=se-main','POST',{action:'confirm',lineId:lines[0].id},'editor',201);
+ const countBefore=(await pool.query("SELECT COUNT(*)::int n FROM operation_logs WHERE action='space_confirm'")).rows[0].n;
+ await api('space-accounting?id=se-main','POST',{action:'confirm',lineId:lines[0].id},'editor');assert.equal((await pool.query("SELECT COUNT(*)::int n FROM operation_logs WHERE action='space_confirm'")).rows[0].n,countBefore);
+ data=await api('space-accounting?id=se-main&start=2026-09-01&end=2026-09-30');p=data.projects.find(p=>p.id==='se-main');assert.equal(p.executed,2000);assert.equal(p.receipts,3000);assert.equal(p.receivedUnexecuted,1000);
+ await api('space-entry?id=se-main','PATCH',{project:{receivableAmount:5999}},'editor',400);await api('space-entry?id=se-main','PATCH',{project:{endDate:'2026-10-01'}},'editor',400);
+ await api('space_usage?id=eq.se-main','PATCH',{receivableAmount:1},'admin',405);await api('space_payments?id=eq.se-pay1','DELETE',null,'admin',405);
+ await api('space-accounting?id=se-main','POST',{action:'confirm',lineId:lines[1].id},'editor',201);
+ data=await api('space-accounting?id=se-main&start=2026-10-01&end=2026-10-01');p=data.projects.find(p=>p.id==='se-main');assert.equal(p.executed,2000);assert.equal(p.executedUnpaid,1000);assert.equal(p.receivedUnexecuted,0);
+ await api('space-entry?id=se-main&action=payment','POST',{payment:{id:'se-pay2',paymentDate:'2026-10-03',amount:3000}},'editor',201);
+ const cashBeforeConfirm=await sourceFingerprint();await api('space-accounting?id=se-main','POST',{action:'confirm',lineId:lines[2].id},'editor',201);assert.equal(await sourceFingerprint(),cashBeforeConfirm);
+ data=await api('space-accounting?id=se-main&start=2026-10-24&end=2026-10-24');p=data.projects.find(p=>p.id==='se-main');assert.equal(p.executed,2000);assert.equal(p.receipts,0);assert.equal(p.executedUnpaid,0);assert.equal(p.receivedUnexecuted,0);
+ await api('space-accounting?id=se-main','POST',{action:'void',lineId:lines[2].id,reason:'测试改期'},'editor',403);await api('space-accounting?id=se-main','POST',{action:'void',lineId:lines[2].id},'admin',400);
+ await api('space-accounting?id=se-main','POST',{action:'void',lineId:lines[2].id,reason:'取消本场，原记录保留'},'admin',201);
+ await api('space-accounting?id=se-main','POST',{action:'schedule',lines:[{date:'2026-10-23',amount:2000}]},'editor',201);
+ data=await api('space-accounting?id=se-main');const replacement=data.lines.find(l=>l.usageDate==='2026-10-23');await api('space-accounting?id=se-main','POST',{action:'confirm',lineId:replacement.id},'editor',201);
+ await api('space-entry','POST',{project:{...project,id:'se-continuous',space:'SE第二空间',contractNo:'SE-002',receivableAmount:100.01}},'editor',201);
+ const cont=await api('space-accounting?id=se-continuous','POST',{action:'schedule',mode:'continuous',start:'2026-09-30',end:'2026-10-02',amount:100.01,notes:'按天均分'},'editor',201);assert.deepEqual(cont.lines.map(l=>Number(l.amount)),[33.34,33.34,33.33]);assert.equal(cont.lines.reduce((n,l)=>n+Math.round(Number(l.amount)*100),0),10001);
+ await api('space-accounting?id=se-continuous','POST',{action:'schedule',lines:[{date:'2026-10-02',amount:0}]},'editor',409);
+ const concurrent=await Promise.all([1,2].map(()=>fetch(base+'/rest/v1/space-accounting?id=se-continuous',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tokens.editor},body:JSON.stringify({action:'confirm',lineId:cont.lines[0].id})})));
+ assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,201]);checks+=2;
+ // Scheduling lock serializes confirmations; whichever wins returns created, the other unchanged.
+ assert.equal((await pool.query("SELECT count(*)::int n FROM operation_logs WHERE record_id='se-continuous' AND action='space_confirm'")).rows[0].n,1);
+ const d=require('../space-accounting');assert.throws(()=>d.split('2026-02-30','2026-03-01',1));assert.throws(()=>d.split('2026-10-01','2026-10-02',1.001));
+ await api('space-entry','POST',{project:{...project,id:'se-future',date:'2099-01-01',endDate:'2099-01-01',space:'SE未来空间',contractNo:'SE-003',receivableAmount:1}},'editor',201);
+ const future=await api('space-accounting?id=se-future','POST',{action:'schedule',lines:[{date:'2099-01-01',amount:1}]},'editor',201);await api('space-accounting?id=se-future','POST',{action:'confirm',lineId:future.lines[0].id},'editor',400);
+ const packet=await require('../operations-report-packet').collectPacket(pool,{start:'2026-10-01',end:'2026-10-24'},{start:'2026-09-01',end:'2026-09-30'});assert.equal(packet.spaceAccounting.current.projects.find(p=>p.id==='se-main').executed,4000);assert.equal(packet.spaceAccounting.previous.projects.find(p=>p.id==='se-main').executed,2000);assert.equal(packet.schemaVersion,3);
+ const week=await require('../operations-report-packet').collectPacket(pool,{start:'2026-10-19',end:'2026-10-25'},{start:'2026-10-12',end:'2026-10-18'});assert.equal(week.spaceAccounting.current.projects.find(p=>p.id==='se-main').executed,2000);
+ const core=require('../daily-brief-core'),finance=(await core.collect(pool,'2026-10-23','2026-10-24T10:00:00+08:00')).finance;assert.equal(finance.day.spaceAccounting.current.projects.find(p=>p.id==='se-main').executed,2000);assert(require('../daily-brief-template').text({date:'2026-10-23',metrics:core.summarize(finance),weather:{status:'missing'},cutoffTime:'2026-10-23T18:00:00+08:00'}).includes('今日实际收款'));
+ const center=await api('report-center?month=2026-10');assert(center.spaceAccounting);assert(center.basis.includes('已确认'));
+ const receiptFact=(await api('revenue_facts?record_id=eq.se-pay1'))[0];assert.equal(receiptFact.date,'2026-09-26');assert.equal(receiptFact.netAmount,3000);
+ const refund={action:'refund',refundId:require('node:crypto').randomUUID(),paymentId:'se-pay2',date:'2026-10-24',amount:500,reason:'实际退款登记测试'};
+ await api('space-accounting?id=se-main','POST',refund,'editor',403);await api('space-accounting?id=se-main','POST',{...refund,amount:3001},'admin',400);
+ await api('space-accounting?id=se-main','POST',refund,'admin',201);await api('space-accounting?id=se-main','POST',refund,'admin',400);
+ data=await api('space-accounting?id=se-main&start=2026-10-24&end=2026-10-24');p=data.projects.find(p=>p.id==='se-main');assert.equal(p.receipts,-500);assert.equal(p.executedUnpaid,500);assert.equal(p.earned,6000);
+ assert.equal((await api('revenue_facts?record_id=eq.'+refund.refundId))[0].netAmount,-500);
+ await api('space-entry','POST',{project:{...project,id:'se-cash',space:'SE现金空间',contractNo:'SE-CASH',receivableAmount:100}},'editor',201);
+ await api('space-entry?id=se-cash&action=payment','POST',{payment:{id:'se-cash-pay',paymentDate:'2026-10-23',amount:100,paymentMethod:'现金'}},'editor',201);
+ await api('space-accounting?id=se-cash','POST',{action:'refund',refundId:require('node:crypto').randomUUID(),paymentId:'se-cash-pay',date:'2026-10-24',amount:40,reason:'现金实际退款测试'},'admin',201);
+ assert.equal(Number((await pool.query("SELECT SUM(amount) amount FROM cash_movements WHERE source_type='space' AND (source_id='se-cash-pay' OR reason='现金实际退款测试')")).rows[0].amount),60);
+ // Rollback preserves execution evidence and can be followed by idempotent forward replay.
+ const executionCount=(await pool.query('SELECT COUNT(*)::int n FROM space_execution_lines')).rows[0].n;
+ await pool.query(fs.readFileSync(path.join(root,'sql/20261024_space_execution_rollback.sql'),'utf8'));assert.equal((await pool.query("SELECT COUNT(*)::int n FROM business_revenue_facts_v2 WHERE source_id='se-pay1'")).rows[0].n,1);
+ await pool.query(fs.readFileSync(path.join(root,migration),'utf8'));assert.equal((await pool.query('SELECT COUNT(*)::int n FROM space_execution_lines')).rows[0].n,executionCount);
+ // Real browser flow: order list -> schedule -> confirm -> changed execution balance.
+ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');browser=await chromium.launch({channel:'msedge',headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(base+'/index.html');await page.locator('#login-username').fill('m305-admin');await page.locator('#login-password').fill(cfg.password);await page.locator('#login-form button').click();await page.locator('[data-tab=space]').waitFor();await page.locator('[data-tab=space]').click();await page.getByText('场地经营与收款 · 2026-10',{exact:true}).waitFor();
+ await page.evaluate(()=>UI._openSpaceExecution('se-continuous'));await page.locator('#space-execution-modal').waitFor();await page.locator('#space-execution-modal tr').filter({hasText:'2026-10-01'}).getByRole('button',{name:'确认执行'}).click();await page.locator('#space-execution-modal tr').filter({hasText:'2026-10-01'}).getByText('已执行',{exact:true}).waitFor();
+ await page.screenshot({path:path.join(out,'desktop.png'),fullPage:false});await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(out,'mobile.png'),fullPage:false});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);
+ await page.locator('#space-execution-modal').getByRole('button',{name:'关闭',exact:true}).click();await page.setViewportSize({width:1440,height:1000});await page.locator('[data-tab=daily-closing]').click();await page.getByText('系统净收款',{exact:true}).first().waitFor();
+ fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({passed:true,httpChecks:checks,browser:'Edge; Browser plugin not available',viewports:[1440,390],sourceFactsUnchangedByMigration:true,nonSpaceFactsUnchanged:true,receiptsUnchangedByConfirmation:true,monthlyAndWeeklyAndDaily:true,rollbackAndReplay:true,productionWrites:0,externalMessages:0,pageErrors:errors},null,2));console.log('PASS space execution: '+checks+' HTTP checks, date allocation, balances, daily/weekly/monthly, rollback/replay, Edge desktop/mobile');
+ }finally{await browser?.close();if(child&&child.exitCode===null){child.kill();await new Promise(r=>setTimeout(r,250));}await pool?.end();if(created)await admin.query('DROP DATABASE '+name);await admin.end();}})().catch(e=>{console.error(e.stack);process.exitCode=1;});

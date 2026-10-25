@@ -5,6 +5,8 @@ const crypto = require('crypto');
 
 const root = path.resolve(__dirname, '..');
 const pairs = [
+  ['app/js/space-project-schema.js','dist/js/space-project-schema.js'],['app/js/space-projects.js','dist/js/space-projects.js'],['app/css/space-projects.css','dist/css/space-projects.css'],
+  ['app/js/space-execution.js','dist/js/space-execution.js'],
   ['app/js/operations-report-hub.js','dist/js/operations-report-hub.js'],['app/css/operations-report-hub.css','dist/css/operations-report-hub.css'],
   ['app/weekly-management.html', 'dist/weekly-management.html'], ['app/js/weekly-management-page.js', 'dist/js/weekly-management-page.js'],
   ['app/daily-brief.html', 'dist/daily-brief.html'], ['app/js/daily-brief-page.js', 'dist/js/daily-brief-page.js'],

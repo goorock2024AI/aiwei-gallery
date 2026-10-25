@@ -11,7 +11,7 @@ async function main(){
  const ok=(v,message)=>{assert(v,message);count++;};
  try{
   await admin.query('CREATE DATABASE '+name+' TEMPLATE aiwei_m3_05_test');created=true;pool=new Pool({host:cfg.host,port:cfg.port,user:'postgres',database:name,password:cfg.password,max:12});
-  for(const f of ['20261011_operations_analysis_reports.sql','20261021_coffee_inventory.sql','20261021_daily_briefs.sql','20261022_daily_delivery_loop.sql','20261022_daily_delivery_loop.sql'])await pool.query(fs.readFileSync(path.join(root,'sql',f),'utf8'));
+  for(const f of ['20261011_operations_analysis_reports.sql','20261024_space_execution.sql','20261021_coffee_inventory.sql','20261021_daily_briefs.sql','20261022_daily_delivery_loop.sql','20261022_daily_delivery_loop.sql'])await pool.query(fs.readFileSync(path.join(root,'sql',f),'utf8'));
   await pool.query("DELETE FROM revenue WHERE date BETWEEN '2026-10-01' AND '2026-10-22'");await pool.query("DELETE FROM daily_closings WHERE date BETWEEN '2026-10-01' AND '2026-10-22'");
   for(let n=12;n<=20;n++)await pool.query("INSERT INTO revenue(id,date,ticket_qty,ticket_amount,combo_qty,combo_amount,coffee_qty,coffee_amount,status) VALUES($1,$2,10,100,5,150,4,80,'正常')",['loop-'+n,'2026-10-'+n]);
   const config={DAILY_SEND_ENABLED:'true',DAILY_WECOM_WEBHOOK:'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=isolated-loop-only'};
@@ -51,6 +51,11 @@ async function main(){
   ok(rules.compare({...sample,finalized:true},{...sample,finalized:false},rules.policy()).important,'reopened closing treated as proposed material correction');
   ok(!rules.moneyImportant(0,49,rules.policy())&&rules.moneyImportant(0,50,rules.policy()),'zero base absolute gate');ok(!rules.moneyImportant(10000,10050,rules.policy())&&rules.moneyImportant(10000,100500,rules.policy()),'large base both amount and ratio');ok(rules.moneyImportant(10,60,rules.policy()),'small base gate');
   const first=(await pool.query("SELECT * FROM operations_daily_outbox WHERE business_date='2026-10-12' AND kind='initial'")).rows[0];ok((await pool.query('SELECT count(*) FROM operations_daily_briefs WHERE business_date=$1',['2026-10-12'])).rows[0].count>3&&first.brief_id!==(await store.latest(pool,'2026-10-12')).id,'old snapshot retained');
+  behavior='ok';await run('2026-10-22','18:00',true,{initial:true});
+  await pool.query("UPDATE operations_daily_briefs SET payload=payload #- '{metrics,spaceAccounting}' WHERE id=(SELECT brief_id FROM operations_daily_outbox WHERE business_date='2026-10-22' AND kind='initial')");
+  await pool.query("INSERT INTO revenue(id,date,ticket_qty,ticket_amount,status) VALUES('loop-cutover','2026-10-22',20,200,'正常')");
+  const beforeBasisSend=bodies.length;const changedBasis=await run('2026-10-22','18:30',true);ok(changedBasis.state==='basis_change_manual_review','accounting cutover requires manual review');
+  await run('2026-10-22','18:45',true);ok(bodies.length===beforeBasisSend,'accounting cutover never sends a misleading automatic correction');
   ok(Number((await pool.query('SELECT count(*) FROM operations_daily_attempts')).rows[0].count)===bodies.length,'every network attempt auditable');ok(bodies.every(b=>b.msgtype==='text'),'all messages text only');
   fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({passed:true,checks:count,network:'mock only',productionWrites:false,externalMessages:false},null,2));console.log('PASS daily delivery loop: '+count+' checks, real isolated PostgreSQL, zero external sends.');
  }finally{await pool?.end();if(created)await admin.query('DROP DATABASE '+name);await admin.end();}

@@ -63,10 +63,11 @@ const ImportExport = {
       headers = ['日期','项目','类别','金额','内容说明','经手人','发票状态','凭证状态','报销状态','关联活动','创建时间'];
       rows = expenseRecords.map(r => [r.date, r.project, r.category, r.amount, r.description||'', r.handler||'', r.invoiceStatus, r.receiptStatus, r.reimbursementStatus || '未报销', r.relatedActivity||'', r.createdAt||'']);
     } else if (type === 'space') {
-      headers = ['日期','结束日期','空间','项目名称','类型','客户','状态','应收金额','预计到账日','到账明细','备注','创建时间'];
+      headers = ['日期','结束日期','空间','项目名称','类型','客户','执行状态','金额','预计到账日','到账明细','备注','创建时间','经营阶段','金额性质','合同编号','合作方式','负责人'];
       rows = records.map(r => {
         const detail = (r.payments || []).map(p => `${p.paymentDate}:¥${(+(p.amount||0)).toFixed(2)}(${p.paymentMethod || '转账'})`).join(' | ');
-        return [r.date, r.endDate || '', r.space, r.projectName, r.type, r.client||'', r.status, r.receivableAmount||0, r.expectedPaymentDate||'', detail, r.notes||'', r.createdAt||''];
+        const opportunity = typeof SpaceProjectSchema!=='undefined' && SpaceProjectSchema.isOpportunity(r);
+        return [r.date, r.endDate || '', r.space, r.projectName, r.type, r.client||'', r.status, r.receivableAmount||0, opportunity?'':r.expectedPaymentDate||'', detail, r.notes||'', r.createdAt||'',r.businessStatus||'历史待核',opportunity?'洽谈金额':'合同金额',r.contractNo||'',r.cooperationMode||'',r.projectOwner||''];
       });
     } else if (type === 'gallery') {
       headers = ['日期','作品名称','艺术家','成交价','佣金','净收入','买家','收款方式','状态','关联展览','经手人','备注','创建时间'];

@@ -110,9 +110,25 @@
     {
       "path": "sql/20261021_coffee_inventory.sql",
       "sha256": "93b46a661fc44ef718532808125ef7bbfbef00cb05b282926fad3d3eb4b1561d"
+    },
+    {
+      "path": "sql/20261024_space_execution.sql",
+      "sha256": "85e5da33300605e32d0d0ea139e8e5928509fabe7c6ee756f392d79a6465b796"
+    },
+    {
+      "path": "sql/20261025_space_project_workflow.sql",
+      "sha256": "0c902118cacaa7270228089cbc5d286a5dfb2364c7be302c11a1e275165c4580"
     }
   ],
   "rollback": [
+    {
+      "path": "sql/20261025_space_project_workflow_rollback.sql",
+      "sha256": "ad7c20bf3b771ad76c33c6b7aa9ab692eb2617e0ab7cf2bf68ef72bde6a073c0"
+    },
+    {
+      "path": "sql/20261024_space_execution_rollback.sql",
+      "sha256": "455ac1e0e072364242deef111bb32d48e99305f7438a0ce93bcb4e1a7e4264ba"
+    },
     {
       "path": "sql/20261021_coffee_inventory_rollback.sql",
       "sha256": "6385e1265559be10969dab153bce9c1ded740e7ef109fa15b0e8a02e9fce61ce"

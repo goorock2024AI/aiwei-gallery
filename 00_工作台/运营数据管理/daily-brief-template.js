@@ -7,7 +7,8 @@ function sections(p){
  const m=p.metrics,w=p.weather||{},c=p.coffee,a=p.analysis||{},delta=m.changeAmount;
  const change=`较上周同日${delta>=0?'增加':'减少'}${amount(Math.abs(delta))}元`+(m.changeRate==null?'':`（${m.changeRate>=0?'+':''}${(m.changeRate*100).toFixed(1)}%）`);
  const business=[...m.businesses].sort((a,b)=>['ticket','visit_combo','coffee','beverage_retail','creative_retail','workshop','gallery_sale','space_rental'].indexOf(a.code)-['ticket','visit_combo','coffee','beverage_retail','creative_retail','workshop','gallery_sale','space_rental'].indexOf(b.code));
- const income=`收入${amount(m.income)}元，${change}\n${business.map(b=>`· ${names[b.code]||b.name}：${amount(b.income)}元`).join('\n')}\n\n到馆${m.visitors==null?'人次待核对':amount(m.visitors)+'人次'}｜本月累计收入${amount(m.monthIncome)}元`;
+ let income=`收入${amount(m.income)}元，${change}\n${business.map(b=>`· ${names[b.code]||b.name}：${amount(b.income)}元`).join('\n')}\n\n到馆${m.visitors==null?'人次待核对':amount(m.visitors)+'人次'}｜本月累计收入${amount(m.monthIncome)}元`;
+ const sa=m.spaceAccounting;if(sa){income+='\n\n场地租赁口径：今日已执行'+amount(sa.executed)+'元｜今日实际收款'+amount(sa.receipts)+'元（不重复计入经营收入）\n期末已收未执行'+amount(sa.receivedUnexecuted)+'元｜已执行未收'+amount(sa.executedUnpaid)+'元';if(sa.pendingDays)income+='\n待核对：'+sa.pendingDays+'条到期使用明细尚未确认';if(sa.legacyUnverified.count)income+='\n旧场地款'+amount(sa.legacyUnverified.amount)+'元缺执行日期，未计入已执行收入';}
  const weather=w.status==='ok'?`采集时${String(w.currentText).replace(/（.*?）/g,'').trim()}。`:'天气暂未取得。';
  const stock=!c?'库存待核对。':!c.initialized?'请完成咖啡豆首次盘点。':`咖啡豆余量${amount(c.availableGrams)}克`+(c.suggestedGrams>0?`，${c.status==='urgent'?'需优先核对库存并安排补货':'请核对补货安排'}。建议采购约${amount(c.suggestedGrams/1000)}公斤，结合在途订单和保鲜要求确认。`:'，暂未提示补货。');
  const review=a.mode==='agent'?a.review:`收入${delta>=0?'高于':'低于'}上周同日。${[...m.businesses].sort((a,b)=>b.income-a.income).slice(0,3).map(b=>names[b.code]||b.name).join('、')}是主要收入来源。`;

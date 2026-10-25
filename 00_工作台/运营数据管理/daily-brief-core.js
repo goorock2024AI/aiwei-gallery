@@ -14,6 +14,7 @@ function summarize(finance){
  target:finance.target??null,targetProgress:finance.target>0?income(finance.month.metrics.current)/finance.target:null,
  expenses:money((finance.day.periodExpenses||[]).filter(r=>r.businessDate===finance.date).reduce((n,r)=>n+r.amount,0)),
  businesses:Object.entries(current.types).map(([code,r])=>({code,name:names[code]||code,income:money(r.income),quantity:r.missingQuantityFacts?null:r.quantity})),
+ spaceAccounting:finance.day.spaceAccounting?.current||null,
  closing:finance.closing,background:finance.background||{},alerts:finance.day.metrics.quality.alerts};
 }
 function fallback(snapshot){
@@ -28,6 +29,10 @@ async function fingerprint(db,date){
  const result=await db.query(`SELECT 'income' kind,COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY to_jsonb(t)::text)),'empty') value FROM business_revenue_facts_v2 t WHERE (business_date BETWEEN $2 AND $1 OR business_date=$3)
  UNION ALL SELECT 'cost',COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY to_jsonb(t)::text)),'empty') FROM business_cost_facts_v2 t WHERE (business_date BETWEEN $2 AND $1 OR business_date=$3)
  UNION ALL SELECT 'closing',COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY to_jsonb(t)::text)),'empty') FROM daily_closings t WHERE date=$1
+ UNION ALL SELECT 'space_orders',COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY id)),'empty') FROM space_usage t
+ UNION ALL SELECT 'space_receipts',COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY id)),'empty') FROM space_payments t WHERE payment_date<=$1
+ UNION ALL SELECT 'space_execution',COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY id)),'empty') FROM space_execution_lines t
+ UNION ALL SELECT 'legacy_space',COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY id)),'empty') FROM revenue t WHERE COALESCE(venue_amount,0)<>0 AND (date BETWEEN $2 AND $1 OR date=$3)
  UNION ALL SELECT 'context',COALESCE(md5(string_agg(to_jsonb(t)::text,'|' ORDER BY to_jsonb(t)::text)),'empty') FROM app_config t WHERE key=ANY($4::text[])`,[date,date.slice(0,7)+'-01',add(date,-7),['daily_brief_month_targets','daily_brief:'+date]]);
  return hash(result.rows);
 }

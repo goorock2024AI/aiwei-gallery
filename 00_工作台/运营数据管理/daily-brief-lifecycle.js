@@ -79,6 +79,11 @@ function service({pool,config=process.env,now=new Date(),fetcher=fetch,archive=s
     return {state:result,kind:'initial',id:first.id};
    }
    if(!rules.within(date,now)||!first||first.state!=='accepted')return {state:'archive_updated'};
+   const initialBaseline=(await db.query('SELECT payload FROM operations_daily_briefs WHERE id=$1',[first.brief_id])).rows[0];
+   if(initialBaseline&&rules.accountingBasisChanged(initialBaseline.payload,row.payload)){
+    await detail(db,date,{reviewState:'场地经营口径已切换，历史差异待人工复核',pending:null,accountingBasisChanged:true,baselineBriefId:first.brief_id,latestBriefId:row.id});
+    return {state:'basis_change_manual_review',id:row.id};
+   }
    list=await events(db,date,target.channel);
    const unresolved=list.find(e=>e.kind==='correction'&&e.state!=='accepted');
    if(unresolved){const result=config.DAILY_SEND_ENABLED==='true'?await deliver(db,unresolved,target,{now,fetcher,clock:getNow}):'disabled';if(['failed','uncertain'].includes(result))await incident(db,date,'correction_delivery_attention',{cause:result,outboxId:unresolved.id});return {state:result,kind:'correction'};}

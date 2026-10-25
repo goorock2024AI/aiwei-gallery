@@ -1510,7 +1510,7 @@ const UI = {
     const el = document.getElementById('space-rent-reminder');
     if (!el) return;
     const all = await Store.getAll('space');
-    const unpaid = all.filter(s => s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
+    const unpaid = all.filter(s => !SpaceProjectSchema.isOpportunity(s) && s.businessStatus !== '已取消' && s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
     if (!unpaid.length) { el.style.display = 'none'; return; }
     const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
     el.style.display = 'block';
@@ -2575,7 +2575,7 @@ const UI = {
     const records = await Store.getAll('space');
     if (!Auth.can('create', 'space')) {
       html(page, `
-        <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div>
+        <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div><div class="card" id="space-accounting-summary">正在核对场地经营与收款…</div>
         <div class="card">
           <div class="card-title">🏛 空间使用日历（本月）</div>
           <div class="filter-bar">
@@ -2596,11 +2596,12 @@ const UI = {
       `);
       document.getElementById('sp-filter-month').value = this._spaceFilterMonth || todayStr().slice(0, 7);
       await this._renderSpaceList();
+    await this._loadSpaceAccountingSummary();
       return;
     }
 
     html(page, `
-      <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div>
+      <div class="rent-stat-grid" id="rent-stat-grid">${this._renderRentStatCards(records)}</div><div class="card" id="space-accounting-summary">正在核对场地经营与收款…</div>
       <div class="card">
         <div class="card-title">🏛 空间使用日历（本月）</div>
         <div class="filter-bar">
@@ -2663,6 +2664,7 @@ const UI = {
       if (r) this._fillSpaceForm(r);
     }
     await this._renderSpaceList();
+    await this._loadSpaceAccountingSummary();
   },
 
   // === 顶部 4 张财务卡片（2026-07-14 重构：双口径时间锚点；2026-07-15 拆分切换器）
@@ -2689,8 +2691,9 @@ const UI = {
       const recv = +r.receivableAmount || 0;
       const got = +r.receivedAmount || 0;
 
+      const cancelled = r.status === '已取消' || r.businessStatus === '已取消';
       // 流量 1：合同月落在 totalPeriod 期内 → 应收计入
-      if (r.date && r.date.startsWith(totalStart)) {
+      if (!cancelled && r.date && r.date.startsWith(totalStart)) {
         receivable += recv;
       }
       // 流量 2：遍历子表按 payment_date 落在 recvPeriod 期内计入
@@ -2702,7 +2705,7 @@ const UI = {
       });
 
       // 存量：未收金额 + 待收项目（全期累积，合同收齐才扣除）
-      const gap = recv - got;
+      const gap = cancelled ? 0 : recv - got;
       if (gap > 0) {
         unpaidAllTime += gap;
         pendingProjects += 1;
@@ -2720,7 +2723,7 @@ const UI = {
     return `
       <div class="stat-card">
         <div class="stat-card-header">
-          <div class="stat-label">总收入</div>
+          <div class="stat-label">合同金额</div>
           ${renderToggle('total', totalPeriod)}
         </div>
         <div class="stat-value">¥${this._fmt(receivable)}</div>
@@ -2728,7 +2731,7 @@ const UI = {
       </div>
       <div class="stat-card">
         <div class="stat-card-header">
-          <div class="stat-label">已收</div>
+          <div class="stat-label">实际收款</div>
           ${renderToggle('received', recvPeriod)}
         </div>
         <div class="stat-value" style="color:var(--green-700)">¥${this._fmt(received)}</div>
@@ -2977,7 +2980,8 @@ const UI = {
     const el = $('#space-list');
     if (!el) return;
 
-    const records = await Store.getByMonth('space', filter);
+    const end = new Date(Date.UTC(Number(filter.slice(0,4)),Number(filter.slice(5,7)),0)).toISOString().slice(0,10);
+    const records = (await Store.getAll('space')).filter(r => r.date <= end && (r.endDate || r.date) >= filter+'-01');
     const countEl = $('#sp-count');
     if (countEl) countEl.textContent = `${records.length} 条记录`;
 
@@ -2997,7 +3001,7 @@ const UI = {
         <td>${this._escHtml(r.projectOwner || '-')}</td>
         <td><span class="tag ${statusTagClass}">${this._escHtml(r.businessStatus || r.status)}</span></td>
         <td>${r.rentalType === '免费' ? '免费' : `¥${this._fmt(r.receivableAmount)} / ¥${this._fmt(r.receivedAmount || 0)}`}<div class="form-hint">预计 ${expected || '—'}</div></td>
-        <td class="row-actions">
+        <td class="row-actions"><button class="btn btn-sm btn-secondary" data-id="${this._escHtml(r.id)}" onclick="UI._openSpaceExecution(this.dataset.id)">使用与执行</button>
           ${Auth.can('edit', 'space') ? `<button class="btn btn-sm btn-secondary" onclick="UI._editSpace('${r.id}')">编辑</button>` : ''}
         </td>
       </tr>`;
@@ -5557,7 +5561,7 @@ const UI = {
           ${Auth.can('export', 'daily-closing') ? `
             <div class="form-group"><label for="daily-export-month">历史导出月份</label><input type="month" id="daily-export-month" value="${exportMonth}" max="${todayStr().slice(0, 7)}" onchange="UI._dailyClosingExportMonth=this.value"></div>
             <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingMonth()">导出所选月份</button>
-            <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingRevenue()">导出收入明细</button>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="UI._exportDailyClosingRevenue()">导出收款明细</button>
           ` : ''}
           <span style="font-size:12px;color:var(--gray-500);margin-left:auto" id="daily-close-status"></span>
         </div>
@@ -5678,7 +5682,7 @@ const UI = {
         <tr${active}>
           <td><strong>${this._esc(date)}</strong></td>
           <td><span class="tag ${statusClass(status)}">${this._esc(status)}</span></td>
-          <td><strong>¥${this._fmt(systemNet)}</strong><div style="font-size:12px;color:var(--gray-500)">${dayFacts.length} 条收入事实</div></td>
+          <td><strong>¥${this._fmt(systemNet)}</strong><div style="font-size:12px;color:var(--gray-500)">${dayFacts.length} 条收付事实；场地按到账日</div></td>
           <td>${c ? `<strong>¥${this._fmt(confirmed)}</strong>` : '<span style="color:var(--gray-500)">待结存</span>'}</td>
           <td>${c ? `<strong style="color:${diffColor(diff)}">¥${this._fmt(diff)}</strong>` : '<span style="color:var(--gray-500)">-</span>'}</td>
           <td>${this._summaryInline(byCategory)}</td>
@@ -5695,7 +5699,7 @@ const UI = {
         <div class="card-title">${ym} 日结台账</div>
         <div class="table-wrap">
           <table class="data-table">
-            <thead><tr><th>日期</th><th>结存状态</th><th>系统净收入</th><th>实收确认</th><th>差异</th><th>品类收入</th><th>收款方式</th><th>存现金</th><th>结账人</th><th>操作</th></tr></thead>
+            <thead><tr><th>日期</th><th>结存状态</th><th>系统净收款</th><th>实收确认</th><th>差异</th><th>品类收款</th><th>收款方式</th><th>存现金</th><th>结账人</th><th>操作</th></tr></thead>
             <tbody>${tableRows}</tbody>
           </table>
         </div>
@@ -5882,7 +5886,7 @@ const UI = {
         return {
           '日期': day,
           '结存状态': closing?.status || '未结存',
-          '系统净收入': systemNet,
+          '系统净收款': systemNet,
           '实收确认': confirmed,
           '差异': closing ? +(closing.differenceAmount ?? closing.difference_amount ?? ((+confirmed || 0) - systemNet)) : '',
           '品类收入': this._dailyClosingSummaryText(dayFacts.length ? this._sumBy(dayFacts, 'category') : (closing?.revenueSummary?.byCategory || closing?.revenue_summary?.byCategory || {})),
@@ -5977,10 +5981,10 @@ const UI = {
       </tr>
     `).join('') : '<tr><td colspan="6" style="color:var(--gray-500)">暂无退款/作废调整</td></tr>';
 
-    const detailContent = `
+    const detailContent = `<p class="form-hint">本页核对实际收款。场地预收款按到账日期统计；活动执行不会重复收款。已执行收入请查看经营报表。</p>
       <div class="stats-grid" style="margin-bottom:16px">
-        <div class="stat-card"><div class="stat-label">系统净收入</div><div class="stat-value">¥${this._fmt(systemNet)}</div><div class="stat-sub">${dayFacts.length} 条收入事实</div></div>
-        <div class="stat-card"><div class="stat-label">正向收入</div><div class="stat-value">¥${this._fmt(grossPositive)}</div><div class="stat-sub">退款前口径</div></div>
+        <div class="stat-card"><div class="stat-label">系统净收款</div><div class="stat-value">¥${this._fmt(systemNet)}</div><div class="stat-sub">${dayFacts.length} 条收付事实；场地按到账日</div></div>
+        <div class="stat-card"><div class="stat-label">正向收款</div><div class="stat-value">¥${this._fmt(grossPositive)}</div><div class="stat-sub">退款前口径</div></div>
         <div class="stat-card"><div class="stat-label">退款扣减</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(refundTotal)}</div><div class="stat-sub">${dayAdjustments.length} 条调整流水</div></div>
         <div class="stat-card"><div class="stat-label">运营支出</div><div class="stat-value" style="color:var(--red)">¥${this._fmt(expenseOut)}</div><div class="stat-sub">${pendingReceipt} 条票据待补</div></div>
       </div>
@@ -6020,7 +6024,7 @@ const UI = {
       ${Auth.can('create', 'daily-closing') ? `<div class="card">
         <div class="card-title">日结确认</div>
         <div class="form-grid">
-          <div class="form-group"><label>系统净收入</label><input type="number" id="daily-system-net" value="${systemNet.toFixed(2)}" readonly></div>
+          <div class="form-group"><label>系统净收款</label><input type="number" id="daily-system-net" value="${systemNet.toFixed(2)}" readonly></div>
           <div class="form-group"><label>实收确认金额</label><input type="number" id="daily-confirmed" value="${confirmed.toFixed(2)}" step="0.01" oninput="UI._updateDailyClosingDiff()"></div>
           <div class="form-group"><label>差异金额</label><input type="number" id="daily-diff" value="${diff.toFixed(2)}" readonly></div>
           <div class="form-group"><label>结账人</label><input type="text" id="daily-closer" value="${this._esc(closing?.closerName || Auth.currentUser?.displayName || '')}"></div>
