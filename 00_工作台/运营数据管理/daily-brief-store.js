@@ -8,7 +8,7 @@ async function generate(pool,date,{now=new Date().toISOString(),actor='service:d
  // A session lock is acquired before the repeatable-read snapshot so competing runs cannot create duplicate revisions.
  await db.query('SELECT pg_advisory_lock(hashtext($1))',['daily-brief:'+date]);
  try{await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ');const old=await latest(db,date),collected=await core.collect(db,date,now);
-  if(old&&old.source_hash===collected.sourceHash&&!force&&(date!==core.day(now)||(old.payload.coffee?.stateVersion??null)===(collected.coffee?.stateVersion??null))){await db.query('COMMIT');committed=true;return old;}
+  if(old&&old.payload.templateVersion===require('./daily-brief-template').version&&old.source_hash===collected.sourceHash&&!force&&(date!==core.day(now)||(old.payload.coffee?.stateVersion??null)===(collected.coffee?.stateVersion??null))){await db.query('COMMIT');committed=true;return old;}
   const observed=weather||await connectors.weather(date);
   const p=core.assemble(collected,date,now,observed,old?.payload);p.id=crypto.randomUUID();p.revision=(old?.revision||0)+1;
   p.analysis=analysis||await connectors.analyze(p);artifacts=render.renderFiles(p,directory());

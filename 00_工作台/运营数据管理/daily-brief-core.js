@@ -10,15 +10,17 @@ const names={ticket:'普通门票',visit_combo:'咖啡套票',coffee:'单售咖�
 function summarize(finance){
  const current=finance.day.metrics.current,previous=finance.day.metrics.previous,total=income(current),before=income(previous);
  return {income:total,previousIncome:before,changeAmount:money(total-before),changeRate:before>0?(total-before)/before:null,
+ previousVisitors:previous.visitors.value,visitorChangeAmount:current.visitors.value==null||previous.visitors.value==null?null:current.visitors.value-previous.visitors.value,visitorChangeRate:current.visitors.value!=null&&previous.visitors.value>0?(current.visitors.value-previous.visitors.value)/previous.visitors.value:null,
  visitors:current.visitors.value,recordedVisitors:current.visitors.recorded,monthIncome:income(finance.month.metrics.current),
  target:finance.target??null,targetProgress:finance.target>0?income(finance.month.metrics.current)/finance.target:null,
  expenses:money((finance.day.periodExpenses||[]).filter(r=>r.businessDate===finance.date).reduce((n,r)=>n+r.amount,0)),
- businesses:Object.entries(current.types).map(([code,r])=>({code,name:names[code]||code,income:money(r.income),quantity:r.missingQuantityFacts?null:r.quantity})),
+ businesses:[...new Set([...Object.keys(current.types),...Object.keys(previous.types)])].map(code=>{const r=current.types[code];return {code,name:names[code]||code,income:money(r?.income??0),previousIncome:money(previous.types[code]?.income??0),quantity:r?.missingQuantityFacts?null:r?.quantity??0};}),
  spaceAccounting:finance.day.spaceAccounting?.current||null,
  closing:finance.closing,background:finance.background||{},alerts:finance.day.metrics.quality.alerts};
 }
 function fallback(snapshot){
- const m=snapshot.metrics,review=`当日全馆收入${m.income.toFixed(2)}元；较上周同日${m.changeAmount>=0?'增加':'减少'}${Math.abs(m.changeAmount).toFixed(2)}元。变化原因需结合已记录的活动、供给和天气核实。`;
+ const template=require('./daily-brief-template'),review=template.review(snapshot);
+ if(template.isClosed(snapshot))return {mode:'basic',review,tomorrow:'',actions:[]};
  const actions=[];if(!snapshot.finalized)actions.push('补齐日结及缺失数据，发布日报修订版。');
  if(snapshot.coffee?.status==='setup')actions.push('完成咖啡豆首次盘点与库存初始化。');
  else if(snapshot.coffee?.suggestedGrams>0)actions.push('查看库存模块的采购建议及在途状态，确认备料安排。');
@@ -55,7 +57,7 @@ function assemble(collected,date,now,weather,previous){
  const metrics=summarize(collected.finance),closing=metrics.closing;
  if(date===day(now))previous=null;
  const finalized=closing.length>0&&closing.every(s=>['已确认','已复核','已结账','已日结','已完成'].includes(s));
- const snapshot={schemaVersion:1,date,generatedAt:now,cutoffTime:now,closeTime:'17:30',sourceHash:collected.sourceHash,
+ const snapshot={schemaVersion:1,templateVersion:require('./daily-brief-template').version,date,generatedAt:now,cutoffTime:now,closeTime:'17:30',sourceHash:collected.sourceHash,
  finalized,metrics,finance:collected.finance,weather:previous?.weather||weather,coffee:previous?.coffee??collected.coffee,
  quality:{dayClosingComplete:finalized,weatherMissing:(previous?.weather||weather).status!=='ok',historicalStockUnavailable:!previous&&date!==day(now)}};
  snapshot.analysis=fallback(snapshot);return snapshot;

@@ -1,0 +1,58 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const template=require('../daily-brief-template'),core=require('../daily-brief-core'),render=require('../daily-brief-render'),dispatch=require('../daily-brief-dispatch');
+const type=income=>({income,quantity:1,missingQuantityFacts:0});
+function fixture(){
+ const current={visitors:{value:20,recorded:20},types:{ticket:type(200),visit_combo:type(300),creative_retail:type(100),coffee:type(100)}};
+ const previous={visitors:{value:30,recorded:30},types:{ticket:type(300),visit_combo:type(300),creative_retail:type(300),coffee:type(100)}};
+ const finance={date:'2026-10-27',day:{metrics:{current,previous,quality:{alerts:[]}},periodExpenses:[]},month:{metrics:{current:{types:{ticket:type(14500)}}}},target:25000,closing:[]};
+ return {id:'daily-template-sample',preview:true,date:'2026-10-27',generatedAt:'2026-10-27T10:00:00Z',cutoffTime:'2026-10-27T10:00:00Z',finalized:false,metrics:core.summarize(finance),finance,weather:{status:'ok',currentText:'小雨，18℃（采集时天气，非全天实况）',tomorrowText:'多云，13～21℃'},coffee:{initialized:true,availableGrams:2400,suggestedGrams:0}};
+}
+const p=fixture(),text=template.text(p),sections=template.sections(p);
+assert.equal(text.split('\n')[0],'艾维美术馆经营日报 | 10月27日');
+assert(!/今日复盘\s*·\s*明日提示|今日天气|今日经营/.test(text));
+assert(text.includes('2026年10月27日 星期二 【天气：采集时小雨，18℃】'));
+assert.deepEqual(sections.map(x=>x[0]),['营业概况','今日复盘','明日重点','备料提醒','统计说明']);
+assert.equal(sections[0][1],'收入总额700元，同比下降30.0%\n今日到馆20人次，同比下降33.3%\n本月累计收入14,500元，目标达成率58.0%');
+assert(sections[1][1].includes('文创零售减少200元、门票减少100元'));
+assert(sections[1][1].includes('上周同期30人次，同比下降33.3%，减少10人次'));
+assert(sections[1][1].includes('可能影响公园客流'));assert(!sections[1][1].includes('因为下雨导致'));
+assert(sections[4][1].includes('2026-10-27 对比 2026-10-20'));
+assert.equal(dispatch.summary(p),text);
+assert.equal(core.summarize(p.finance).previousVisitors,30);
+assert.equal(p.metrics.visitorChangeAmount,-10);
+assert.equal(p.metrics.businesses.find(b=>b.code==='creative_retail').previousIncome,300);
+for(const date of ['2026-01-01','2026-03-01','2026-10-27','2027-01-01']){const prev=template.comparisonDate(date);assert.equal(new Date(date).getUTCDay(),new Date(prev).getUTCDay());assert.equal((Date.parse(date)-Date.parse(prev))/86400000,7);}
+const vanished=fixture();delete vanished.finance.day.metrics.current.types.creative_retail;vanished.finance.day.metrics.previous.types.workshop=type(50);vanished.metrics=core.summarize(vanished.finance);
+assert(template.review(vanished).includes('工坊：0元；上周同期50元，同比下降100.0%'));
+assert(template.review(vanished).includes('文创零售减少300元'));
+const fresh=fixture();fresh.finance.day.metrics.current.types.workshop=type(50);fresh.metrics=core.summarize(fresh.finance);
+assert(template.review(fresh).includes('工坊：50元；上周同期0元'));
+assert(template.review(fresh).includes('增长合计50元，抵消了部分降幅'));
+const old=fixture();delete old.metrics.previousVisitors;for(const b of old.metrics.businesses)delete b.previousIncome;
+assert.equal(template.text(old),text);
+const missing=fixture();missing.metrics.previousVisitors=null;missing.metrics.targetProgress=null;missing.metrics.target=null;
+assert(template.sections(missing)[0][1].includes('同比待核对'));assert(template.text(missing).includes('目标未设置'));
+assert(!/NaN|Infinity/.test(template.text(missing)));
+assert(template.change(20,0,'人次').includes('涨跌幅不适用'));
+assert.equal(template.change(0,0),'同比持平（0%）');
+assert(template.change(100,-10).includes('涨跌幅不适用'));
+const sunny=fixture();sunny.weather.currentText='晴，18℃';assert(!template.review(sunny).includes('降雨可能'));
+const dry=fixture();dry.weather.currentText='无雨';assert(!template.review(dry).includes('降雨可能'));
+const gaining=fixture();gaining.metrics.visitors=40;assert(!template.review(gaining).includes('降雨可能'));
+const malicious=fixture();malicious.weather.currentText='<script>alert(1)</script>';assert(!render.html(malicious).includes('<script>'));assert(!render.svg(malicious).includes('<script>'));
+for(const output of [render.html(p),render.svg(p)]){let last=-1;for(const heading of sections.map(x=>x[0])){const at=output.indexOf(heading,last+1);assert(at>last);last=at;}}
+const large=fixture();for(const code of ['beverage_retail','workshop','gallery_sale','space_rental'])large.metrics.businesses.push({code,income:12345,previousIncome:23456});
+large.metrics.spaceAccounting={executed:1234,receipts:2345,receivedUnexecuted:2000,executedUnpaid:3000,pendingDays:5,legacyUnverified:{count:5,amount:2000}};
+large.metrics.alerts=['待核对数据'.repeat(80)];
+const group=template.text(large);assert(Buffer.byteLength(group,'utf8')<=2048);assert(group.includes('场地租赁'));assert(group.includes('2026-10-20'));for(const heading of ['营业概况','今日复盘','明日重点','备料提醒','统计说明'])assert(group.includes(heading));
+const noQuantity=fixture();noQuantity.finance.day.metrics.previous.visitors.value=null;noQuantity.metrics=core.summarize(noQuantity.finance);assert.equal(noQuantity.metrics.visitorChangeRate,null);assert.equal(noQuantity.metrics.visitorChangeAmount,null);assert(template.sections(noQuantity)[0][1].includes('同比待核对'));
+const directory=path.resolve(process.env.DAILY_SAMPLE_DIR||path.join(__dirname,'../tmp/daily-template-20261027'));
+fs.mkdirSync(directory,{recursive:true});
+fs.writeFileSync(path.join(directory,'sample.txt'),'【模拟数据样稿，非真实经营数据】\n\n'+text);
+fs.writeFileSync(path.join(directory,'sample.html'),render.html(p));
+const {Resvg}=require('@resvg/resvg-js');
+const png=new Resvg(render.svg(p),{font:{fontFiles:[path.resolve(__dirname,'../fonts/NotoSansSC-Regular.ttf')],loadSystemFonts:false,defaultFontFamily:'Noto Sans SC'}}).render().asPng();
+assert(png.length<2*1024*1024);fs.writeFileSync(path.join(directory,'sample.png'),png);
+console.log('PASS daily template: title/order/three overview lines, categories/visitors/target, same weekday across month/year, disappearing/new categories, legacy snapshots, zero/negative/unknown baseline, weather inference, escaping, text/HTML/PNG. Simulated data only.');
+module.exports={fixture};

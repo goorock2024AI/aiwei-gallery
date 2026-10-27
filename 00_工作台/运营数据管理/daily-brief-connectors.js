@@ -19,6 +19,7 @@ async function weather(date,config=process.env,fetcher=fetch){
  }catch{return {...missing,status:'failed',reason:'天气请求或响应校验失败'};}
 }
 async function analyze(snapshot,config=process.env,fetcher=fetch){
+ if(require('./daily-brief-template').isClosed(snapshot))return fallback(snapshot);
  if(config.DAILY_MODEL_ENABLED!=='true'||!config.DAILY_MODEL_KEY||!config.DAILY_MODEL_NAME)return fallback(snapshot);
  try{
   const base=secureURL(config.DAILY_MODEL_BASE||'https://api.openai.com/v1/');base.pathname=base.pathname.replace(/\/?$/,'/');

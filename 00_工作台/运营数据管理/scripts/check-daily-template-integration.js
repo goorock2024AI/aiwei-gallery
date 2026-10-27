@@ -1,0 +1,24 @@
+'use strict';
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict'),{Client,Pool}=require('pg');
+const root=path.resolve(__dirname,'..'),cfg=JSON.parse(fs.readFileSync(path.join(root,'tmp/m3-05-test.json'))),core=require('../daily-brief-core'),store=require('../daily-brief-store'),template=require('../daily-brief-template'),loop=require('../daily-brief-lifecycle');
+assert.equal(cfg.host,'127.0.0.1');assert.equal(cfg.port,55435);
+process.env.DAILY_MODEL_ENABLED='false';process.env.REPORT_ARCHIVE_DIR=path.join(root,'tmp/daily-template-integration/archive');
+const weather={status:'ok',currentText:'小雨，18℃',tomorrowText:'多云，13～21℃'};
+(async()=>{const admin=new Client({host:cfg.host,port:cfg.port,user:'postgres',database:'postgres',password:cfg.password});await admin.connect();const name='aiwei_daily_template_'+Date.now();let pool,created=false;try{
+await admin.query('CREATE DATABASE '+name+' TEMPLATE aiwei_m3_05_test');created=true;pool=new Pool({host:cfg.host,port:cfg.port,user:'postgres',database:name,password:cfg.password});
+for(const file of ['20261011_operations_analysis_reports.sql','20261024_space_execution.sql','20261021_coffee_inventory.sql','20261021_daily_briefs.sql','20261022_daily_delivery_loop.sql'])await pool.query(fs.readFileSync(path.join(root,'sql',file),'utf8'));
+await pool.query("DELETE FROM revenue WHERE date BETWEEN '2026-10-01' AND '2026-10-27'");
+await pool.query("INSERT INTO revenue(id,date,ticket_qty,ticket_amount,combo_qty,combo_amount,coffee_qty,coffee_amount,creative_amount,status) VALUES('template-prior','2026-10-20',15,300,15,300,5,100,300,'正常'),('template-current','2026-10-27',10,200,10,300,5,100,100,'正常')");
+await pool.query("INSERT INTO app_config(key,value) VALUES('daily_brief_month_targets','{\"2026-10\":25000}'::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value");
+const before=await core.fingerprint(pool,'2026-10-27');
+const row=await store.generate(pool,'2026-10-27',{now:'2026-10-27T18:00:00+08:00',weather});
+assert.equal(row.payload.templateVersion,'1.1');assert.equal(row.payload.metrics.income,700);assert.equal(row.payload.metrics.previousIncome,1000);assert.equal(row.payload.metrics.visitors,20);assert.equal(row.payload.metrics.previousVisitors,30);assert.equal(row.payload.metrics.target,25000);assert.equal(row.payload.metrics.targetProgress,1700/25000);
+assert(template.review(row.payload).includes('文创零售减少200元、门票减少100元'));assert(template.review(row.payload).includes('减少10人次'));assert.equal(row.payload.finance.day.previous.start,'2026-10-20');
+const oldHTML=store.read(row,'html');await pool.query("UPDATE operations_daily_briefs SET payload=payload-'templateVersion' WHERE id=$1",[row.id]);
+const revised=await store.generate(pool,'2026-10-27',{now:'2026-10-27T18:00:00+08:00',weather});assert.equal(revised.revision,row.revision+1);assert.equal(revised.supersedes,row.id);assert.deepEqual(store.read(row,'html'),oldHTML);
+assert.equal((await store.generate(pool,'2026-10-27',{now:'2026-10-27T18:00:00+08:00',weather})).id,revised.id);
+const closed=await store.generate(pool,'2026-10-26',{now:'2026-10-26T18:00:00+08:00',weather});assert.equal(template.text(closed.payload),'艾维美术馆经营日报 | 10月26日\n\n闭馆休息日未营业');assert(!store.read(closed,'html').toString().includes('今日复盘'));
+let calls=0,body;const options={pool,now:'2026-10-27T18:00:00+08:00',config:{DAILY_SEND_ENABLED:'true',DAILY_WECOM_WEBHOOK:'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=isolated-template-only'},archive:{latest:store.latest,generate:()=>Promise.resolve(revised)},fetcher:async(url,o)=>{calls++;body=JSON.parse(o.body).text.content;return {ok:true,json:async()=>({errcode:0})};}};
+assert.equal((await loop.service(options).run('2026-10-27',{initial:true})).state,'accepted');await loop.service(options).run('2026-10-27',{initial:true});assert.equal(calls,1);assert(body.startsWith('艾维美术馆经营日报 | 10月27日\n'));assert(body.includes('营业概况'));assert(Buffer.byteLength(body)<=2048);assert.equal(await core.fingerprint(pool,'2026-10-27'),before);
+console.log('PASS template integration: real PostgreSQL same-weekday/category/visitor/target data, closed Monday, template revision/cache/old artifacts, new-title mocked send and dedupe; business sources unchanged. No external sends.');
+}finally{await pool?.end();if(created)await admin.query('DROP DATABASE '+name);await admin.end();}})().catch(e=>{console.error(e.stack);process.exitCode=1;});
