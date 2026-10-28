@@ -39,23 +39,9 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
         const projectId = String(query.id || payload.payment.spaceUsageId || '');
         const project = (await client.query('SELECT * FROM space_usage WHERE id=$1 FOR UPDATE', [projectId])).rows[0];
         if (!project) throw new Error('空间项目不存在');
-        if (project.rental_type !== '付费') throw new Error('免费项目不能录入到账');
-        if (project.business_status === '已取消' || project.status === '已取消') throw new Error('已取消项目不能录入到账');
-        const payment = toSnake(payload.payment);
-        payment.payment_date = String(payment.payment_date || '');
-        payment.amount = Math.round(Number(payment.amount) * 100) / 100;
-        if (!validDate(payment.payment_date)) throw new Error('请选择有效到账日期');
-        if (payment.payment_date > new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date())) throw new Error('实际到账日期不能晚于今天');
-        if (!Number.isFinite(payment.amount) || payment.amount <= 0) throw new Error('到账金额必须大于 0');
-        const received = Number((await client.query('SELECT COALESCE(SUM(amount),0) amount FROM space_payments WHERE space_usage_id=$1', [projectId])).rows[0].amount);
-        const remaining = Math.round(Math.max(0, Number(project.receivable_amount) - received) * 100) / 100;
-        if (payment.amount > remaining) throw new Error('到账金额不能超过待收金额');
-        const id = String(payment.id || crypto.randomUUID());
-        const saved = (await client.query(`INSERT INTO space_payments(id,space_usage_id,payment_date,amount,payment_method,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`, [id, projectId, payment.payment_date, payment.amount, String(payment.payment_method || '转账').slice(0, 50), String(payment.notes || '').slice(0, 500)])).rows[0];
-        if (saved.payment_method === '现金') await client.query("INSERT INTO cash_movements(id,date,type,amount,source_type,source_id,operator_id,operator_name,reason,notes) VALUES($1,$2,'cash_sale',$3,'space',$4,$5,$6,'场地现金租金到账','由场地收款事务生成')", ['cash_space_'+id,saved.payment_date,saved.amount,id,user.id,user.display_name||user.username||'']);
-        await log(client, user, 'payment_create', projectId, { source: 'space-entry-v2', originalProjectId: projectId, payment: saved, receivedBefore: received, receivedAfter: received + payment.amount });
+        const result=await require('./space-payment')(client,user,project,payload.payment);
         await client.query('COMMIT');
-        return sendJSON(res, 201, { payment: toCamel(saved), remainingAmount: Math.round((remaining - payment.amount) * 100) / 100 });
+        return sendJSON(res,result.unchanged?200:201,{...result,payment:toCamel(result.payment)});
       }
 
       if (!payload.project || typeof payload.project !== 'object') throw new Error('缺少空间项目数据');
@@ -65,6 +51,7 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
       if (req.method === 'PATCH') {
         previous = (await client.query('SELECT * FROM space_usage WHERE id=$1 FOR UPDATE', [id])).rows[0];
         if (!previous) throw new Error('空间项目不存在');
+        if((await client.query("SELECT 1 FROM space_quick_rentals WHERE space_usage_id=$1 AND mode='simple'",[id])).rowCount)throw Error('此项目使用简易流程，请通过简易登记维护或转入完整流程');
       }
       const project = { ...(previous || {}), id };
       for (const key of editable) if (input[key] !== undefined) project[key] = input[key];
@@ -91,11 +78,8 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
       if (previous) await require('./space-accounting').guardProject(client, project);
       if (!String(project.cooperation_mode || '').trim()) throw new Error('请选择合作方式');
       if (['已签约', '执行中', '已完成'].includes(project.business_status) && project.rental_type === '付费' && !String(project.contract_no || '').trim()) throw new Error('付费签约项目必须填写合同编号');
-      if (['已确认', '进行中'].includes(project.status)) {
-        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['space-booking:' + project.space]);
-        const conflict = (await client.query(`SELECT id,project_name,date,end_date FROM space_usage WHERE space=$1 AND status IN ('已确认','进行中') AND $2<=COALESCE(NULLIF(end_date,''),date) AND $3>=date AND id<>$4 LIMIT 1 FOR UPDATE`, [project.space, project.date, project.end_date, id])).rows[0];
-        if (conflict) throw new Error(`时间冲突：${project.space} 已被「${conflict.project_name}」占用`);
-      }
+      if (['已确认','进行中'].includes(project.status)) {const booking=require('./space-booking');await booking.guard(client,{id,space:project.space,...await booking.range(client,project)});}
+      if(previous)await require('./space-booking').sync(client,project);
       let saved;
       if (previous) saved = (await client.query(`UPDATE space_usage SET ${editable.map((key, i) => `"${key}"=$${i + 1}`).join(',')} WHERE id=$${editable.length + 1} RETURNING *`, [...editable.map(key => project[key]), id])).rows[0];
       else saved = (await client.query(`INSERT INTO space_usage(id,${editable.map(k => `"${k}"`).join(',')}) VALUES($1,${editable.map((_, i) => '$' + (i + 2)).join(',')}) RETURNING *`, [id, ...editable.map(key => project[key])])).rows[0];
@@ -104,7 +88,7 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
       return sendJSON(res, previous ? 200 : 201, { project: toCamel(saved) });
     } catch (error) {
       if (client) await client.query('ROLLBACK').catch(() => {});
-      return sendError(res, error.message === '请求内容过大' ? 413 : 400, error.code === '23505' ? '合同编号或记录已存在' : error.message);
+      return sendError(res, error.status || (error.message === '请求内容过大' ? 413 : 400), error.code === '23505' ? '合同编号或记录已存在' : error.message);
     } finally { client?.release(); }
   };
 };

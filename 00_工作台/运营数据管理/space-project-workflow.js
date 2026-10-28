@@ -30,6 +30,7 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
   if(req.method==='GET'){
    await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
    const project=(await db.query('SELECT * FROM space_usage WHERE id=$1',[id])).rows[0];if(!project)return await db.query('ROLLBACK').then(()=>sendError(res,404,'项目不存在'));
+   const quick=(await db.query('SELECT mode FROM space_quick_rentals WHERE space_usage_id=$1',[id])).rows[0];if(quick?.mode==='simple')throw Error('请先从简易登记转入完整流程');
    const workflow=(await db.query('SELECT * FROM space_project_workflows WHERE space_usage_id=$1',[id])).rows[0];
    const documents=(await db.query('SELECT id,revision,template_version,source_version,created_at FROM space_contract_documents WHERE space_usage_id=$1 ORDER BY revision DESC',[id])).rows;
    if(q.document){const doc=(await db.query('SELECT * FROM space_contract_documents WHERE id=$1 AND space_usage_id=$2',[String(q.document),id])).rows[0];if(!doc)return await db.query('ROLLBACK').then(()=>sendError(res,404,'合同版本不存在'));await db.query('COMMIT');
@@ -38,12 +39,13 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
    }
    const expenses=(await db.query('SELECT e.id,e.date,e.amount,e.category,e.description,e.reimbursement_status FROM expense e JOIN space_project_expenses l ON l.expense_id=e.id WHERE l.space_usage_id=$1 ORDER BY e.date',[id])).rows;
    const events=(await db.query("SELECT action,version,created_at,after_payload->>'notes' notes,after_payload->>'nextAction' next_action FROM space_project_workflow_events WHERE space_usage_id=$1 ORDER BY created_at DESC,id DESC LIMIT 30",[id])).rows;
-   const catalog=await profiles.load(db);await db.query('COMMIT');const payload=workflow?.payload||defaults(project);if(!payload.profileSelection){payload.profileSelection={organizationId:!payload.terms.partyAName?catalog.organizations[0]?.id||'':'',venueId:!payload.terms.venueAddress?catalog.venues[0]?.id||'':'',version:catalog.version};profiles.apply(payload,catalog,workflow?.payload);}else if(!workflow)profiles.apply(payload,catalog);return sendJSON(res,200,{project:toCamel(project),version:workflow?.version||0,payload,documents:documents.map(toCamel),expenses:expenses.map(toCamel),events:events.map(toCamel),opportunity:schema.isOpportunity(project),templateVersion:schema.version,profiles:catalog,preview:document.model(payload)});
+   const catalog=await profiles.load(db);await db.query('COMMIT');const payload=workflow?.payload||defaults(project);if(!payload.profileSelection){payload.profileSelection={organizationId:!payload.terms.partyAName?catalog.organizations[0]?.id||'':'',venueId:!payload.terms.venueAddress?catalog.venues[0]?.id||'':'',version:catalog.version};profiles.apply(payload,catalog,workflow?.payload);}else if(!workflow)profiles.apply(payload,catalog);return sendJSON(res,200,{project:toCamel(project),version:workflow?.version||0,payload,documents:documents.map(toCamel),expenses:expenses.map(toCamel),events:events.map(toCamel),opportunity:schema.isOpportunity(project)||(quick?.mode==='full'&&project.business_status==='租赁确认'),templateVersion:schema.version,profiles:catalog,preview:document.model(payload)});
   }
   let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;if(size>400000)throw Error('填报内容过大');chunks.push(chunk);}const body=JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');
   if(!['save','generate','confirm-cooperation'].includes(body.action))throw Error('操作无效');
   await db.query('BEGIN');
   const project=(await db.query('SELECT * FROM space_usage WHERE id=$1 FOR UPDATE',[id])).rows[0];if(!project)throw Error('项目不存在');
+  const quick=(await db.query('SELECT mode FROM space_quick_rentals WHERE space_usage_id=$1',[id])).rows[0];if(quick?.mode==='simple')throw Error('简易租赁不涉及合同，请先转入完整流程');
   const old=(await db.query('SELECT * FROM space_project_workflows WHERE space_usage_id=$1 FOR UPDATE',[id])).rows[0];
   if(body.version!==(old?.version||0)){const e=Error('资料已被其他人更新，请刷新后核对');e.status=409;throw e;}
   let saved;
@@ -61,7 +63,7 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
    saved=(await db.query('INSERT INTO space_contract_documents(id,space_usage_id,revision,template_version,snapshot,source_version,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[body.requestId,id,revision,schema.version,JSON.stringify({...old.payload,_documentCreatedAt:new Date().toISOString()}),old.version,user.id])).rows[0];
   }else{
    if(user.role!=='admin')return await db.query('ROLLBACK').then(()=>sendError(res,403,'仅管理员可确认合作'));
-   if(!schema.isOpportunity(project))throw Error('该项目已是正式或历史合作，请通过变更流程核对');
+   if(!schema.isOpportunity(project)&&!(quick?.mode==='full'&&project.business_status==='租赁确认'))throw Error('该项目已是正式或历史合作，请通过变更流程核对');
    const f=old?.payload?.terms;if(!f)throw Error('请先保存合同条件');
    for(const key of ['partyAName','partyBName','contractNo','exhibitStart','exhibitEnd','totalAmount'])if(!String(f[key]||'').trim())throw Error('请补齐签约主体、合同编号、展期和正式金额');
    const evidence=text(body.evidence,2000);if(!evidence||body.confirmed!==true)throw Error('请明确确认已取得签约或合作依据并填写凭据位置');
@@ -70,11 +72,10 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
    if(project.rental_type==='免费'&&formalAmount!==0)throw Error('免费合作的正式金额应为零');
    if(formalAmount>0&&((old.payload.payments||[]).length===0||Math.round(old.payload.payments.reduce((n,p)=>n+p.amount,0)*100)!==Math.round(formalAmount*100)||(old.payload.payments||[]).some(p=>!p.dueDate&&!p.trigger)))throw Error('请先核对付款节点、到期条件及合计金额');
    if(body.documentId){const doc=(await db.query('SELECT source_version FROM space_contract_documents WHERE id=$1 AND space_usage_id=$2',[body.documentId,id])).rows[0];if(!doc||doc.source_version!==old.version)throw Error('所选合同草稿已过期，请核对最新版本');}
-   await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',['space-booking:'+project.space]);
-   const conflict=(await db.query("SELECT id FROM space_usage WHERE space=$1 AND status IN ('已确认','进行中') AND date<=$2 AND COALESCE(NULLIF(end_date,''),date)>=$3 AND id<>$4 LIMIT 1",[project.space,f.exhibitEnd,f.exhibitStart,id])).rows[0];if(conflict)throw Error('正式展期与现有预约冲突，请先核对');
-   const changed={...project,date:f.exhibitStart,end_date:f.exhibitEnd,receivable_amount:formalAmount};await accounting.guardProject(db,changed);
+   const booking=require('./space-booking');await booking.guard(db,{id,space:project.space,...await booking.range(db,{...project,date:f.exhibitStart,end_date:f.exhibitEnd})});
+   const changed={...project,date:f.exhibitStart,end_date:f.exhibitEnd,receivable_amount:formalAmount};await accounting.guardProject(db,changed);await require('./space-booking').sync(db,changed);
    const absolute=(old.payload.payments||[]).map(p=>p.dueDate).filter(Boolean).sort()[0]||'';
-   await db.query("UPDATE space_usage SET business_status='已签约',status='已确认',contract_no=$2,receivable_amount=$3,date=$4,end_date=$5,expected_payment_date=$6,project_owner=$7 WHERE id=$1",[id,f.contractNo,formalAmount,f.exhibitStart,f.exhibitEnd,absolute,old.payload.owner||project.project_owner||'']);
+   await db.query("UPDATE space_usage SET business_status='已签约',status=CASE WHEN status='已完成' THEN status ELSE '已确认' END,contract_no=$2,receivable_amount=$3,date=$4,end_date=$5,expected_payment_date=$6,project_owner=$7 WHERE id=$1",[id,f.contractNo,formalAmount,f.exhibitStart,f.exhibitEnd,absolute,old.payload.owner||project.project_owner||'']);
    const payload={...old.payload,confirmation:{evidence,documentId:body.documentId||'',by:user.id,at:new Date().toISOString()}};
    saved=(await db.query('UPDATE space_project_workflows SET payload=$2,version=version+1,updated_by=$3,updated_at=now() WHERE space_usage_id=$1 RETURNING *',[id,JSON.stringify(payload),user.id])).rows[0];
   }

@@ -35,7 +35,7 @@ async function guardProject(db,project){
  const earned=(await db.query("SELECT 1 FROM space_execution_lines WHERE space_usage_id=$1 AND status='confirmed' LIMIT 1",[project.id])).rowCount;
  if(earned&&['space_rental','brand_event','uncategorized_revenue'].includes(project.business_type_code)===false)throw Error('已执行订单业务类型无效');
 }
-module.exports={BASIS,date,split,summary,guardProject};
+module.exports={BASIS,date,cents,split,summary,guardProject};
 module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel})=>async(req,res,q)=>{
  let db;
  try{
