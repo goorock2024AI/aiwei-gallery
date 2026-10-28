@@ -24,7 +24,7 @@ async function api(route,method='GET',body,role='admin',status=200){const r=awai
  const badId=uuid();await api(route+'?id='+badId,'POST',{action:'create',project:basic,payment:{id:uuid(),amount:100,paymentDate:future}},'editor',400);assert.equal((await pool.query('SELECT count(*)::int n FROM space_usage WHERE id=$1',[badId])).rows[0].n,0);checks++;
  const id=uuid(),payment={id:uuid(),amount:100,paymentDate:past,paymentMethod:'现金',notes:'首次实收'};
  await create(id,basic,payment);await api(route+'?id='+id,'POST',{action:'create',project:basic,payment},'editor');
- let data=await api(route+'?id='+id);assert.equal(data.project.contractNo,'');assert.equal(data.project.businessStatus,'租赁确认');assert.equal(Number(data.project.receivedAmount),100);assert.equal(data.rental.mode,'simple');assert.equal(data.project.payments.length,1);checks+=5;
+ let data=await api(route+'?id='+id);assert.equal(data.project.contractNo,'');assert.equal(data.project.businessStatus,'租赁确认');assert.equal(Number(data.project.receivedAmount),100);assert.equal(data.rental.mode,'simple');assert.equal(data.project.payments.length,1);checks+=5;assert.equal((await pool.query('SELECT count(*)::int n FROM space_classification_candidates_v2 WHERE source_id=$1',[id])).rows[0].n,0);checks++;
  assert.equal((await pool.query('SELECT count(*)::int n FROM cash_movements WHERE source_id=$1',[payment.id])).rows[0].n,1);checks++;
  await api(route+'?id='+id,'POST',{action:'create',project:{...basic,amount:2000},payment},'editor',409);
  await api('space-project-workflow?id='+id,'GET',null,'editor',400);await api('space-entry?id='+id,'PATCH',{project:{receivableAmount:1}},'editor',400);
@@ -60,6 +60,8 @@ async function api(route,method='GET',body,role='admin',status=200){const r=awai
  // Conversion keeps identifiers, exact slots and receipts, and unlocks contract drafting only then.
  const receiptsBefore=JSON.stringify((await pool.query('SELECT * FROM space_payments WHERE space_usage_id=$1 ORDER BY id',[id])).rows);
  await api(route+'?id='+id,'POST',{action:'convert',version:3},'editor');data=await api(route+'?id='+id);assert.equal(data.rental.mode,'full');assert.equal(JSON.stringify((await pool.query('SELECT * FROM space_payments WHERE space_usage_id=$1 ORDER BY id',[id])).rows),receiptsBefore);checks+=2;
+ await api('space-entry?id='+id,'PATCH',{project:{notes:'隔离租赁转完整后维护登记'}},'editor');
+ assert.equal((await pool.query('SELECT count(*)::int n FROM space_classification_candidates_v2 WHERE source_id=$1',[id])).rows[0].n,0);checks++;
  const full=await api('space-project-workflow?id='+id);assert.equal(full.project.contractNo,'');assert.equal(full.opportunity,true);checks+=2;
  await api(route+'?id='+id,'POST',{action:'payment',payment:{id:uuid(),amount:1,paymentDate:day}},'editor',400);
 

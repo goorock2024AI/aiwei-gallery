@@ -4,7 +4,7 @@ const spaceSchema = require('./app/js/space-project-schema');
 module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake }) {
   const editable = ['date','end_date','space','project_name','type','client','status','rental_type','receivable_amount','expected_payment_date','notes','business_layer_code','business_type_code','cooperation_mode','project_owner','contract_no','business_status'];
   const typeCodes = new Set(['space_rental', 'brand_event', 'uncategorized_revenue']);
-  const businessStatuses = new Set(['线索', '洽谈', '待签署', '暂缓', '未成交', '已签约', '执行中', '已完成', '已取消', '待确认']);
+  const businessStatuses = new Set(['线索', '洽谈', '待签署', '暂缓', '未成交', '租赁确认', '已签约', '执行中', '已完成', '已取消', '待确认']);
   const suggestedType = type => {
     if (['场地租赁', '长期经营', '会议活动'].includes(type)) return 'space_rental';
     if (['品牌快闪', '企业团建', '沙龙'].includes(type)) return 'brand_event';

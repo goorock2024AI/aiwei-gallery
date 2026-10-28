@@ -34,7 +34,7 @@
   "app/lib/supabase.umd.min.js": "346718f752c0cb72e28d6e6be02ffcfe08fe0795dd87794402db7251ca1bd802",
   "app/lib/xlsx.full.min.js": "b908518f583a638e82e6b80c4f6a627679da3cf25c28e9ef214f459b0c6327aa",
   "app/operations-report.html": "5fa825200e61566db52837772f01eff16b87afb2026247094491ab62aa68af3a",
-  "app/sql/init.sql": "d7a0784a6a561e811cba3e49e9f85752f5c9230ef582132749b484638290d25d",
+  "app/sql/init.sql": "7df7f12c3159ce1d1ba4263a3808b098f77bb26c2ad1172024d2f83083651b82",
   "app/weekly-management.html": "57654427d99d93a67d9d6be764eeb283f74ac48323f28a143ed895eae3641c8c",
   "app/历史数据种子.json": "c7b71d4b2d66fef2bb38620c5e81786a7bf0bd5366a510422b0839be050dfa81",
   "check_payments.js": "c0f7ed8ffb2b46489b66854f64ac684a4c54c4d4fb095661cb695430f9d28b62",
@@ -74,7 +74,7 @@
   "server.js": "cfcb173ec2366d50cacddbd8abd34a7081161aa2ba1b0a06a2ed738fd7529112",
   "space-accounting.js": "5d8759e24e0778b012e5475bb04317628f0b659ffb0fb1e892e7bbb2ac8bd639",
   "space-contract-document.js": "d8aa7768167b6e6149e320107094e74ba2a18785da536feda90c91f085a0bb05",
-  "space-entry.js": "fea1d13d3b2c0a464804f67a0aea4685ae7d76a31c8a8bad3b912cd6e90dad34",
+  "space-entry.js": "dfc5c7914ffeacaefd79817b7faf9c53223bc094da522446d04ab22904c5015f",
   "space-project-workflow.js": "b26b012dce8db38989e016aa73dee33f38882a5d0b47210e5f44a9c8ee38386d",
   "sql/20261024_space_execution.sql": "85e5da33300605e32d0d0ea139e8e5928509fabe7c6ee756f392d79a6465b796",
   "sql/20261025_space_project_workflow.sql": "0c902118cacaa7270228089cbc5d286a5dfb2364c7be302c11a1e275165c4580",
@@ -91,6 +91,6 @@
   "space-payment.js": "f10f501792ca94f1780ff1fbdef511ba3e45ed49e6118d528b2f3cd41d21de8d",
   "space-quick-rental.js": "967ec1b17bb1136bff3509d8c50c6d1efdabc6d06b371a50814d9f8a02914cd5",
   "app/js/space-quick-rental.js": "0feb8622a376255e63e2e1b175966bdab377435c9ca3cbe75462c86feb2c9fd9",
-  "sql/20261028_space_quick_rentals.sql": "d21812d48f2d862d5a4a0f53c547840ba80702805334a59a3623a8bf3e203dd6",
+  "sql/20261028_space_quick_rentals.sql": "dbaf5dc3db0dd62c0244aa675ab105bb51ac21120918c0ab4e17500a63590b4f",
   "scripts/space-quick-rental-migrate.js": "3b55a1ed0065776d293bd36c2139231a7ef5853ca4eaeb3d9df5c762612530e5"
 }
