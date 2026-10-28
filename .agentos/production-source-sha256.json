@@ -24,7 +24,7 @@
   "app/js/operations-report-page.js": "186deec93496f196f670106d152e7feb4d959ebc1dcc01ea27fa87adeeb46443",
   "app/js/space-execution.js": "2d5a67f3b3403222507596fb865606994ec1a94885e5ebc9372d381a53bf2118",
   "app/js/space-project-schema.js": "c1d90e8ba07b6543b5b5abc9f45691d9c520ca554f70242eefb377f2bd22b8d3",
-  "app/js/space-projects.js": "0af23321a056bb09be1c6eb537bbf59347ef27dc9d7326ffef445e371d570934",
+  "app/js/space-projects.js": "439c8998eb8169182f971bd2b6f2c5bba22b9fe61c95a6cb8d8652082f6d3a3b",
   "app/js/store.js": "6e5b860bf4d31797be5ec8f6641003aef027fc37b5b1ef0bad3422e6585e6cf8",
   "app/js/supabase-config.js": "d2a134464260b3b54a58ae13bd0f6f6c892ebe4f3bed444d2469be00e5a1868d",
   "app/js/ui.js": "6cf31e8ff9725606484ffd543968250197153e8ec91dbff4fe39192880a6ff40",
@@ -90,7 +90,7 @@
   "space-booking.js": "1b56ef70be6aa4f99b468c792b1fe2d689f05e69baebb01598e3789987b0065c",
   "space-payment.js": "f10f501792ca94f1780ff1fbdef511ba3e45ed49e6118d528b2f3cd41d21de8d",
   "space-quick-rental.js": "967ec1b17bb1136bff3509d8c50c6d1efdabc6d06b371a50814d9f8a02914cd5",
-  "app/js/space-quick-rental.js": "0feb8622a376255e63e2e1b175966bdab377435c9ca3cbe75462c86feb2c9fd9",
+  "app/js/space-quick-rental.js": "f15e2932b20607a17985c586dccbe5721443a277b21b50b57c84e64b94b90e3b",
   "sql/20261028_space_quick_rentals.sql": "dbaf5dc3db0dd62c0244aa675ab105bb51ac21120918c0ab4e17500a63590b4f",
   "scripts/space-quick-rental-migrate.js": "3b55a1ed0065776d293bd36c2139231a7ef5853ca4eaeb3d9df5c762612530e5"
 }
