@@ -1174,7 +1174,7 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
-          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(data.key)) {
+          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles','spaces'].includes(data.key)) {
             return sendError(res, 405, '此配置只能通过专用管理接口修改');
           }
           if (!data.created_at) data.created_at = new Date().toISOString();
@@ -1216,7 +1216,7 @@ async function handleREST(req, res, urlInfo) {
       } else {
         return sendError(res, 400, 'Missing id filter');
       }
-      if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(filterVal)) {
+      if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles','spaces'].includes(filterVal)) {
         return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
 
@@ -1226,7 +1226,7 @@ async function handleREST(req, res, urlInfo) {
         try {
           let data = JSON.parse(body);
           data = toSnake(data);
-          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(data.key)) {
+          if (dbTable === 'app_config' && ['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles','spaces'].includes(data.key)) {
             return sendError(res, 405, '此配置只能通过专用管理接口修改');
           }
           data = normalizeTimestamps(data);
@@ -1258,7 +1258,7 @@ async function handleREST(req, res, urlInfo) {
     // --- DELETE /rest/v1/table?id=eq.xxx ---
     else if (method === 'DELETE') {
       if (!isAdmin(requester)) return sendError(res, 403, '仅管理员可删除数据');
-      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(parts[3]) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history','eq.space_contract_profiles'].includes(query.key))) {
+      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles','spaces'].includes(parts[3]) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history','eq.space_contract_profiles','eq.spaces'].includes(query.key))) {
         return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
       let idVal;
@@ -1275,7 +1275,7 @@ async function handleREST(req, res, urlInfo) {
         }
         return sendError(res, 400, 'Missing id filter');
       }
-      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles'].includes(idVal) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history','eq.space_contract_profiles'].includes(query.key))) {
+      if (dbTable === 'app_config' && (['operations_rollout','daily_brief_month_targets','operations_month_target_history','space_contract_profiles','spaces'].includes(idVal) || ['eq.operations_rollout','eq.daily_brief_month_targets','eq.operations_month_target_history','eq.space_contract_profiles','eq.spaces'].includes(query.key))) {
         return sendError(res, 405, '此配置只能通过专用管理接口修改');
       }
 
@@ -1482,6 +1482,7 @@ function serveStatic(req, res, pathname) {
 
 const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleSpaceCatalog = require('./space-catalog').handler({pool,getRequester,ensureRole,sendJSON,sendError});
 const handleSpaceQuickRental = require('./space-quick-rental')({pool,getRequester,ensureRole,sendJSON,sendError,toCamel});
 const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleSpaceAccounting = require('./space-accounting').handler({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
@@ -1548,6 +1549,8 @@ const server = http.createServer((req, res) => {
       handleExpenseEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'gallery-entry') {
       handleGalleryEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'space-catalog') {
+      return handleSpaceCatalog(req,res);
     } else if (parts[2] === 'space-quick-rental') {
       return handleSpaceQuickRental(req,res,urlInfo.query);
     } else if (parts[2] === 'space-entry') {

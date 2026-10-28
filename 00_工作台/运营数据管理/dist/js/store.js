@@ -261,7 +261,7 @@ const Store = {
               MODELS.WORKSHOP_PRODUCTS = row.value;
               break;
             case 'spaces':
-              MODELS.SPACES = row.value.map(s => s.name);
+              MODELS.SPACES = row.value.filter(s => typeof s==='string'||s.active!==false).map(s => typeof s==='string'?s:s.name);
               MODELS.spaceDetails = row.value;
               break;
           }

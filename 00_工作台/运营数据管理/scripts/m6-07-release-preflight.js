@@ -10,6 +10,7 @@ const allowDirty = process.argv.includes('--allow-dirty');
 const manifestPath = path.join(root, 'sql', 'm6-forward-manifest.json');
 const outputPath = path.join(root, 'tmp', 'm6-07-release-candidate.json');
 const requiredFiles = [
+  'space-catalog.js','app/js/space-catalog.js',
   'space-quick-rental.js','space-payment.js','space-booking.js','app/js/space-quick-rental.js','sql/20261028_space_quick_rentals.sql','scripts/space-quick-rental-migrate.js',
   'space-contract-profiles.js','space-project-workflow.js','space-contract-document.js','space-accounting.js','templates/space-contract-v1.json','app/js/space-project-schema.js','app/js/space-projects.js','sql/20261025_space_project_workflow.sql',
   'coffee-forecast.js', 'coffee-inventory.js', 'app/js/inventory-inbox.js', 'app/css/inventory-inbox.css',
@@ -25,6 +26,7 @@ const requiredFiles = [
   'scripts/m6-07-restore-rehearsal.js', 'sql/m6-07-baseline.sql'
 ];
 const distPairs = [
+  ['app/js/space-catalog.js','dist/js/space-catalog.js'],
   ['app/js/space-quick-rental.js','dist/js/space-quick-rental.js'],
   ['app/js/space-project-schema.js','dist/js/space-project-schema.js'],['app/js/space-projects.js','dist/js/space-projects.js'],['app/css/space-projects.css','dist/css/space-projects.css'],
   ['app/js/inventory-inbox.js', 'dist/js/inventory-inbox.js'],

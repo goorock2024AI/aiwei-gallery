@@ -15,6 +15,7 @@ const sourceFingerprint=async()=>JSON.stringify((await pool.query("SELECT 'reven
  await pool.query(fs.readFileSync(path.join(root,migration),'utf8'));await pool.query(fs.readFileSync(path.join(root,migration),'utf8'));
  await pool.query(fs.readFileSync(path.join(root,'sql/20261028_space_quick_rentals.sql'),'utf8'));
  assert.equal(await sourceFingerprint(),before);assert.deepEqual((await pool.query('SELECT * FROM business_revenue_facts_v2 ORDER BY fact_id')).rows,oldNonSpace);
+ await pool.query("INSERT INTO app_config(key,value) VALUES('spaces',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[JSON.stringify([{"name": "SE测试空间"}, {"name": "SE第二空间"}, {"name": "SE未来空间"}, {"name": "SE现金空间"}])]);
  const log=fs.openSync(path.join(out,'api.log'),'w');child=spawn(process.execPath,['server.js'],{cwd:root,windowsHide:true,stdio:['ignore',log,log],env:{...process.env,HOST:'127.0.0.1',PORT:'3159',STATIC_DIR:path.join(root,'app'),DB_HOST:cfg.host,DB_PORT:String(cfg.port),DB_NAME:name,DB_PASS:cfg.password,AUTH_SECRET:'isolated-space-execution',REPORT_ARCHIVE_DIR:path.join(out,'archive')}});
  let ready=false;for(let i=0;i<100;i++){try{if((await fetch(base+'/healthz')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,100));}assert(ready,'isolated API must start');
  for(const role of ['admin','editor','viewer'])tokens[role]=(await api('login','POST',{username:'m305-'+role,password:cfg.password},'none')).token;

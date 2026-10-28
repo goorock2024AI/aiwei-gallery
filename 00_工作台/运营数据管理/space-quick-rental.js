@@ -38,8 +38,7 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel})=>asyn
    if(body.action==='create'&&project)throw Error('该项目已有完整流程登记，不能覆盖');
    if(body.action==='save'&&(!old||old.mode!=='simple'))throw Error('请在对应的完整流程中维护此项目');
    if(body.action==='save'&&body.version!==old.version){const e=Error('租赁资料已更新，请重新打开核对');e.status=409;throw e;}
-   const spaces=(await db.query("SELECT value FROM app_config WHERE key='spaces'")).rows[0]?.value;
-   if(!Array.isArray(spaces)||!spaces.some(s=>(typeof s==='string'?s:s.name)===p.space))throw Error('请选择已维护的使用场地');
+   await require('./space-catalog').guardSelection(db,p.space,project?.space,true);
    if(old?.completed_at&&(p.startAt!==old.start_at||p.endAt!==old.end_at||p.amount!==Number(project.receivable_amount)||p.space!==project.space))throw Error('已确认使用的日期、场地及金额不能直接改动，请转完整流程核对执行记录');
    if(project?.status==='已取消')throw Error('已取消租赁不能直接修改');
    const next={...(project||{}),id,date:p.startAt.slice(0,10),end_date:p.endAt.slice(0,10),space:p.space,receivable_amount:p.amount,rental_type:'付费',business_type_code:'space_rental',status:project?.status||'已确认',business_status:project?.business_status||'租赁确认'};

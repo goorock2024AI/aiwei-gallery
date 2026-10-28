@@ -2797,9 +2797,9 @@ const UI = {
 
     // 每行：1 空间
     let rowsHtml = '';
-    MODELS.SPACES.forEach(space => {
+    [...new Set([...MODELS.SPACES,...inMonth.map(r=>r.space).filter(Boolean)])].forEach(space => {
       const spaceRecs = inMonth.filter(r => r.space === space);
-      rowsHtml += `<div class="gantt-space-cell">${space}</div>`;
+      rowsHtml += `<div class="gantt-space-cell">${this._escHtml(space)}</div>`;
       // 每天 1 个单元格（占位，色块用 grid-column 跨列）
       for (let d = 1; d <= lastDay; d++) {
         const dateStr = `${yearMonth}-${String(d).padStart(2,'0')}`;
@@ -3823,6 +3823,7 @@ const UI = {
       coffee: (MODELS.coffeeProducts || []).length,
       creative: this._creativeProducts.length,
       workshop: (MODELS.WORKSHOP_PRODUCTS || []).length,
+      spaces: (MODELS.spaceDetails||[]).length,
       gallery: this._artworks.length
     };
 
@@ -3832,6 +3833,7 @@ const UI = {
         <button class="sub-tab-btn ${tab==='coffee'?'active':''}" data-ptab="coffee">☕ 咖啡 <span class="badge">${counts.coffee}</span></button>` : ''}
         <button class="sub-tab-btn ${tab==='creative'?'active':''}" data-ptab="creative">📦 文创/零售 <span class="badge">${counts.creative}</span></button>
         ${Auth.isAdmin ? `<button class="sub-tab-btn ${tab==='workshop'?'active':''}" data-ptab="workshop">🔧 工坊 <span class="badge">${counts.workshop}</span></button>` : ''}
+        ${Auth.isAdmin ? `<button class="sub-tab-btn ${tab==='spaces'?'active':''}" data-ptab="spaces">🏛 可租赁空间 <span class="badge">${counts.spaces}</span></button>` : ''}
         <button class="sub-tab-btn ${tab==='gallery'?'active':''}" data-ptab="gallery">🖼️ 画廊 <span class="badge">${counts.gallery}</span></button>
       </div>
       <div id="product-tab-content">${this._renderProductTabContent(tab)}</div>
@@ -3841,6 +3843,7 @@ const UI = {
     page.querySelectorAll('.sub-tab-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         this._productTab = btn.getAttribute('data-ptab');
+        page.querySelectorAll('.sub-tab-btn').forEach(item=>item.classList.toggle('active',item===btn));
         // 切到画廊子 tab 时，确保销售聚合数据已加载（避免子 tab 切换不走 renderProductPage 的问题）
         if (this._productTab === 'gallery') {
           await this._buildArtworkLastSoldMap();
@@ -3853,6 +3856,7 @@ const UI = {
 
   /** 二级 tab 内容渲染 */
   _renderProductTabContent(tab) {
+    if(tab==='spaces')return Auth.isAdmin?SpaceCatalog.shell():'<div class="card">空间资料仅管理员可维护</div>';
     if (tab === 'ticket')      return this._renderSimpleConfigTab('ticket', '门票', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
     if (tab === 'coffee')      return this._renderSimpleConfigTab('coffee', '咖啡', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);
     if (tab === 'workshop')    return this._renderSimpleConfigTab('workshop', '工坊', ['名称', '成本价', '售价'], ['name', 'costPrice', 'price']);

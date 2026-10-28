@@ -75,6 +75,7 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
       project.business_type_code = String(project.business_type_code || suggestedType(project.type));
       if (!typeCodes.has(project.business_type_code)) throw new Error('请选择有效业务类型');
       if (project.business_status && !businessStatuses.has(project.business_status)) throw new Error('请选择有效经营状态');
+      await require('./space-catalog').guardSelection(client,project.space,previous?.space,true);
       if (previous) await require('./space-accounting').guardProject(client, project);
       if (!String(project.cooperation_mode || '').trim()) throw new Error('请选择合作方式');
       if (['已签约', '执行中', '已完成'].includes(project.business_status) && project.rental_type === '付费' && !String(project.contract_no || '').trim()) throw new Error('付费签约项目必须填写合同编号');
