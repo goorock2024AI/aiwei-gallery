@@ -2804,11 +2804,13 @@ const UI = {
       for (let d = 1; d <= lastDay; d++) {
         const dateStr = `${yearMonth}-${String(d).padStart(2,'0')}`;
         const cellRec = spaceRecs.find(r => r.date <= dateStr && (r.endDate || r.date) >= dateStr);
-        if (cellRec && cellRec.date === dateStr) {
+        if (cellRec) {
           // 色块起点
-          const startDay = +cellRec.date.slice(8,10);
-          const endDay = +(cellRec.endDate || cellRec.date).slice(8,10);
-          const span = Math.min(endDay, lastDay) - startDay + 1;
+          const endDate = cellRec.endDate || cellRec.date;
+          const clippedEnd = endDate > monthEnd ? monthEnd : endDate;
+          const endDay = Number(clippedEnd.slice(8,10));
+          // Draw the visible part of the range and always advance the day loop.
+          const span = Number.isFinite(endDay) ? Math.max(1, Math.min(endDay,lastDay)-d+1) : 1;
           const expected = cellRec.expectedPaymentDate || this._calcExpectedPaymentDate(cellRec.date, cellRec.endDate);
           const recv = +(cellRec.receivedAmount || 0);
           const req = +(cellRec.receivableAmount || 0);
@@ -2820,9 +2822,6 @@ const UI = {
             <div class="${cls}" style="grid-column: span ${span}" title="${this._escAttr(cellRec.projectName)} · ${cellRec.date}${cellRec.endDate && cellRec.endDate !== cellRec.date ? ' → ' + cellRec.endDate : ''} · ${cellRec.status}" onclick="UI._editSpace('${cellRec.id}')">${this._escHtml(cellRec.projectName)}</div>
           </div>`;
           d += span - 1; // 跳过被色块覆盖的日期
-        } else if (cellRec) {
-          // 被前面的色块覆盖，跳过（不渲染）
-          rowsHtml += `<div class="gantt-bar-cell"></div>`;
         } else {
           rowsHtml += `<div class="gantt-bar-cell"></div>`;
         }
