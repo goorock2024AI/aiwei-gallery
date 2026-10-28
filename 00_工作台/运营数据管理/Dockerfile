@@ -8,7 +8,7 @@ RUN npm ci --omit=dev && \
 
 COPY server.js expense-entry.js expense-pdf-entry.js gallery-entry.js space-entry.js governance-batches.js coffee-inventory.js coffee-forecast.js operations-item-analysis.js operations-reports.js operations-report-metrics.js operations-report-html.js trial-observability.js VERSION ./
 COPY report-archive.js operations-report-packet.js report-center-api.js ./
-COPY space-catalog.js space-accounting.js space-booking.js space-payment.js space-quick-rental.js ./
+COPY space-project-status.js space-catalog.js space-accounting.js space-booking.js space-payment.js space-quick-rental.js ./
 COPY space-contract-profiles.js space-project-workflow.js space-contract-document.js ./
 COPY app/js/space-project-schema.js ./app/js/
 COPY templates ./templates

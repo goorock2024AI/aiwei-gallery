@@ -1510,7 +1510,7 @@ const UI = {
     const el = document.getElementById('space-rent-reminder');
     if (!el) return;
     const all = await Store.getAll('space');
-    const unpaid = all.filter(s => !SpaceProjectSchema.isOpportunity(s) && s.businessStatus !== '已取消' && s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
+    const unpaid = all.filter(s => !SpaceProjectSchema.isOpportunity(s) && s.businessStatus !== '已取消' && s.status !== '已取消' && s.rentalType === '付费' && (s.receivableAmount || 0) > (s.receivedAmount || 0));
     if (!unpaid.length) { el.style.display = 'none'; return; }
     const total = unpaid.reduce((s, r) => s + (r.receivableAmount - (r.receivedAmount || 0)), 0);
     el.style.display = 'block';

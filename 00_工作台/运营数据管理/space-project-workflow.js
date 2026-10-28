@@ -62,6 +62,7 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
    const revision=Number((await db.query('SELECT COALESCE(MAX(revision),0)+1 revision FROM space_contract_documents WHERE space_usage_id=$1',[id])).rows[0].revision);
    saved=(await db.query('INSERT INTO space_contract_documents(id,space_usage_id,revision,template_version,snapshot,source_version,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[body.requestId,id,revision,schema.version,JSON.stringify({...old.payload,_documentCreatedAt:new Date().toISOString()}),old.version,user.id])).rows[0];
   }else{
+   if(project.status==='已取消')throw Error('已取消项目请先核对并恢复状态，再确认合作');
    if(user.role!=='admin')return await db.query('ROLLBACK').then(()=>sendError(res,403,'仅管理员可确认合作'));
    if(!schema.isOpportunity(project)&&!(quick?.mode==='full'&&project.business_status==='租赁确认'))throw Error('该项目已是正式或历史合作，请通过变更流程核对');
    const f=old?.payload?.terms;if(!f)throw Error('请先保存合同条件');

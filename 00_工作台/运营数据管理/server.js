@@ -1482,6 +1482,7 @@ function serveStatic(req, res, pathname) {
 
 const handleExpenseEntry = require('./expense-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
 const handleGalleryEntry = require('./gallery-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
+const handleSpaceProjectStatus = require('./space-project-status').handler({pool,getRequester,ensureRole,sendJSON,sendError});
 const handleSpaceCatalog = require('./space-catalog').handler({pool,getRequester,ensureRole,sendJSON,sendError});
 const handleSpaceQuickRental = require('./space-quick-rental')({pool,getRequester,ensureRole,sendJSON,sendError,toCamel});
 const handleSpaceEntry = require('./space-entry')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, toSnake });
@@ -1549,6 +1550,8 @@ const server = http.createServer((req, res) => {
       handleExpenseEntry(req, res, urlInfo.query);
     } else if (parts[2] === 'gallery-entry') {
       handleGalleryEntry(req, res, urlInfo.query);
+    } else if (parts[2] === 'space-project-status') {
+      return handleSpaceProjectStatus(req,res,urlInfo.query);
     } else if (parts[2] === 'space-catalog') {
       return handleSpaceCatalog(req,res);
     } else if (parts[2] === 'space-quick-rental') {

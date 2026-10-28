@@ -65,7 +65,8 @@ module.exports = function createSpaceEntryHandler({ pool, getRequester, ensureRo
       if ((!opportunity || project.date) && !validDate(project.date)) throw new Error('请选择有效的项目开始日期');
       if ((!opportunity || project.end_date) && !validDate(project.end_date)) throw new Error('请选择有效的项目结束日期');
       if (project.end_date < project.date) throw new Error('结束日期不能早于开始日期');
-      if (opportunity) project.status = '筹备中';
+      if (opportunity && !previous) project.status = '筹备中';
+      if(previous&&project.status!==previous.status)throw Error('请使用列表中的编辑状态并填写原因，不能在登记信息中直接改状态');
       if (!String(project.project_name || '').trim()) throw new Error('请输入项目/活动名称');
       project.receivable_amount = Math.round(Number(project.receivable_amount || 0) * 100) / 100;
       if (!Number.isFinite(project.receivable_amount) || project.receivable_amount < 0) throw new Error('应收金额不能为负数');

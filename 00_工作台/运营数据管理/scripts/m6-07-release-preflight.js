@@ -10,6 +10,7 @@ const allowDirty = process.argv.includes('--allow-dirty');
 const manifestPath = path.join(root, 'sql', 'm6-forward-manifest.json');
 const outputPath = path.join(root, 'tmp', 'm6-07-release-candidate.json');
 const requiredFiles = [
+  'space-project-status.js',
   'space-catalog.js','app/js/space-catalog.js',
   'space-quick-rental.js','space-payment.js','space-booking.js','app/js/space-quick-rental.js','sql/20261028_space_quick_rentals.sql','scripts/space-quick-rental-migrate.js',
   'space-contract-profiles.js','space-project-workflow.js','space-contract-document.js','space-accounting.js','templates/space-contract-v1.json','app/js/space-project-schema.js','app/js/space-projects.js','sql/20261025_space_project_workflow.sql',
