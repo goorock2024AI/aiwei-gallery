@@ -16,12 +16,13 @@ function summarize(finance){
  expenses:money((finance.day.periodExpenses||[]).filter(r=>r.businessDate===finance.date).reduce((n,r)=>n+r.amount,0)),
  businesses:[...new Set([...Object.keys(current.types),...Object.keys(previous.types)])].map(code=>{const r=current.types[code];return {code,name:names[code]||code,income:money(r?.income??0),previousIncome:money(previous.types[code]?.income??0),quantity:r?.missingQuantityFacts?null:r?.quantity??0};}),
  spaceAccounting:finance.day.spaceAccounting?.current||null,
+ paymentReminders:finance.paymentReminders||[],
  closing:finance.closing,background:finance.background||{},alerts:finance.day.metrics.quality.alerts};
 }
 function fallback(snapshot){
  const template=require('./daily-brief-template'),review=template.review(snapshot);
  if(template.isClosed(snapshot))return {mode:'basic',review,tomorrow:'',actions:[]};
- const actions=[];if(!snapshot.finalized)actions.push('补齐日结及缺失数据，发布日报修订版。');
+ const actions=[];
  if(snapshot.coffee?.status==='setup')actions.push('完成咖啡豆首次盘点与库存初始化。');
  else if(snapshot.coffee?.suggestedGrams>0)actions.push('查看库存模块的采购建议及在途状态，确认备料安排。');
  if(snapshot.weather.status!=='ok')actions.push('补充天气资料；本期不依据缺失天气解释经营变化。');
@@ -47,7 +48,11 @@ async function collect(db,date,now=new Date().toISOString()){
  const closing=(await db.query('SELECT status FROM daily_closings WHERE date=$1 ORDER BY updated_at DESC,id DESC',[date])).rows;
  const settings=(await db.query("SELECT key,value FROM app_config WHERE key=ANY($1::text[])",[['daily_brief_month_targets','daily_brief:'+date]])).rows;
  const values=Object.fromEntries(settings.map(r=>[r.key,r.value]));
- const finance={date,day:packet,month:monthPacket,closing:closing.map(r=>r.status),target:values.daily_brief_month_targets?.[date.slice(0,7)]??null,background:values['daily_brief:'+date]||{}};
+ const paymentProjects=(await db.query(`SELECT s.id,s.project_name,s.status,s.business_status,s.expected_payment_date,s.receivable_amount,
+ COALESCE((SELECT SUM(amount) FROM space_payments p WHERE p.space_usage_id=s.id AND p.payment_date<=$1),0)::float8 received
+ FROM space_usage s WHERE s.rental_type='付费'`,[date])).rows;
+ const paymentReminders=duePayments(paymentProjects,date);
+ const finance={date,day:packet,month:monthPacket,closing:closing.map(r=>r.status),target:values.daily_brief_month_targets?.[date.slice(0,7)]??null,background:values['daily_brief:'+date]||{},paymentReminders};
  const state=(await db.query("SELECT version,payload FROM coffee_inventory_state WHERE id='coffee'")).rows[0];let inventory=null;
  // Historical generation must never substitute today's stock for a past day's stock.
  if(state&&date===day(now)){const since=state.payload.anchor?.date&&state.payload.anchor.date<add(date,-168)?state.payload.anchor.date:add(date,-168);const rows=(await db.query('SELECT id,date,coffee_qty,combo_qty,coffee_items,status FROM revenue WHERE date>=$1 AND date<=$2 ORDER BY date,created_at,id',[since,date])).rows;inventory={...coffee.forecast(state.payload,rows,now),stateVersion:state.version};}
@@ -62,4 +67,13 @@ function assemble(collected,date,now,weather,previous){
  quality:{dayClosingComplete:finalized,weatherMissing:(previous?.weather||weather).status!=='ok',historicalStockUnavailable:!previous&&date!==day(now)}};
  snapshot.analysis=fallback(snapshot);return snapshot;
 }
-module.exports={day,add,validateDate,canonical,hash,money,income,summarize,fingerprint,collect,assemble,fallback};
+function duePayments(projects,date){
+ const {isOpportunity}=require('./app/js/space-project-schema');
+ return projects.filter(p=>p.status!=='已取消'&&p.business_status!=='已取消'&&!isOpportunity(p)).flatMap(p=>{
+  const due=p.expected_payment_date,remaining=money(Number(p.receivable_amount)-Number(p.received));
+  if(!remaining||remaining<0||!/^\d{4}-\d{2}-\d{2}$/.test(due||'')||due>add(date,1))return [];
+  try{validateDate(due);}catch{return [];}
+  return [{projectName:p.project_name,dueDate:due,remaining,timing:due>date?'tomorrow':due===date?'today':'overdue',overdueDays:Math.max(0,Math.round((Date.parse(date)-Date.parse(due))/86400000))}];
+ }).sort((a,b)=>a.dueDate.localeCompare(b.dueDate)||a.projectName.localeCompare(b.projectName));
+}
+module.exports={day,add,validateDate,canonical,hash,money,income,summarize,fingerprint,collect,assemble,fallback,duePayments};

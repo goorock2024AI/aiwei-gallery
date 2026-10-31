@@ -17,7 +17,7 @@ function compare(old,next,p){
  add('收入总额',old.metrics.income,next.metrics.income,moneyImportant(old.metrics.income,next.metrics.income,p));
  const before=Object.fromEntries(old.metrics.businesses.map(b=>[b.code,b]));const after=Object.fromEntries(next.metrics.businesses.map(b=>[b.code,b]));
  for(const code of new Set([...Object.keys(before),...Object.keys(after)])){const a=before[code]?.income||0,b=after[code]?.income||0;add((after[code]||before[code]).name||code,a,b,moneyImportant(a,b,p));}
- add('日结状态',old.finalized?'已日结':'未日结',next.finalized?'已日结':'未日结',old.finalized&&!next.finalized,'');
+ // Finance closing remains in private snapshots; it does not trigger group corrections.
  const a=old.coffee,b=next.coffee;
  // Never substitute today's stock for yesterday's original operating snapshot.
  if(a&&b&&a.today===old.date&&b.today===next.date){

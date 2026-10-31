@@ -23,9 +23,16 @@ function isClosed(p){
   &&m?.income===0&&Array.isArray(m.businesses)&&m.businesses.every(b=>b.income===0);
 }
 function title(p){const [,m,d]=p.date.split('-').map(Number);return `艾维美术馆经营日报 | ${m}月${d}日`;}
+function daytimeWeather(p){
+ const w=p.weather;
+ const forecast=w?.status==='ok'&&w.forecast?.days?.find(d=>String(d.forecastStartTime).slice(0,10)===p.date);
+ const daytime=forecast?.daytime,min=daytime?.temperatureMin,max=daytime?.temperatureMax;
+ if(!daytime?.condition?.text||!known(min?.value)||!known(max?.value)||min.unit!=='°C'||max.unit!=='°C'||min.value>max.value)return null;
+ return `${daytime.condition.text}，${amount(min.value)}～${amount(max.value)}℃`;
+}
 function dateLine(p){
  const [y,m,d]=p.date.split('-').map(Number),weekday='日一二三四五六'[new Date(p.date+'T12:00:00Z').getUTCDay()],w=p.weather||{};
- const weather=w.status==='ok'?`天气：采集时${String(w.currentText).replace(/（.*?）/g,'').trim()}`:'天气：暂未取得';
+ const overview=daytimeWeather(p),weather=overview?`天气：${overview}`:'天气：当日白天概况暂未取得';
  return `${y}年${m}月${d}日 星期${weekday} 【${weather}】`;
 }
 function change(current,previous,unit='元'){
@@ -58,21 +65,17 @@ function note(p){
  if(isClosed(p))return '';
  const time=Number.isNaN(Date.parse(p.cutoffTime))?p.generatedAt:p.cutoffTime,d=new Date(time);
  const date=Number.isNaN(+d)?p.date:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(d);
- const lines=[`统计截止：${date} ${clock(time)}（北京时间）｜${p.finalized?'日结已完成':'暂报，日结未完成'}`,`本日报“同比”指与上周同一星期几相比：${p.date} 对比 ${comparisonDate(p.date)}。`,`到馆人次按普通门票与套票数量统计，未登记免费访客未覆盖；本月累计按自然月统计。`];
- const m=metrics(p),sa=m.spaceAccounting;
- if(!known(m.targetProgress))lines.push('本月目标未设置或无有效正数目标，目标达成率暂不可计算。');
- if(p.weather?.status==='ok')lines.push('天气来源：和风天气；所示为采集时天气，不代表全天实况。');
- if(sa){lines.push(`场地租赁按确认使用日期计收入：今日已执行${amount(sa.executed)}元；今日实收${amount(sa.receipts)}元，不重复计入经营收入。`,`期末已收未执行${amount(sa.receivedUnexecuted)}元；已执行未收${amount(sa.executedUnpaid)}元。`);if(sa.pendingDays)lines.push(`待核对：${sa.pendingDays}条到期使用明细尚未确认。`);if(sa.legacyUnverified?.count)lines.push(`旧场地款${amount(sa.legacyUnverified.amount)}元缺执行日期，未计入已执行收入。`);}
- for(const alert of m.alerts||[])if(!lines.some(line=>line.includes(alert)))lines.push('数据提示：'+alert);
- return lines.join('\n');
+ return `截至${date} ${clock(time)}；对比日期为${comparisonDate(p.date)}。到馆人次按普通门票及套票数量统计，未含未登记免费访客。`;
 }
 function sections(p){
  if(isClosed(p))return [['营业概况','闭馆休息日未营业']];
  const m=metrics(p),w=p.weather||{},c=p.coffee;
- const income=[`收入总额${amount(m.income)}元，${change(m.income,m.previousIncome)}`,`今日到馆${known(m.visitors)?amount(m.visitors)+'人次':'人次待核对'}，${change(m.visitors,m.previousVisitors,'人次')}`,`本月累计收入${amount(m.monthIncome)}元，${known(m.targetProgress)?'目标达成率'+(m.targetProgress*100).toFixed(1)+'%':'目标达成率暂不可计算（目标未设置）'}`].join('\n');
+ const income=[`收入总额${amount(m.income)}元，${change(m.income,m.previousIncome)}`,`今日到馆${known(m.visitors)?amount(m.visitors)+'人次':'人次待核对'}，${change(m.visitors,m.previousVisitors,'人次')}`,`本月累计收入${amount(m.monthIncome)}元，${known(m.targetProgress)?'目标达成率'+(m.targetProgress*100).toFixed(1)+'%':'目标达成率暂不可计算（目标未设置）'}`,...(m.spaceAccounting?[`今日场地到账${amount(m.spaceAccounting.receipts)}元${m.spaceAccounting.receipts<0?'（净退款）':''}，与经营收入分列。`]:[])].join('\n');
  const stock=!c?'库存待核对。':!c.initialized?'请完成咖啡豆首次盘点。':`咖啡豆余量${amount(c.availableGrams)}克`+(c.suggestedGrams>0?`，${c.status==='urgent'?'需优先核对库存并安排补货':'请核对补货安排'}。建议采购约${amount(c.suggestedGrams/1000)}公斤，结合在途订单和保鲜要求确认。`:'，暂未提示补货。');
- const tomorrow=[`· 天气预报：${w.status==='ok'?w.tomorrowText+'。':'暂未取得。'}`,c?.suggestedGrams>0?'· 优先落实咖啡豆补货，做好现场接待准备。':'· 核对备料安排，做好现场接待准备。'].join('\n');
- return [['营业概况',income],['今日复盘',review(p)],['明日重点',tomorrow],['备料提醒',stock],['统计说明',note(p)]];
+ const reminders=m.paymentReminders||[];
+ const line=r=>`· ${r.projectName}待收${amount(r.remaining)}元，${r.timing==='tomorrow'?'明日到期，请跟进到账':r.timing==='today'?'今日到期，截至日报时未到账':`已逾期${r.overdueDays}天，请跟进`}。`;
+ const tomorrow=[`· 天气预报：${w.status==='ok'?w.tomorrowText+'。':'暂未取得。'}`,c?.suggestedGrams>0?'· 优先落实咖啡豆补货，做好现场接待准备。':'· 核对备料安排，做好现场接待准备。',...reminders.filter(r=>r.timing==='tomorrow').map(line)].join('\n');
+ return [['营业概况',income],['今日复盘',review(p)],...(reminders.some(r=>r.timing!=='tomorrow')?[['收款提醒',reminders.filter(r=>r.timing!=='tomorrow').map(line).join('\n')]]:[]),['明日重点',tomorrow],['备料提醒',stock],['统计说明',note(p)]];
 }
 function text(p){
  if(isClosed(p))return `${title(p)}\n\n闭馆休息日未营业`;
@@ -80,11 +83,8 @@ function text(p){
  let result=build();
  if(Buffer.byteLength(result,'utf8')>2048){
   blocks[1][1]=review(p,true);
-  const time=Number.isNaN(Date.parse(p.cutoffTime))?p.generatedAt:p.cutoffTime;
-  blocks[4][1]=`截至${clock(time)}（北京时间），${p.finalized?'日结已完成':'暂报，日结未完成'}。\n同比：${p.date} 对比 ${comparisonDate(p.date)}（上周同一星期几）。\n到馆=普通门票+套票数量；月累计按自然月。天气为采集时观测。`;
-  if(p.metrics.spaceAccounting)blocks[4][1]+='场地按使用日计收入，实收不重复计入；待核对明细见归档。';
   result=build();
  }
  return result;
 }
-module.exports={isClosed,title,dateLine,metrics,change,review,comparisonDate,sections,note,text,version:'1.1'};
+module.exports={isClosed,title,dateLine,metrics,change,review,comparisonDate,sections,note,text,version:'1.2'};

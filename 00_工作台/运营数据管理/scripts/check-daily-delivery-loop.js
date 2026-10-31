@@ -12,6 +12,9 @@ async function main(){
  try{
   await admin.query('CREATE DATABASE '+name+' TEMPLATE aiwei_m3_05_test');created=true;pool=new Pool({host:cfg.host,port:cfg.port,user:'postgres',database:name,password:cfg.password,max:12});
   for(const f of ['20261011_operations_analysis_reports.sql','20261024_space_execution.sql','20261021_coffee_inventory.sql','20261021_daily_briefs.sql','20261022_daily_delivery_loop.sql','20261022_daily_delivery_loop.sql'])await pool.query(fs.readFileSync(path.join(root,'sql',f),'utf8'));
+  // The disposable clone may contain production archive history from a restore rehearsal.
+  assert(name.startsWith('aiwei_daily_loop_'));
+  await pool.query('TRUNCATE operations_daily_briefs CASCADE');
   await pool.query("DELETE FROM revenue WHERE date BETWEEN '2026-10-01' AND '2026-10-22'");await pool.query("DELETE FROM daily_closings WHERE date BETWEEN '2026-10-01' AND '2026-10-22'");
   for(let n=12;n<=20;n++)await pool.query("INSERT INTO revenue(id,date,ticket_qty,ticket_amount,combo_qty,combo_amount,coffee_qty,coffee_amount,status) VALUES($1,$2,10,100,5,150,4,80,'正常')",['loop-'+n,'2026-10-'+n]);
   const config={DAILY_SEND_ENABLED:'true',DAILY_WECOM_WEBHOOK:'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=isolated-loop-only'};
@@ -20,7 +23,7 @@ async function main(){
   const service=(date,time,approved=false)=>loop.service({pool,now:date+'T'+time+':00+08:00',config:{...config,DAILY_CORRECTION_POLICY:{approved}},fetcher,archive});
   const run=(date,time,approved=false,opts={})=>service(date,time,approved).run(date,opts);
   await run('2026-10-12','17:58',false,{initial:true});ok(bodies.length===0,'preparation does not send');
-  await run('2026-10-12','18:00',false,{initial:true});ok(bodies.length===1&&bodies[0].msgtype==='text','one text initial');ok(bodies[0].text.content.includes('日结未完成')&&bodies[0].text.content.includes('统计截止'),'provisional cutoff and closing');
+  await run('2026-10-12','18:00',false,{initial:true});ok(bodies.length===1&&bodies[0].msgtype==='text','one text initial');ok(!bodies[0].text.content.includes('日结')&&bodies[0].text.content.includes('截至'),'cutoff retained without closing label');
   await pool.query("UPDATE revenue SET ticket_amount=ticket_amount+100 WHERE id='loop-12'");await run('2026-10-12','18:01',false,{initial:true});ok(bodies.length===1,'revision cannot resend full initial');
   ok((await run('2026-10-12','18:30')).state==='policy_pending','unapproved thresholds held');
   await run('2026-10-12','18:31',true);
@@ -48,7 +51,7 @@ async function main(){
   ok(rules.within('2026-10-12','2026-10-13T18:20:00+08:00')&&!rules.within('2026-10-12','2026-10-13T18:21:00+08:00'),'next-day cutoff');
   const sample=(await store.latest(pool,'2026-10-12')).payload,stockOld={...sample,coffee:{today:sample.date,status:'ok',availableGrams:100,suggestedGrams:0}},stockNew={...sample,coffee:{today:sample.date,status:'urgent',availableGrams:0,suggestedGrams:600}};
   ok(rules.compare(stockOld,stockNew,rules.policy()).important,'important stock warning detected');stockNew.coffee.today='2026-10-22';ok(!rules.compare(stockOld,stockNew,rules.policy()).important,'present stock not backfilled to historical day');
-  ok(rules.compare({...sample,finalized:true},{...sample,finalized:false},rules.policy()).important,'reopened closing treated as proposed material correction');
+  ok(!rules.compare({...sample,finalized:true},{...sample,finalized:false},rules.policy()).important,'closing-only change never triggers group correction');
   ok(!rules.moneyImportant(0,49,rules.policy())&&rules.moneyImportant(0,50,rules.policy()),'zero base absolute gate');ok(!rules.moneyImportant(10000,10050,rules.policy())&&rules.moneyImportant(10000,100500,rules.policy()),'large base both amount and ratio');ok(rules.moneyImportant(10,60,rules.policy()),'small base gate');
   const first=(await pool.query("SELECT * FROM operations_daily_outbox WHERE business_date='2026-10-12' AND kind='initial'")).rows[0];ok((await pool.query('SELECT count(*) FROM operations_daily_briefs WHERE business_date=$1',['2026-10-12'])).rows[0].count>3&&first.brief_id!==(await store.latest(pool,'2026-10-12')).id,'old snapshot retained');
   behavior='ok';await run('2026-10-22','18:00',true,{initial:true});

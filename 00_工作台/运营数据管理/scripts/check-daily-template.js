@@ -6,18 +6,21 @@ function fixture(){
  const current={visitors:{value:20,recorded:20},types:{ticket:type(200),visit_combo:type(300),creative_retail:type(100),coffee:type(100)}};
  const previous={visitors:{value:30,recorded:30},types:{ticket:type(300),visit_combo:type(300),creative_retail:type(300),coffee:type(100)}};
  const finance={date:'2026-10-27',day:{metrics:{current,previous,quality:{alerts:[]}},periodExpenses:[]},month:{metrics:{current:{types:{ticket:type(14500)}}}},target:25000,closing:[]};
- return {id:'daily-template-sample',preview:true,date:'2026-10-27',generatedAt:'2026-10-27T10:00:00Z',cutoffTime:'2026-10-27T10:00:00Z',finalized:false,metrics:core.summarize(finance),finance,weather:{status:'ok',currentText:'小雨，18℃（采集时天气，非全天实况）',tomorrowText:'多云，13～21℃'},coffee:{initialized:true,availableGrams:2400,suggestedGrams:0}};
+ return {id:'daily-template-sample',preview:true,date:'2026-10-27',generatedAt:'2026-10-27T10:00:00Z',cutoffTime:'2026-10-27T10:00:00Z',finalized:false,metrics:core.summarize(finance),finance,weather:{forecast:{days:[{forecastStartTime:'2026-10-27T00:00+08:00',daytime:{condition:{text:'多云'},temperatureMin:{unit:'°C',value:13},temperatureMax:{unit:'°C',value:21}}}]},status:'ok',currentText:'小雨，18℃（采集时天气，非全天实况）',tomorrowText:'多云，13～21℃'},coffee:{initialized:true,availableGrams:2400,suggestedGrams:0}};
 }
 const p=fixture(),text=template.text(p),sections=template.sections(p);
 assert.equal(text.split('\n')[0],'艾维美术馆经营日报 | 10月27日');
 assert(!/今日复盘\s*·\s*明日提示|今日天气|今日经营/.test(text));
-assert(text.includes('2026年10月27日 星期二 【天气：采集时小雨，18℃】'));
+assert(text.includes('2026年10月27日 星期二 【天气：多云，13～21℃】'));
+const otherDay=fixture();otherDay.weather.forecast.days[0].forecastStartTime='2026-10-28T00:00+08:00';assert(template.dateLine(otherDay).includes('暂未取得'));assert(!template.dateLine(otherDay).includes('13～21'));
+const noForecast=fixture();delete noForecast.weather.forecast;assert(template.dateLine(noForecast).includes('暂未取得'));assert(!template.dateLine(noForecast).includes('18℃'));
+const invalidRange=fixture();invalidRange.weather.forecast.days[0].daytime.temperatureMin.value=22;assert(template.dateLine(invalidRange).includes('暂未取得'));
 assert.deepEqual(sections.map(x=>x[0]),['营业概况','今日复盘','明日重点','备料提醒','统计说明']);
 assert.equal(sections[0][1],'收入总额700元，同比下降30.0%\n今日到馆20人次，同比下降33.3%\n本月累计收入14,500元，目标达成率58.0%');
 assert(sections[1][1].includes('文创零售减少200元、门票减少100元'));
 assert(sections[1][1].includes('上周同期30人次，同比下降33.3%，减少10人次'));
 assert(sections[1][1].includes('可能影响公园客流'));assert(!sections[1][1].includes('因为下雨导致'));
-assert(sections[4][1].includes('2026-10-27 对比 2026-10-20'));
+assert(sections[4][1].includes('对比日期为2026-10-20'));
 assert.equal(dispatch.summary(p),text);
 assert.equal(core.summarize(p.finance).previousVisitors,30);
 assert.equal(p.metrics.visitorChangeAmount,-10);
@@ -46,6 +49,25 @@ const large=fixture();for(const code of ['beverage_retail','workshop','gallery_s
 large.metrics.spaceAccounting={executed:1234,receipts:2345,receivedUnexecuted:2000,executedUnpaid:3000,pendingDays:5,legacyUnverified:{count:5,amount:2000}};
 large.metrics.alerts=['待核对数据'.repeat(80)];
 const group=template.text(large);assert(Buffer.byteLength(group,'utf8')<=2048);assert(group.includes('场地租赁'));assert(group.includes('2026-10-20'));for(const heading of ['营业概况','今日复盘','明日重点','备料提醒','统计说明'])assert(group.includes(heading));
+assert(group.includes('今日场地到账2,345元'));assert(!/已收未执行|已执行未收|期末|完整毛利/.test(group));
+const project=(due,extra={})=>({project_name:'测试尾款',status:'已确认',business_status:'租赁确认',expected_payment_date:due,receivable_amount:1000,received:200,...extra});
+const reminders=core.duePayments([project('2026-10-31'),project('2026-10-30'),project('2026-10-29'),project('2026-11-01'),project(''),project('2026-10-30',{status:'已取消'}),project('2026-10-30',{business_status:'洽谈'}),project('2026-10-30',{received:1000})],'2026-10-30');
+assert.deepEqual(reminders.map(r=>r.timing),['overdue','today','tomorrow']);assert(reminders.every(r=>r.remaining===800));assert.equal(reminders[0].overdueDays,1);
+const dueSample={...fixture(),date:'2026-10-30',metrics:{...p.metrics,paymentReminders:reminders}};
+const dueSections=template.sections(dueSample);
+assert(dueSections.find(s=>s[0]==='明日重点')[1].includes('明日到期'));
+assert(!dueSections.find(s=>s[0]==='收款提醒')[1].includes('明日到期'));
+assert(dueSections.find(s=>s[0]==='收款提醒')[1].includes('今日到期'));
+assert(dueSections.find(s=>s[0]==='收款提醒')[1].includes('已逾期1天'));
+// Finance closing must not label daily operating reports, including compact text.
+for(const finalized of [false,true]){
+ const sample={...fixture(),finalized};
+ for(const output of [template.note(sample),template.text(sample),render.html(sample),render.svg(sample),template.text({...large,finalized})])assert(!/日结|暂报/.test(output));
+ assert(template.note(sample).includes('截至2026-10-27 18:00'));
+ assert(!core.fallback(sample).actions.some(a=>/日结/.test(a)));
+ assert.equal(sample.finalized,finalized);
+}
+assert(!/暂报|r\.finalized/.test(fs.readFileSync(path.resolve(__dirname,'../app/js/daily-brief-page.js'),'utf8')));
 const noQuantity=fixture();noQuantity.finance.day.metrics.previous.visitors.value=null;noQuantity.metrics=core.summarize(noQuantity.finance);assert.equal(noQuantity.metrics.visitorChangeRate,null);assert.equal(noQuantity.metrics.visitorChangeAmount,null);assert(template.sections(noQuantity)[0][1].includes('同比待核对'));
 const directory=path.resolve(process.env.DAILY_SAMPLE_DIR||path.join(__dirname,'../tmp/daily-template-20261027'));
 fs.mkdirSync(directory,{recursive:true});
