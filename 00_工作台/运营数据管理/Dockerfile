@@ -33,3 +33,6 @@ COPY fonts ./fonts
 EXPOSE 3000
 
 CMD ["node", "server.js"]
+
+COPY scripts/optional-package-spec-migrate.js ./scripts/
+COPY sql/20261103_optional_package_spec.sql ./sql/
