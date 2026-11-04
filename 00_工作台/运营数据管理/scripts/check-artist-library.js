@@ -540,6 +540,9 @@ async function run() {
         buffer: pdf,
       });
     await page.getByText('上传完成，请保存档案', { exact: true }).waitFor();
+    await page.locator('#al-work-images').setInputFiles({name:'代表作品.png',mimeType:'image/png',buffer:formats[2][1]});
+    await page.waitForFunction(()=>document.querySelector('#al-work-image-cards img')?.naturalWidth>0);
+    await page.getByText('上传完成，请保存档案',{exact:true}).waitFor();
     await page
       .locator('#al-avatar-upload')
       .setInputFiles({
@@ -575,6 +578,10 @@ async function run() {
     await page.getByRole('heading', { name: '周予安', exact: true }).waitFor();
     await page.getByRole('button',{name:'作品',exact:true}).click();
     await page.locator('.al-table').getByText('地方记忆·01',{exact:true}).waitFor();
+    await page.locator('.al-work-images img[alt="代表作品.png"]').waitFor();
+    await page.getByRole('button',{name:'查看大图',exact:true}).click();
+    await page.locator('dialog').waitFor();
+    await page.getByRole('button',{name:'关闭',exact:true}).click();
     await page.getByRole('button', { name: '文档附件', exact: true }).click();
     await page.getByText('新作品集.pdf', { exact: true }).waitFor();
     await page.screenshot({

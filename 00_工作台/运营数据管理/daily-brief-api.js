@@ -12,7 +12,7 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
    const attempts=(await pool.query('SELECT a.outbox_id,a.attempt_number,a.started_at,a.completed_at,a.state,a.code FROM operations_daily_attempts a JOIN operations_daily_outbox o ON o.id=a.outbox_id WHERE o.business_date=$1 ORDER BY a.started_at',[date])).rows;
    return sendJSON(res,200,{date,followup,incidents,delivery,attempts,memberReceipt:'未确认，接口接受不等于成员实际收到',reminder:'独立提醒渠道及负责人待配置'});
   }
-  if(q.week){if(!ensureRole(res,user,['admin','editor']))return;return sendJSON(res,200,await store.weekly(pool,q.week));}
+  if(q.week){if(!ensureRole(res,user,['admin','editor']))return;return sendJSON(res,200,await store.weeklyReadonly(pool,q.week));}
   if(q.id){if(!/^[a-f0-9-]{36}$/.test(q.id))return sendError(res,400,'日报编号无效');const row=(await pool.query('SELECT * FROM operations_daily_briefs WHERE id=$1',[q.id])).rows[0];if(!row)return sendError(res,404,'日报不存在');
    if(q.format){if(!['html','png'].includes(q.format))return sendError(res,400,'格式无效');let bytes;try{bytes=store.read(row,q.format);}catch{return sendError(res,503,'日报文件暂不可用');}
     res.writeHead(200,{'Content-Type':q.format==='html'?'text/html;charset=utf-8':'image/png','Content-Disposition':`attachment; filename="daily-${row.business_date}-v${row.revision}.${q.format}"`,'Cache-Control':'private, no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"});return res.end(bytes);}
@@ -25,5 +25,5 @@ module.exports=({pool,getRequester,ensureRole,sendJSON,sendError})=>async(req,re
   const total=Number((await pool.query(`SELECT COUNT(DISTINCT business_date)::int count FROM operations_daily_briefs ${clause}`,params)).rows[0].count);
   const rows=(await pool.query(`SELECT * FROM (SELECT DISTINCT ON(business_date) id,business_date,revision,supersedes,payload->'finalized' finalized,created_at FROM operations_daily_briefs ${clause} ORDER BY business_date DESC,revision DESC) d ORDER BY business_date DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`,[...params,limit,offset])).rows;
   sendJSON(res,200,{reports:rows,total,limit,offset});
- }catch(e){sendError(res,400,'日报请求失败，请检查日期或功能初始化状态');}
+ }catch(e){if(q.week&&e.code==='57014')return sendError(res,503,'周日报资料核对暂时超时，请稍后重试');sendError(res,400,'日报请求失败，请检查日期或功能初始化状态');}
 };

@@ -10,7 +10,7 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-const APP_VERSION = '2.0.0-rc.34-artist-manual.2';
+const APP_VERSION = '2.0.0-rc.34-nav.1';
   const LAST_UPDATE = '2026-11-04';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
@@ -22,59 +22,10 @@ const APP_VERSION = '2.0.0-rc.34-artist-manual.2';
     if (upEl) upEl.textContent = '更新 ' + LAST_UPDATE;
   })();
 
-  // Tab 切换
-  document.addEventListener('click', async function(e) {
-    const btn = e.target.closest('.tab-btn');
-    if (!btn) return;
-    const tab = btn.dataset.tab;
-    if (!tab) return;
-
-    // 未登录不允许切换
-    if (!Auth.isLoggedIn) { return; }
-    if (!Auth.hasModuleAccess(tab)) {
-      if (tab === 'operations') UI.toast('运营管理入口当前未对该账号开放', 'error');
-      return;
-    }
-
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    const page = document.getElementById('page-' + tab);
-    if (page) page.classList.add('active');
-
-    // 移动端抽屉：选中 tab 后自动关闭
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar) sidebar.classList.remove('open');
-    const overlay = document.getElementById('sidebar-overlay');
-    if (overlay) overlay.classList.remove('show');
-
-    // 异步渲染
-    try {
-      switch (tab) {
-        case 'dashboard': await UI.renderDashboard(); break;
-        case 'revenue': await UI.renderRevenuePage(); break;
-        case 'expense': await UI.renderExpensePage(); break;
-        case 'gallery': await UI.renderGalleryPage(); break;
-        case 'space': await UI.renderSpacePage(); break;
-        case 'daily-closing': await UI.renderDailyClosingPage(); break;
-        case 'project-list': await UI.renderProjectListPage(); break;
-        case 'inventory': await InventoryInbox.render(); break;
-        case 'artists': await ArtistLibrary.render(); break;
-        case 'operations': await OperationsDashboard.render(); break;
-        case 'reports': await UI.renderReportsPage(); break;
-        case 'manage': await UI.renderManagePage(); break;
-        case 'products': await UI.renderProductPage(); break;
-        case 'users': await UI.renderUsersPage(); break;
-        case 'logs': await UI.renderLogsPage(); break;
-        default:
-          UI.toast('未知页面：' + tab + '（请强刷浏览器 Ctrl+Shift+R）', 'error');
-          break;
-      }
-    } catch (err) {
-      console.error('渲染错误：', err);
-      UI.toast('页面加载失败：' + err.message, 'error');
-    }
+  // Legacy in-page links use the same business navigation.
+  document.addEventListener('click', function(e) {
+    const button=e.target.closest('.tab-btn[data-tab]');
+    if(button) AppNavigation.open(button.dataset.tab);
   });
 
   // 登录表单提交
@@ -166,6 +117,7 @@ const APP_VERSION = '2.0.0-rc.34-artist-manual.2';
       const tab = btn.dataset.tab;
       if (tab) btn.style.display = Auth.hasModuleAccess(tab) ? '' : 'none';
     });
+    AppNavigation.applyAccess();
     const operationsButton = document.querySelector('.tab-btn[data-tab="operations"]');
     if (operationsButton) {
       operationsButton.querySelector('.operations-rollout-badge')?.remove();
@@ -193,7 +145,7 @@ const APP_VERSION = '2.0.0-rc.34-artist-manual.2';
     if (!health.ok) {
       UI.toast(health.message, 'error');
     }
-    await UI.renderRevenuePage();
+    await AppNavigation.open('revenue');
     if (window.location.hash === '#artists' && Auth.hasModuleAccess('artists')) {
       document.querySelector('[data-tab="artists"]')?.click();
     }

@@ -7,6 +7,16 @@ const today=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).form
 function date(v){const d=new Date(String(v)+'T00:00:00Z');if(typeof v!=='string'||!/^20\d{2}-\d{2}-\d{2}$/.test(v)||!Number.isFinite(+d)||d.toISOString().slice(0,10)!==v)throw Error('日期无效');return v;}
 function cents(n){if(typeof n!=='number'||!Number.isFinite(n)||n<0||n>999999999||Math.abs(n*100-Math.round(n*100))>0.00001)throw Error('金额须为非负数，最多两位小数');return Math.round(n*100);}
 function split(start,end,amount){date(start);date(end);const days=(Date.parse(end)-Date.parse(start))/86400000+1,total=cents(amount);if(days<1||days>366)throw Error('连续分摊范围须在366天内');return Array.from({length:days},(_,i)=>({date:new Date(Date.parse(start)+i*86400000).toISOString().slice(0,10),amount:(Math.floor(total/days)+(i<total%days?1:0))/100}));}
+function scheduleVersion(project,lines){return crypto.createHash('sha256').update(JSON.stringify([project.id,project.date,project.end_date,project.receivable_amount,project.status,project.business_status,lines.map(l=>[l.id,l.usage_date,Number(l.amount),l.status]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])))])).digest('hex');}
+function selectedPlan(project,existing,dates){
+ if(!Array.isArray(dates)||!dates.length||dates.length>366)throw Error('请勾选1至366个使用日期');
+ const keys=new Set();for(const d of dates){date(d);if(d<project.date||d>(project.end_date||project.date))throw Error('勾选日期须在项目起止范围内，请先修改登记日期范围');if(keys.has(d))throw Error('使用日期不能重复');keys.add(d);}
+ const confirmed=existing.filter(l=>l.status==='confirmed');if(confirmed.some(l=>!keys.has(l.usage_date)))throw Error('已确认执行的日期不能取消勾选，请从原使用明细核对');
+ const fixed=confirmed.reduce((n,l)=>n+cents(Number(l.amount)),0),remaining=cents(Number(project.receivable_amount))-fixed;
+ if(remaining<0)throw Error('已确认执行金额超过合同金额，请先核对');
+ const todo=[...keys].sort().filter(d=>!confirmed.some(l=>l.usage_date===d));if(!todo.length&&remaining)throw Error('剩余合同金额尚未安排日期');
+ return todo.map((d,i)=>({date:d,amount:(Math.floor(remaining/todo.length)+(i<remaining%todo.length?1:0))/100}));
+}
 async function summary(db,start,end){
  date(start);date(end);if(end<start)throw Error('结束日期不能早于开始日期');
  const projects=(await db.query(`SELECT s.id,s.project_name,s.receivable_amount,s.rental_type,s.status,s.business_status,
@@ -35,7 +45,7 @@ async function guardProject(db,project){
  const earned=(await db.query("SELECT 1 FROM space_execution_lines WHERE space_usage_id=$1 AND status='confirmed' LIMIT 1",[project.id])).rowCount;
  if(earned&&['space_rental','brand_event','uncategorized_revenue'].includes(project.business_type_code)===false)throw Error('已执行订单业务类型无效');
 }
-module.exports={BASIS,date,cents,split,summary,guardProject};
+module.exports={BASIS,date,cents,split,summary,guardProject,scheduleVersion,selectedPlan};
 module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel})=>async(req,res,q)=>{
  let db;
  try{
@@ -44,14 +54,15 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
   db=await pool.connect();
   if(req.method==='GET'){
    await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+   if(q.calendar==='1'){const lines=(await db.query('SELECT space_usage_id,usage_date,status FROM space_execution_lines ORDER BY usage_date')).rows;const modes=(await db.query("SELECT substring(key from length('space_calendar_selected:')+1) id FROM app_config WHERE key LIKE 'space_calendar_selected:%' AND value->>'mode'='selected'")).rows;await db.query('COMMIT');return sendJSON(res,200,{scheduledProjectIds:modes.map(m=>m.id),lines:lines.filter(l=>l.status!=='voided').map(toCamel)});}
    const end=q.end||today(),start=q.start||end.slice(0,7)+'-01';date(start);date(end);if(end>today())throw Error('统计截止日期不能晚于今天');
    const totals=await summary(db,start,end);
    const lines=q.id?(await db.query('SELECT * FROM space_execution_lines WHERE space_usage_id=$1 ORDER BY usage_date,created_at',[q.id])).rows.map(toCamel):[];
-   await db.query('COMMIT');return sendJSON(res,200,{...totals,lines});
+   const project=q.id?(await db.query('SELECT * FROM space_usage WHERE id=$1',[q.id])).rows[0]:null;await db.query('COMMIT');return sendJSON(res,200,{...totals,lines,scheduleVersion:project?scheduleVersion(project,lines.map(l=>({id:l.id,usage_date:l.usageDate,amount:l.amount,status:l.status}))):null});
   }
   let buffers=[],size=0;for await(const b of req){size+=b.length;if(size>131072)throw Error('请求内容过大');buffers.push(Buffer.from(b));}
   const body=JSON.parse(Buffer.concat(buffers).toString('utf8'));
-  if(!['schedule','confirm','void','refund'].includes(body.action))throw Error('操作无效');
+  if(!['selectDates','schedule','confirm','void','refund'].includes(body.action))throw Error('操作无效');
   await db.query('BEGIN');
   const project=(await db.query('SELECT * FROM space_usage WHERE id=$1 FOR UPDATE',[q.id])).rows[0];if(!project)throw Error('场地订单不存在');
   let before=null,after;
@@ -70,6 +81,17 @@ module.exports.handler=({pool,getRequester,ensureRole,sendJSON,sendError,toCamel
    after=(await db.query('INSERT INTO space_payments(id,space_usage_id,payment_date,amount,payment_method,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[id,project.id,body.date,-amount/100,before.payment_method,'退款：'+reason])).rows[0];
    await db.query('INSERT INTO space_payment_refunds(id,original_payment_id,refund_payment_id,reason,operator_id) VALUES($1,$2,$1,$3,$4)',[id,before.id,reason,user.id]);
    if(before.payment_method==='现金')await db.query("INSERT INTO cash_movements(id,date,type,amount,source_type,source_id,operator_id,operator_name,reason,notes) VALUES($1,$2,'cash_refund',$3,'space',$4,$5,$6,$7,'由场地实际退款事务生成')",['cash_space_'+id,body.date,-amount/100,id,user.id,user.display_name||user.username||'',reason]);
+  }else if(body.action==='selectDates'){
+   if(isOpportunity(project)||project.rental_type!=='付费'||project.status==='已取消'||project.business_status==='已取消')throw Error('只能为有效付费订单安排日期');
+   const existing=(await db.query('SELECT * FROM space_execution_lines WHERE space_usage_id=$1 ORDER BY usage_date,created_at',[project.id])).rows;
+   if(body.version!==scheduleVersion(project,existing)){await db.query('ROLLBACK');return sendError(res,409,'使用安排已变化，请重新读取后再保存');}
+   const reason=typeof body.reason==='string'?body.reason.trim():'';if(!reason||reason.length>500)throw Error('请填写安排或修改原因（最多500字）');
+   await db.query("INSERT INTO app_config(key,value,updated_at) VALUES($1,$2::jsonb,clock_timestamp()) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=clock_timestamp()",['space_calendar_selected:'+project.id,JSON.stringify({mode:'selected'})]);
+   const plan=selectedPlan(project,existing,body.dates);await require('./space-booking').guard(db,{id:project.id,space:project.space,start:project.date+'T00:00',end:require('./space-booking').dayAfter(project.end_date||project.date)+'T00:00',dates:body.dates});before=existing.filter(l=>l.status!=='voided');
+   const keep=new Set(existing.filter(l=>l.status==='planned'&&plan.some(p=>p.date===l.usage_date&&cents(p.amount)===cents(Number(l.amount)))).map(l=>l.id));
+   for(const l of before.filter(l=>l.status==='planned'&&!keep.has(l.id)))await db.query("UPDATE space_execution_lines SET status='voided',void_reason=$2,voided_by=$3,voided_at=now() WHERE id=$1",[l.id,reason,user.id]);
+   after=before.filter(l=>l.status==='confirmed'||keep.has(l.id));
+   for(const line of plan.filter(p=>!existing.some(l=>keep.has(l.id)&&l.usage_date===p.date)))after.push((await db.query('INSERT INTO space_execution_lines(id,space_usage_id,usage_date,amount,notes) VALUES($1,$2,$3,$4,$5) RETURNING *',[crypto.randomUUID(),project.id,line.date,line.amount,reason])).rows[0]);
   }else if(body.action==='schedule'){
    if(isOpportunity(project)||project.rental_type!=='付费'||project.status==='已取消'||project.business_status==='已取消')throw Error('只能为有效付费订单安排执行');
    const lines=body.mode==='continuous'?split(body.start,body.end,body.amount):body.lines;

@@ -237,6 +237,11 @@ module.exports = function ({
         fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }),
       );
       if (!size || !signature(ext, head)) fail('文件内容与格式不符或文件为空');
+      if (
+        text(q.get('category'), 60) === '作品图片' &&
+        !TYPES[ext].startsWith('image/')
+      )
+        fail('作品图片仅支持图片文件');
       await fs.promises.rename(temp, dest);
       const row = await transaction(async (c) => {
         const r = await c.query(
@@ -461,7 +466,7 @@ module.exports = function ({
         if (sub) {
           const work = (
             await pool.query(
-              'SELECT id,artwork_no,title,artist,medium,dimensions,status FROM artworks WHERE id=$1',
+              'SELECT id,image_url,artwork_no,title,artist,medium,dimensions,status FROM artworks WHERE id=$1',
               [sub],
             )
           ).rows[0];
@@ -491,7 +496,7 @@ module.exports = function ({
           );
           const rows = (
             await pool.query(
-              'SELECT id,artwork_no,title,artist,medium,dimensions,status FROM artworks WHERE ' +
+              'SELECT id,image_url,artwork_no,title,artist,medium,dimensions,status FROM artworks WHERE ' +
                 where +
                 ' ORDER BY artwork_no,title,id LIMIT 20 OFFSET $2',
               [query, (page - 1) * 20],
@@ -504,7 +509,7 @@ module.exports = function ({
           200,
           (
             await pool.query(
-              'SELECT id,artwork_no,title,artist,medium,dimensions,image_url,retail_price,status FROM artworks WHERE title ILIKE $1 OR artist ILIKE $1 OR artwork_no ILIKE $1 ORDER BY title LIMIT 50',
+              'SELECT id,image_url,artwork_no,title,artist,medium,dimensions,image_url,retail_price,status FROM artworks WHERE title ILIKE $1 OR artist ILIKE $1 OR artwork_no ILIKE $1 ORDER BY title LIMIT 50',
               [query],
             )
           ).rows,
@@ -556,7 +561,7 @@ module.exports = function ({
         ).rows;
         const works = (
           await pool.query(
-            'SELECT a.id,a.artwork_no,a.title,a.artist,a.medium,a.dimensions,a.retail_price,a.status FROM artist_artwork_links l JOIN artworks a ON a.id=l.artwork_id WHERE l.artist_id=$1 ORDER BY a.title',
+            'SELECT a.id,a.image_url,a.artwork_no,a.title,a.artist,a.medium,a.dimensions,a.retail_price,a.status FROM artist_artwork_links l JOIN artworks a ON a.id=l.artwork_id WHERE l.artist_id=$1 ORDER BY a.title',
             [id],
           )
         ).rows;

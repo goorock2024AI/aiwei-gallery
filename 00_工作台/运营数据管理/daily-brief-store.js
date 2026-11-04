@@ -28,4 +28,11 @@ async function weekly(pool,start,{refresh=false}={}){
   totals:{basis:missing.length||stale.length?'已取得日期小计，不能当完整周总额':'七天合计',income:core.money(reports.reduce((n,r)=>n+r.metrics.income,0)),visitors:reports.some(r=>r.metrics.visitors==null)?null:reports.reduce((n,r)=>n+r.metrics.visitors,0)},reports,
   basis:'按日读取最新有效日报；缺失不补零，数据变化必须修订；周报读取本包，跨月月报不得整周累加。'};
 }
-module.exports={directory,latest,generate,read,weekly};
+// Seven source-hash checks are read in one stable snapshot. Keep JIT tuning local
+// to this pooled connection's read-only transaction, never a server/session default.
+async function weeklyReadonly(pool,start){
+ const db=await pool.connect();
+ try{await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');await db.query('SET LOCAL jit=off');await db.query("SET LOCAL statement_timeout='15000'");const result=await weekly(db,start);await db.query('COMMIT');return result;}
+ catch(e){await db.query('ROLLBACK').catch(()=>{});throw e;}finally{db.release();}
+}
+module.exports={directory,latest,generate,read,weekly,weeklyReadonly};

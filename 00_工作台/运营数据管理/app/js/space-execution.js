@@ -14,7 +14,7 @@ Object.assign(UI,{
     <div class="rent-stat-grid">${[['合同金额',project.receivableAmount],['累计已收',p.received],['累计已执行',p.earned],['已收未执行',p.receivedUnexecuted],['已执行未收',p.executedUnpaid],['未分配使用日期',p.unallocatedContract]].map(([k,v])=>`<div class="stat-card"><div class="stat-label">${k}</div><div class="stat-value">¥${fmt(v)}</div></div>`).join('')}</div>
     <p class="form-hint">余额截至 ${esc(data.end)}，每笔订单分别计算。历史已完成状态不会自动生成已执行收入，请依据合同和实际使用补齐明细。</p>
     <div class="table-wrap"><table class="data-table" style="min-width:620px"><thead><tr><th>使用日期</th><th>归属金额</th><th>状态</th><th>说明</th><th>操作</th></tr></thead><tbody>${data.lines.map(l=>`<tr><td>${esc(l.usageDate)}</td><td>¥${fmt(l.amount)}</td><td>${({planned:'待执行',confirmed:'已执行',voided:'已作废'})[l.status]}</td><td>${esc(l.voidReason||l.notes||'—')}</td><td>${editable&&l.status==='planned'?`<button class="btn btn-sm btn-primary" data-id="${esc(l.id)}" onclick="UI._spaceExecutionAction('confirm',this.dataset.id,this)">确认执行</button> `:''}${editable&&l.status!=='voided'&&(l.status==='planned'||admin)?`<button class="btn btn-sm btn-secondary" data-id="${esc(l.id)}" onclick="UI._spaceExecutionAction('void',this.dataset.id,this)">作废/改期</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5">尚未安排使用明细，待依据合同核对。</td></tr>'}</tbody></table></div>
-    ${editable?`<div class="card" style="margin-top:16px"><div class="card-title">安排使用明细</div><p class="form-hint">分散使用可逐场添加；连续使用按天均分，余分从首日依次分配。保存安排后仍需在实际执行时确认。改期先作废原明细再新增。</p><div class="form-grid">
+    ${editable?`<div class="card" style="margin-top:16px"><div class="card-title">安排使用明细</div><button class="btn btn-secondary" onclick="SpaceDates.edit(this.closest('.modal-overlay').dataset.project)">通过日历勾选／修改日期</button><p class="form-hint">分散使用可逐场添加；连续使用按天均分，余分从首日依次分配。保存安排后仍需在实际执行时确认。改期先作废原明细再新增。</p><div class="form-grid">
     <div class="form-group"><label>安排方式</label><select id="se-mode"><option value="single">单场使用</option><option value="continuous">连续使用，按天分摊</option></select></div>
     <div class="form-group"><label>使用/开始日期</label><input id="se-start" type="date" value="${esc(project.date)}"></div>
     <div class="form-group"><label>结束日期（连续使用）</label><input id="se-end" type="date" value="${esc(project.endDate||project.date)}"></div>
@@ -29,12 +29,12 @@ Object.assign(UI,{
  async _spaceExecutionSchedule(button){
   const modal=document.getElementById('space-execution-modal'),id=modal.dataset.project,start=document.getElementById('se-start').value,end=document.getElementById('se-end').value,amount=Number(document.getElementById('se-amount').value),mode=document.getElementById('se-mode').value;
   const body={action:'schedule',mode,start,end,amount,lines:[{date:start,amount}],notes:document.getElementById('se-notes').value};
-  button.disabled=true;try{await Store._request('POST','/rest/v1/space-accounting?id='+encodeURIComponent(id),body);this.toast('使用安排已保存，尚未计入已执行收入');await this._openSpaceExecution(id);await this._loadSpaceAccountingSummary();}catch(e){this.toast(e.message,'error');}finally{button.disabled=false;}
+  button.disabled=true;try{await Store._request('POST','/rest/v1/space-accounting?id='+encodeURIComponent(id),body);this.toast('使用安排已保存，尚未计入已执行收入');await this._openSpaceExecution(id);await this._loadSpaceAccountingSummary();await SpaceDates.refresh();}catch(e){this.toast(e.message,'error');}finally{button.disabled=false;}
  },
  async _spaceExecutionAction(action,lineId,button){
   const id=document.getElementById('space-execution-modal').dataset.project,body={action,lineId};
   if(action==='void'){body.reason=prompt('请填写作废或改期原因。原记录会保留，已执行金额将从原使用日撤回。');if(!body.reason)return;}
-  button.disabled=true;try{await Store._request('POST','/rest/v1/space-accounting?id='+encodeURIComponent(id),body);this.toast(action==='confirm'?'已确认执行，按使用日期计入经营收入':'原使用明细已作废并留痕');await this._openSpaceExecution(id);await this._loadSpaceAccountingSummary();}catch(e){this.toast(e.message,'error');}finally{button.disabled=false;}
+  button.disabled=true;try{await Store._request('POST','/rest/v1/space-accounting?id='+encodeURIComponent(id),body);this.toast(action==='confirm'?'已确认执行，按使用日期计入经营收入':'原使用明细已作废并留痕');await this._openSpaceExecution(id);await this._loadSpaceAccountingSummary();await SpaceDates.refresh();}catch(e){this.toast(e.message,'error');}finally{button.disabled=false;}
  },
  async _spaceRefund(button){
   const modal=document.getElementById('space-execution-modal'),id=modal.dataset.project;

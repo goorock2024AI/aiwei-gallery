@@ -221,7 +221,7 @@ const ArtistLibrary = (() => {
     if (s.tab === 'files')
       return `<div class="al-section-title"><h3>文档附件 <small>${p.files.length}</small></h3>${editable ? button('edit', '上传 / 管理文件', '', 'primary') : ''}</div><p class="al-muted">实际文件已保存至资料库，可追溯关联投稿</p>${filesTable(p.files)}<h3>来源投稿</h3>${records('submission')}`;
     if (s.tab === 'works')
-      return `<div class="al-section-title"><h3>作品</h3><div class="al-actions">${editable ? button('add-work', '记录投稿作品') + button('find-works', '关联画廊作品', '', 'primary') : ''}</div></div><p class="al-muted">关联现有作品档案；投稿作品记录不会自动成为可售库存</p><div id="al-work-search"></div>${p.works.length ? `<div class="al-table-wrap"><table class="al-table"><thead><tr><th>作品</th><th>媒介 / 尺寸</th><th>状态</th>${editable ? '<th>操作</th>' : ''}</tr></thead><tbody>${p.works.map((w) => `<tr><td><strong>${esc(w.title)}</strong><small>${esc(w.artist)}</small></td><td>${esc(w.medium || '待补充')}<small>${esc(w.dimensions)}</small></td><td>${esc(w.status)}</td>${editable ? `<td>${button('unlink', '解除关联', `data-id="${esc(w.id)}"`)}</td>` : ''}</tr>`).join('')}</tbody></table></div>` : '<div class="al-empty">尚未关联现有作品</div>'}<h3>投稿作品线索</h3>${records('work')}${s.recordKind === 'work' ? recordForm('work') : ''}`;
+      return `<h3>艺术家作品图片</h3>${workImageCards(p.files, false)}<div class="al-section-title"><h3>关联画廊作品</h3><div class="al-actions">${editable ? button('add-work', '记录投稿作品') + button('find-works', '关联画廊作品', '', 'primary') : ''}</div></div><p class="al-muted">关联现有作品档案；投稿作品记录不会自动成为可售库存</p><div id="al-work-search"></div>${p.works.length ? `<div class="al-table-wrap"><table class="al-table"><thead><tr><th>作品</th><th>媒介 / 尺寸</th><th>状态</th>${editable ? '<th>操作</th>' : ''}</tr></thead><tbody>${p.works.map((w) => `<tr><td>${galleryThumbnail(w)}<strong>${esc(w.title)}</strong><small>${esc(w.artwork_no || '')} ${esc(w.artist)}</small></td><td>${esc(w.medium || '待补充')}<small>${esc(w.dimensions)}</small></td><td>${esc(w.status)}</td>${editable ? `<td>${button('unlink', '解除关联', `data-id="${esc(w.id)}"`)}</td>` : ''}</tr>`).join('')}</tbody></table></div>` : '<div class="al-empty">尚未关联现有作品</div>'}<h3>投稿作品线索</h3>${records('work')}${s.recordKind === 'work' ? recordForm('work') : ''}`;
     return `<div class="al-section-title"><h3>投稿与跟进</h3><div class="al-actions">${editable ? button('add-submission', '登记投稿') + button('add-followup', '添加跟进', '', 'primary') : ''}</div></div>${s.recordKind ? recordForm(s.recordKind) : ''}<h3>投稿记录</h3>${records('submission')}<h3>跟进记录</h3>${records('followup')}`;
   }
   function filesTable(files) {
@@ -288,9 +288,10 @@ const ArtistLibrary = (() => {
         '先建立档案，再逐步补充作品与合作资料',
         button('cancel-form', '返回资料库'),
       ) +
-      `<form id="al-artist-form"><div class="al-form-columns"><div><section><h2>基本资料</h2><div class="al-intake-head"><div class="al-grow"><div class="al-grid">${field('name', '姓名 / 艺名', d.name, 'text', true)}${field('alias', '别名', d.alias)}</div><div class="al-grid">${field('location', '所在地', d.location)}${field('medium', '创作媒介', d.medium)}</div></div><div class="al-portrait"><div class="al-avatar">${d.avatarId ? `<img data-artist-file="${esc(d.avatarId)}" alt="艺术家头像">` : '<span>头像选填</span>'}</div><label class="al-button">上传头像<input type="file" id="al-avatar-upload" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>${d.avatarId ? button('remove-avatar', '移除头像') : ''}<input type="hidden" name="avatarId" value="${esc(d.avatarId || '')}"></div></div>${field('tags', '主题标签（用逗号分隔）', (d.tags || []).join('，'))}${area('bio', '个人简介', d.bio, 4)}<details><summary>教育、展览与其他资料</summary>${area('education', '教育经历', d.education)}${area('exhibitions', '展览履历', d.exhibitions)}${field('agency', '工作室 / 代理', d.agency)}${field('otherContact', '其他联系方式', d.otherContact)}${area('collectionEvidence', '收藏依据', d.collectionEvidence)}</details></section><section><h2>联系与来源</h2><div class="al-grid">${field('email', '联系邮箱', d.email, 'email')}${field('phone', '联系电话', d.phone)}${field('source', '资料来源', d.source, 'text', true)}${field('referrer', '推荐人', d.referrer)}</div><p class="al-muted">可填写“投稿邮件”“日常发现”等；原始邮件及附件在保存后于“投稿与跟进”中登记关联。</p></section></div><div><section><h2>美术馆关系 <small>可多选</small></h2><div class="al-checks">${s.options.relations.map((t) => `<label><input name="relations" type="checkbox" value="${t}" ${d.relations?.includes(t) ? 'checked' : ''}> ${t}</label>`).join('')}</div><div class="al-grid"><label class="al-field"><span>跟进状态</span><select name="status">${opts(s.options.statuses, d.status || '待了解')}</select></label><label class="al-field"><span>负责人</span><select name="owner"><option value="">未分配</option>${s.options.staff.map((u) => `<option value="${esc(u.id)}" ${u.id === d.owner ? 'selected' : ''}>${esc(u.display_name || u.username)}</option>`).join('')}</select></label></div></section><section><h2>外部链接</h2><label class="al-field"><span class="al-sr-only">外部链接</span><textarea name="urls" rows="3" maxlength="400000" placeholder="粘贴链接，多个 URL 用逗号分隔">${esc((d.urls || []).join('，\n'))}</textarea></label><p class="al-muted">报道、个人网站、线上作品集等均可填写</p></section><section><h2>文档附件</h2><p class="al-muted">直接保存至资料库，无需网盘中转</p><label class="al-field"><span>本次上传分类</span><select id="al-file-category">${opts(['作品集', '个人简历', '创作阐述', '作品清单', '报道文件', '其他资料'], '作品集')}</select></label><label class="al-drop" id="al-drop">拖放文件到此处，或点击上传<input id="al-files-upload" type="file" multiple accept=".pdf,.doc,.docx,.zip,.png,.jpg,.jpeg,.gif,.webp"><small>PDF、Word、图片、ZIP · 单文件不超过 ${size(s.options.maxFileBytes)}</small></label><div id="al-upload-status" aria-live="polite"></div><div id="al-staged-files"></div><p class="al-muted">保存档案后，新增文件将关联至该艺术家</p></section><section><h2>关联画廊作品</h2><p class="al-muted">选择已登记的馆藏或画廊寄售作品，可关联多件。</p>${button('find-works', '关联画廊作品')}<div id="al-form-works"></div></section>${area('notes', '内部备注', d.notes, 3)}</div></div><footer class="al-form-footer"><span><em>*</em> 为必填项，其他资料可后续补充</span><div class="al-actions">${button('cancel-form', '取消')}<button class="al-button primary" type="submit" id="al-save">保存档案</button></div></footer></form>`;
+      `<form id="al-artist-form"><div class="al-form-columns"><div><section><h2>基本资料</h2><div class="al-intake-head"><div class="al-grow"><div class="al-grid">${field('name', '姓名 / 艺名', d.name, 'text', true)}${field('alias', '别名', d.alias)}</div><div class="al-grid">${field('location', '所在地', d.location)}${field('medium', '创作媒介', d.medium)}</div></div><div class="al-portrait"><div class="al-avatar">${d.avatarId ? `<img data-artist-file="${esc(d.avatarId)}" alt="艺术家头像">` : '<span>头像选填</span>'}</div><label class="al-button">上传头像<input type="file" id="al-avatar-upload" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>${d.avatarId ? button('remove-avatar', '移除头像') : ''}<input type="hidden" name="avatarId" value="${esc(d.avatarId || '')}"></div></div>${field('tags', '主题标签（用逗号分隔）', (d.tags || []).join('，'))}${area('bio', '个人简介', d.bio, 4)}<details><summary>教育、展览与其他资料</summary>${area('education', '教育经历', d.education)}${area('exhibitions', '展览履历', d.exhibitions)}${field('agency', '工作室 / 代理', d.agency)}${field('otherContact', '其他联系方式', d.otherContact)}${area('collectionEvidence', '收藏依据', d.collectionEvidence)}</details></section><section><h2>联系与来源</h2><div class="al-grid">${field('email', '联系邮箱', d.email, 'email')}${field('phone', '联系电话', d.phone)}${field('source', '资料来源', d.source, 'text', true)}${field('referrer', '推荐人', d.referrer)}</div><p class="al-muted">可填写“投稿邮件”“日常发现”等；原始邮件及附件在保存后于“投稿与跟进”中登记关联。</p></section></div><div><section><h2>美术馆关系 <small>可多选</small></h2><div class="al-checks">${s.options.relations.map((t) => `<label><input name="relations" type="checkbox" value="${t}" ${d.relations?.includes(t) ? 'checked' : ''}> ${t}</label>`).join('')}</div><div class="al-grid"><label class="al-field"><span>跟进状态</span><select name="status">${opts(s.options.statuses, d.status || '待了解')}</select></label><label class="al-field"><span>负责人</span><select name="owner"><option value="">未分配</option>${s.options.staff.map((u) => `<option value="${esc(u.id)}" ${u.id === d.owner ? 'selected' : ''}>${esc(u.display_name || u.username)}</option>`).join('')}</select></label></div></section><section><h2>外部链接</h2><label class="al-field"><span class="al-sr-only">外部链接</span><textarea name="urls" rows="3" maxlength="400000" placeholder="粘贴链接，多个 URL 用逗号分隔">${esc((d.urls || []).join('，\n'))}</textarea></label><p class="al-muted">报道、个人网站、线上作品集等均可填写</p></section><section><h2>文档附件</h2><p class="al-muted">直接保存至资料库，无需网盘中转</p><label class="al-field"><span>本次上传分类</span><select id="al-file-category">${opts(['作品集', '个人简历', '创作阐述', '作品清单', '报道文件', '其他资料'], '作品集')}</select></label><label class="al-drop" id="al-drop">拖放文件到此处，或点击上传<input id="al-files-upload" type="file" multiple accept=".pdf,.doc,.docx,.zip,.png,.jpg,.jpeg,.gif,.webp"><small>PDF、Word、图片、ZIP · 单文件不超过 ${size(s.options.maxFileBytes)}</small></label><div id="al-upload-status" aria-live="polite"></div><div id="al-staged-files"></div><p class="al-muted">保存档案后，新增文件将关联至该艺术家</p></section><section><h2>艺术家作品图片</h2><p class="al-muted">可直接上传作品图片，或选择关联美术馆已有画廊作品。</p><label class="al-button">上传作品图片<input id="al-work-images" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden></label><div id="al-work-image-cards"></div><h3>关联美术馆画廊作品</h3>${button('find-works', '关联画廊作品')}<div id="al-form-works"></div></section>${area('notes', '内部备注', d.notes, 3)}</div></div><footer class="al-form-footer"><span><em>*</em> 为必填项，其他资料可后续补充</span><div class="al-actions">${button('cancel-form', '取消')}<button class="al-button primary" type="submit" id="al-save">保存档案</button></div></footer></form>`;
     staged();
     paintFormWorks();
+    paintWorkImages();
     images();
     const drop = root.querySelector('#al-drop');
     drop.addEventListener('dragover', (e) => {
@@ -315,7 +316,7 @@ const ArtistLibrary = (() => {
       )
       .join('');
   }
-  async function upload(files, avatar = false) {
+  async function upload(files, avatar = false, artwork = false) {
     if (s.busy) {
       toast('请等待当前操作完成', true);
       return;
@@ -337,7 +338,9 @@ const ArtistLibrary = (() => {
             name: file.name,
             category: avatar
               ? '头像'
-              : root.querySelector('#al-file-category').value,
+              : artwork
+                ? '作品图片'
+                : root.querySelector('#al-file-category').value,
           });
           const res = await fetch(base + '/rest/v1/artist-library/files?' + q, {
             method: 'POST',
@@ -357,6 +360,8 @@ const ArtistLibrary = (() => {
             images();
           }
           staged();
+          paintWorkImages();
+          images();
         } catch (e) {
           errors.push(file.name + '：' + e.message);
         }
@@ -446,6 +451,47 @@ const ArtistLibrary = (() => {
     }
   }
 
+  function galleryThumbnail(w) {
+    const url = w.image_url || '';
+    return /^https?:\/\//i.test(url) || url.startsWith('/uploads/')
+      ? '<img class="al-work-thumb" src="' +
+          esc(url) +
+          '" alt="' +
+          esc(w.title) +
+          '">'
+      : '';
+  }
+  function workImageCards(files, edit) {
+    const items = files.filter(
+      (f) => f.category === '作品图片' && f.mime.startsWith('image/'),
+    );
+    return items.length
+      ? '<div class="al-work-images">' +
+          items
+            .map(
+              (f) =>
+                '<figure><img data-artist-file="' +
+                esc(f.id) +
+                '" alt="' +
+                esc(f.original_name) +
+                '"><figcaption>' +
+                esc(f.original_name) +
+                '</figcaption>' +
+                button(
+                  edit ? 'remove-file' : 'preview',
+                  edit ? '移除' : '查看大图',
+                  'data-id="' + esc(f.id) + '"',
+                ) +
+                '</figure>',
+            )
+            .join('') +
+          '</div>'
+      : '<p class="al-muted">尚未上传作品图片</p>';
+  }
+  function paintWorkImages() {
+    const el = root.querySelector('#al-work-image-cards');
+    if (el) el.innerHTML = workImageCards(s.files, true);
+  }
   function paintFormWorks() {
     const el = root.querySelector('#al-form-works');
     if (el)
@@ -454,7 +500,7 @@ const ArtistLibrary = (() => {
             .map(
               (w) =>
                 '<p class="al-stage">' +
-                esc(w.artwork_no || '') +
+                galleryThumbnail(w) + esc(w.artwork_no || '') +
                 ' ' +
                 esc(w.title) +
                 '</p>',
@@ -716,6 +762,8 @@ const ArtistLibrary = (() => {
         }
         s.dirty = true;
         staged();
+        paintWorkImages();
+        images();
       }
       if (a === 'remove-avatar') {
         root.querySelector('[name=avatarId]').value = '';
@@ -805,6 +853,8 @@ const ArtistLibrary = (() => {
           list().catch(status);
         }
         if (e.target.id === 'al-files-upload') upload(e.target.files);
+        if (e.target.id === 'al-work-images')
+          upload(e.target.files, false, true);
         if (e.target.id === 'al-avatar-upload') upload(e.target.files, true);
       });
     }

@@ -1864,14 +1864,11 @@ const UI = {
       }) });
       this.toast(`已录入到账 ¥${this._fmt(amount)}`);
       document.getElementById('quick-collect-modal').remove();
-      // 刷新页面与顶部 4 卡片
-      this._projectListRecords = await Store.getAll('space');
-      await this.renderProjectListPage();
-      // 同步空间页（如果用户切回去能直接看到变化）
-      const spacePage = $('#page-space');
-      if (spacePage && spacePage.classList.contains('active')) {
-        await this.renderSpacePage();
-      }
+      try {
+        if(document.getElementById('page-space')?.classList.contains('active'))await this.renderSpacePage();
+        else await this.renderProjectListPage();
+        if(document.getElementById('spw-receipts'))await SpaceProjects.receipts();
+      } catch(refreshError) { this.toast('收款已保存，请刷新页面查看最新金额','error'); }
     } catch (e) {
       this.toast('到账录入失败：' + (e.message || e), 'error');
     }
@@ -2782,7 +2779,7 @@ const UI = {
     const todayDay = today.startsWith(yearMonth) ? +today.slice(8,10) : -1;
 
     // 过滤当月记录
-    const inMonth = records.filter(r => {
+    const inMonth = records.flatMap(r=>Array.isArray(r.usageDates)?r.usageDates.map(l=>({...r,date:l.date,endDate:l.date,calendarStatus:l.status})): [r]).filter(r => {
       const s = r.date, e = r.endDate || r.date;
       return !(e < monthStart || s > monthEnd);
     });
@@ -2818,8 +2815,8 @@ const UI = {
           if (cellRec.rentalType === '免费') cls += ' gantt-bar--free';
           else if (req > 0 && recv >= req) cls += ' gantt-bar--paid';
           else if (recv > 0) cls += ' gantt-bar--partial';
-          rowsHtml += `<div class="gantt-bar-cell">
-            <div class="${cls}" style="grid-column: span ${span}" title="${this._escAttr(cellRec.projectName)} · ${cellRec.date}${cellRec.endDate && cellRec.endDate !== cellRec.date ? ' → ' + cellRec.endDate : ''} · ${cellRec.status}" onclick="UI._editSpace('${cellRec.id}')">${this._escHtml(cellRec.projectName)}</div>
+          rowsHtml += `<div class="gantt-bar-cell" style="grid-column: span ${span}">
+            <div class="${cls}" title="${this._escAttr(cellRec.projectName)} · ${cellRec.date}${cellRec.endDate && cellRec.endDate !== cellRec.date ? ' → ' + cellRec.endDate : ''} · ${cellRec.calendarStatus?({planned:'待使用',confirmed:'已使用'})[cellRec.calendarStatus]:cellRec.status}" onclick="UI._editSpace('${cellRec.id}')">${this._escHtml(cellRec.projectName)}</div>
           </div>`;
           d += span - 1; // 跳过被色块覆盖的日期
         } else {
@@ -2864,7 +2861,7 @@ const UI = {
     `).join('');
 
     return `
-      <div class="card-title">💰 到账明细（已收 ¥${this._fmt(total)} / 应收 ¥${this._fmt(req)}${unpaid > 0 ? ' · 待收 ¥' + this._fmt(unpaid) : ' · 已结清'}）<span style="font-size:12px;color:var(--gray-500);margin-left:8px">录入请到「📋 项目清单」</span></div>
+      <div class="card-title">💰 到账明细（已收 ¥${this._fmt(total)} / 应收 ¥${this._fmt(req)}${unpaid > 0 ? ' · 待收 ¥' + this._fmt(unpaid) : ' · 已结清'}）<span style="font-size:12px;color:var(--gray-500);margin-left:8px">录入请到「空间使用 → 收款与待收」</span></div>
       ${payments.length === 0 ? '<div class="empty-state">暂无到账记录</div>' : `
         <div class="table-wrap"><table class="data-table">
           <thead><tr><th>日期</th><th>金额</th><th>方式</th><th>备注</th><th>状态</th></tr></thead>
@@ -3826,8 +3823,9 @@ const UI = {
       gallery: this._artworks.length
     };
 
+    if(window.AppNavigation?.current?.page==='products'&&!AppNavigation.productTabAllowed(tab))return;
     html(page, `
-      <div class="sub-tabs" id="product-sub-tabs">
+      <div class="sub-tabs" id="product-sub-tabs" data-product-context="${window.AppNavigation?.current?.id||''}">
         ${Auth.isAdmin ? `<button class="sub-tab-btn ${tab==='ticket'?'active':''}" data-ptab="ticket">🎫 门票 <span class="badge">${counts.ticket}</span></button>
         <button class="sub-tab-btn ${tab==='coffee'?'active':''}" data-ptab="coffee">☕ 咖啡 <span class="badge">${counts.coffee}</span></button>` : ''}
         <button class="sub-tab-btn ${tab==='creative'?'active':''}" data-ptab="creative">📦 文创/零售 <span class="badge">${counts.creative}</span></button>
@@ -3842,6 +3840,7 @@ const UI = {
     page.querySelectorAll('.sub-tab-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         this._productTab = btn.getAttribute('data-ptab');
+        if(window.AppNavigation&&!AppNavigation.productTabAllowed(this._productTab))return;
         page.querySelectorAll('.sub-tab-btn').forEach(item=>item.classList.toggle('active',item===btn));
         // 切到画廊子 tab 时，确保销售聚合数据已加载（避免子 tab 切换不走 renderProductPage 的问题）
         if (this._productTab === 'gallery') {
