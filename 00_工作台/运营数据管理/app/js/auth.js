@@ -261,6 +261,7 @@ const Auth = {
     const role = this._currentUser.role;
     const accessMap = {
       inventory: ['admin', 'editor', 'viewer'],
+      artists: ['admin', 'editor', 'viewer'],
       revenue:  ['admin', 'editor', 'viewer'],
       expense:  ['admin', 'editor'],
       gallery:  ['admin', 'editor', 'viewer'],

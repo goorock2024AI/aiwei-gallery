@@ -36,3 +36,6 @@ CMD ["node", "server.js"]
 
 COPY scripts/optional-package-spec-migrate.js ./scripts/
 COPY sql/20261103_optional_package_spec.sql ./sql/
+COPY artist-library-api.js ./
+COPY scripts/artist-library-migrate.js scripts/artist-library-cleanup.js ./scripts/
+COPY sql/20261103_artist_library.sql ./sql/

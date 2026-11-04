@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "check:artist-library": "node scripts/check-artist-library.js",
+    "migrate:artist-library": "node scripts/artist-library-migrate.js",
     "check:dist-sync": "node scripts/check-dist-sync.js",
     "check:creative-pos-picker": "node scripts/check-creative-pos-picker.js",
     "check:revenue-comparison-chart": "node scripts/check-revenue-comparison-chart.js",
@@ -77,9 +79,12 @@
     "check:m6-release": "node scripts/m6-07-release-preflight.js"
   },
   "dependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "pdfkit": "^0.17.2",
     "pg": "^8.13.0",
-    "xlsx": "^0.18.5",
-    "@resvg/resvg-js": "2.6.2"
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
   }
 }

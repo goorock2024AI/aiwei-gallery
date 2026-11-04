@@ -10,8 +10,8 @@
   };
 
   // 版本号填充（硬编码常量，发布时人工递增）
-const APP_VERSION = '2.0.0-rc.34';
-  const LAST_UPDATE = '2026-10-28';
+const APP_VERSION = '2.0.0-rc.34-artist-manual.2';
+  const LAST_UPDATE = '2026-11-04';
   const ICP_BEIAN = '滇ICP备2026015607号-1';
   (function fillVersion() {
     const icpEl = document.getElementById('sidebar-icp');
@@ -60,6 +60,7 @@ const APP_VERSION = '2.0.0-rc.34';
         case 'daily-closing': await UI.renderDailyClosingPage(); break;
         case 'project-list': await UI.renderProjectListPage(); break;
         case 'inventory': await InventoryInbox.render(); break;
+        case 'artists': await ArtistLibrary.render(); break;
         case 'operations': await OperationsDashboard.render(); break;
         case 'reports': await UI.renderReportsPage(); break;
         case 'manage': await UI.renderManagePage(); break;
@@ -193,6 +194,9 @@ const APP_VERSION = '2.0.0-rc.34';
       UI.toast(health.message, 'error');
     }
     await UI.renderRevenuePage();
+    if (window.location.hash === '#artists' && Auth.hasModuleAccess('artists')) {
+      document.querySelector('[data-tab="artists"]')?.click();
+    }
   }
 
   // 初始化

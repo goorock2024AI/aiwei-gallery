@@ -4399,6 +4399,7 @@ const UI = {
               </div>
             </div>
           </div>
+          ${isEdit ? '<div class="form-group full"><button type="button" class="btn btn-secondary" id="aw-artist-link">关联艺术家档案</button><small>关联馆藏或寄售作品的艺术家，可单独保存关联。</small></div>' : ''}
           <div class="form-group full"><label>备注</label><textarea id="aw-notes" rows="2">${this._escHtml(d.notes || '')}</textarea></div>
         </div>
         <div class="modal-actions">
@@ -4407,6 +4408,7 @@ const UI = {
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    overlay.querySelector('#aw-artist-link')?.addEventListener('click', () => ArtistLibrary.linkFromGallery(d.id));
 
     // 初始化可用库存预览
     this._updateQtyPreview();

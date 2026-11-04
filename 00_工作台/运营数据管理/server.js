@@ -1456,7 +1456,9 @@ async function querySaleWrite(table, sql, params, requester) {
 
 // --- Static file server ---
 function serveStatic(req, res, pathname) {
-  let filePath = path.join(STATIC_DIR, pathname === '/' ? '/index.html' : pathname);
+  const staticRoot = path.resolve(STATIC_DIR);
+  let filePath = path.resolve(staticRoot, '.' + (pathname === '/' ? '/index.html' : pathname));
+  if (!filePath.startsWith(staticRoot + path.sep)) return sendError(res,403,'禁止访问');
   if (!fs.existsSync(filePath)) {
     filePath = path.join(STATIC_DIR, 'index.html');
   }
@@ -1490,6 +1492,7 @@ const handleSpaceAccounting = require('./space-accounting').handler({ pool, getR
 const handleSpaceProjectWorkflow = require('./space-project-workflow').handler({pool,getRequester,ensureRole,sendJSON,sendError,toCamel});
 const handleGovernanceBatches = require('./governance-batches')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel });
 const handleCoffeeInventory = require('./coffee-inventory')({ pool, getRequester, ensureRole, sendJSON, sendError });
+const handleArtistLibrary = require('./artist-library-api')({pool,getRequester,ensureRole,sendJSON,sendError});
 const handleReportCenter = require('./report-center-api')({pool,getRequester,ensureRole,sendJSON,sendError});
 const handleDailyBriefs = require('./daily-brief-api')({ pool, getRequester, ensureRole, sendJSON, sendError });
 const handleOperationsReports = require('./operations-reports')({ pool, getRequester, ensureRole, sendJSON, sendError, toCamel, readOperationsRollout, rolloutEnabledForRole });
@@ -1534,6 +1537,8 @@ const server = http.createServer((req, res) => {
       trialObservability.handleTrialRunIssues(req, res, urlInfo.query);
     } else if (parts[2] === 'operations-rollout') {
       handleOperationsRollout(req, res);
+    } else if (parts[2] === 'artist-library') {
+      handleArtistLibrary(req,res);
     } else if (parts[2] === 'coffee-inventory') {
       handleCoffeeInventory(req, res);
     } else if (parts[2] === 'report-center') {

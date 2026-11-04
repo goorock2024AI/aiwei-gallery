@@ -29,8 +29,10 @@ services:
       DB_PASS: ${DB_PASSWORD}
       PORT: 3000
       UPLOAD_DIR: /uploads
+      ARTIST_FILE_DIR: /artist-files
     volumes:
       - uploads-data:/uploads
+      - artist-files:/artist-files
     networks:
       - aiwei-net
 
@@ -56,3 +58,4 @@ networks:
 volumes:
   db-data:
   uploads-data:
+  artist-files:

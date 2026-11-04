@@ -90,3 +90,5 @@ supabase/.temp/
 .dev.vars*
 !.dev.vars.example
 !.env.example
+# Private artist files must never be committed or served as static assets.
+artist-private-files/
