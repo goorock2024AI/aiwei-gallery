@@ -39,3 +39,6 @@ COPY sql/20261103_optional_package_spec.sql ./sql/
 COPY artist-library-api.js ./
 COPY scripts/artist-library-migrate.js scripts/artist-library-cleanup.js ./scripts/
 COPY sql/20261103_artist_library.sql ./sql/
+COPY artist-mail.js ./
+COPY scripts/artist-mail-ingest.js ./scripts/
+COPY sql/20261107_artist_mail.sql ./sql/

@@ -150,7 +150,7 @@ const ArtistLibrary = (() => {
       top(
         '艺术家资料库',
         '沉淀艺术家资料，为策展与合作做好准备',
-        `${admin() ? button('archived', s.archived ? '查看在用档案' : '已归档档案') : ''}${write() ? button('new', '＋ 新建艺术家', '', 'primary') : ''}`,
+        `${admin() ? button('archived', s.archived ? '查看在用档案' : '已归档档案') : ''}${write() ? button('mail-list', '邮件投稿') + button('new', '＋ 新建艺术家', '', 'primary') : ''}`,
       ) +
       `<div class="al-workspace"><section class="al-list" aria-label="艺术家列表"><div class="al-search"><input id="al-search" aria-label="搜索艺术家" placeholder="搜索艺术家、方向、附件" value="${esc(s.q)}"><div class="al-filter-row"><select id="al-relation" aria-label="关系筛选"><option value="">全部关系</option>${s.options.relations.map((t) => `<option ${t === s.relation ? 'selected' : ''}>${t}</option>`).join('')}</select><select id="al-status" aria-label="跟进状态筛选"><option value="">全部状态</option>${s.options.statuses.map((t) => `<option ${t === s.status ? 'selected' : ''}>${t}</option>`).join('')}</select></div>${s.archived ? '<p class="al-muted">正在查看已归档档案</p>' : ''}</div><div class="al-list-rows"></div><div class="al-list-footer"></div></section><section class="al-detail" aria-label="艺术家详情"><div class="al-empty">选择一位艺术家查看资料</div></section></div>`;
     paintList();
@@ -166,6 +166,59 @@ const ArtistLibrary = (() => {
     s.recordKind = null;
     paintList();
     detail();
+  }
+  async function mailList(page = 1, filter = s.mailFilter || 'pending') {
+    s.mode = 'mail';
+    s.mailFilter = filter;
+    s.mailPage = page;
+    const request = ++detailSeq;
+    root.innerHTML = top('邮件投稿', '原始邮件和附件直接保存到资料库，确认后再关联艺术家', button('mail-exit', '返回艺术家资料库')) +
+      '<div class="al-mail-panel al-empty">正在读取邮件投稿…</div>';
+    const data = await api('/mail?' + new URLSearchParams({ page, filter }));
+    if (request !== detailSeq || s.mode !== 'mail') return;
+    root.querySelector('.al-mail-panel').outerHTML = `<section class="al-mail-panel">
+      <div class="al-actions">${[['pending','待处理'],['assigned','已关联'],['all','全部']].map(([value,label]) =>
+        button('mail-filter', label, `data-filter="${value}" aria-pressed="${filter === value}"`, filter === value ? 'primary' : '')).join('')}</div>
+      ${data.rows.length ? `<div class="al-table-wrap"><table class="al-table"><thead><tr><th>投稿邮件</th><th>档案</th><th>材料</th><th></th></tr></thead><tbody>
+      ${data.rows.map(m => `<tr><td><strong>${esc(m.subject || '无主题')}</strong><small>${esc(m.sender)} · ${date(m.received_at)}</small></td>
+        <td>${esc(m.artist_name || '待关联')}</td><td>${m.saved} 份已保存${m.pending ? ` · ${m.pending} 份待补` : ''}${m.source_complete ? '' : ' · 正文待取'}</td>
+        <td>${button('mail-detail', '查看投稿', `data-id="${esc(m.id)}"`)}</td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="al-empty">当前没有投稿</div>'}
+      <div class="al-actions">${button('mail-prev', '上一页', page <= 1 ? 'disabled' : '')}<span>第 ${page} 页</span>${button('mail-next', '下一页', data.more ? '' : 'disabled')}</div>
+    </section>`;
+  }
+  async function mailDetail(id) {
+    s.mode = 'mail-detail';
+    const request = ++detailSeq;
+    const m = await api('/mail/' + encodeURIComponent(id));
+    if (request !== detailSeq || s.mode !== 'mail-detail') return;
+    root.innerHTML = top('邮件投稿详情', '核对原邮件、附件与艺术家身份', button('mail-back', '返回投稿列表')) +
+      `<section class="al-mail-panel"><h2>${esc(m.subject || '无主题')}</h2>
+      <p class="al-muted">${esc(m.sender)} · ${date(m.received_at)}</p>
+      <p><a target="_blank" rel="noopener noreferrer" href="https://mail.google.com/mail/u/?authuser=${encodeURIComponent(m.mailbox)}#all/${encodeURIComponent(m.message_id)}">在 Gmail 打开原邮件 ↗</a></p>
+      ${m.source_complete ? '' : '<p class="al-muted">目前仅取得邮件摘要，正文待补。</p>'}
+      <details class="al-mail-body"><summary>邮件正文</summary><p class="al-prose">${esc(m.body || '无正文')}</p></details>
+      <h3>投稿材料</h3>
+      ${m.items.length ? `<div class="al-table-wrap"><table class="al-table"><thead><tr><th>名称</th><th>状态</th><th>操作</th></tr></thead><tbody>${m.items.map(i =>
+        `<tr><td>${esc(i.original_name || i.name)}${i.url ? ` <a target="_blank" rel="noopener noreferrer" href="${esc(i.url)}">打开原链接 ↗</a>` : ''}</td>
+          <td>${i.state === 'active' ? '原件已保存' : i.file_id ? '已从档案移除，来源保留' : esc(i.reason)}</td>
+          <td>${i.state === 'active' ? button('download', '下载原件', `data-id="${esc(i.file_id)}"`) : i.file_id ? '' :
+            `<form class="al-mail-supplement" data-import="${esc(m.id)}" data-item="${esc(i.item_key)}"><input aria-label="选择待补原件" name="file" type="file" required accept=".pdf,.doc,.docx,.zip,.rar,.7z,.png,.jpg,.jpeg,.gif,.webp"><button type="submit" class="al-button">补传原件</button></form>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="al-muted">未发现附件或下载链接</p>'}
+      <h3>关联艺术家</h3>${m.artist_id ? button('mail-profile', '查看已关联艺术家', `data-id="${esc(m.artist_id)}"`) :
+        `<form class="al-mail-search"><label class="al-field"><span>查找已有艺术家</span><input required name="q" maxlength="200" placeholder="输入姓名或艺名"></label><button class="al-button" type="submit">搜索</button></form>
+        <div id="al-mail-matches" aria-live="polite"></div>
+        <details><summary>确认资料库里没有该艺术家，再新建档案</summary>
+        <form class="al-mail-assign" data-import="${esc(m.id)}">${field('name','姓名 / 艺名','','text',true)}
+        <button class="al-button primary" type="submit">新建并关联</button></form></details>`}
+      </section>`;
+    root.querySelector('#al-mail-matches')?.setAttribute('data-import', m.id);
+  }
+  async function mailProfile(id) {
+    s.archived = false;
+    s.detail = null;
+    s.tab = 'records';
+    shell();
+    await Promise.all([list(), select(id)]);
   }
   function detail() {
     const el = root.querySelector('.al-detail');
@@ -235,7 +288,7 @@ const ArtistLibrary = (() => {
       ? rows
           .map(
             (r) =>
-              `<article class="al-record"><h4>${esc(r.data.title)} <small>${esc(r.data.date || date(r.created_at))}</small></h4>${kind === 'submission' ? `<p class="al-muted">${esc(r.data.sender || '发件人待补充')} · ${esc(r.data.emailSubject || '主题待补充')}</p><small>邮箱 ${esc(r.data.mailbox || '待补充')} · 邮件标识 ${esc(r.data.mailId || '待补充')} · 线程 ${esc(r.data.threadId || '待补充')}</small>` : ''}${kind === 'work' ? `<p class="al-muted">${esc([r.data.medium, r.data.dimensions, r.data.year].filter(Boolean).join(' · '))}</p><small>报价 ${esc(r.data.price ? `${r.data.price} ${r.data.currency || ''}` : '未知')}</small>` : ''}<p class="al-prose">${esc(r.data.content || '未填写正文')}</p>${r.data.nextAction ? `<p>下一步：${esc(r.data.nextAction)} ${esc(r.data.nextDate || '')}</p>` : ''}${
+              `<article class="al-record"><h4>${esc(r.data.title)} <small>${esc(r.data.date || date(r.created_at))}</small></h4>${kind === 'submission' ? `<p class="al-muted">${esc(r.data.sender || '发件人待补充')} · ${esc(r.data.emailSubject || '主题待补充')}</p><small>邮箱 ${esc(r.data.mailbox || '待补充')} · 邮件标识 ${esc(r.data.mailId || '待补充')} · 线程 ${esc(r.data.threadId || '待补充')}</small>${r.data.mailImportId && write() ? ` <div>${button('mail-detail', '查看邮件与待补材料', `data-id="${esc(r.data.mailImportId)}"`)}</div>` : ''}` : ''}${kind === 'work' ? `<p class="al-muted">${esc([r.data.medium, r.data.dimensions, r.data.year].filter(Boolean).join(' · '))}</p><small>报价 ${esc(r.data.price ? `${r.data.price} ${r.data.currency || ''}` : '未知')}</small>` : ''}<p class="al-prose">${esc(r.data.content || '未填写正文')}</p>${r.data.nextAction ? `<p>下一步：${esc(r.data.nextAction)} ${esc(r.data.nextDate || '')}</p>` : ''}${
                 r.data.fileIds?.length
                   ? `<div class="al-actions">${r.data.fileIds
                       .map((id) => {
@@ -710,6 +763,23 @@ const ArtistLibrary = (() => {
     if (!b || !root.contains(b)) return;
     const a = b.dataset.action;
     try {
+      if (a === 'mail-list') return await mailList(1, 'pending');
+      if (a === 'mail-filter') return await mailList(1, b.dataset.filter);
+      if (a === 'mail-next') return await mailList(s.mailPage + 1);
+      if (a === 'mail-prev') return await mailList(s.mailPage - 1);
+      if (a === 'mail-back') return await mailList(s.mailPage);
+      if (a === 'mail-detail') return await mailDetail(b.dataset.id);
+      if (a === 'mail-profile') return await mailProfile(b.dataset.id);
+      if (a === 'mail-exit') { shell(); return await list(); }
+      if (a === 'mail-assign') {
+        b.disabled = true;
+        try {
+          const result = await api('/mail/' + b.dataset.import + '/assign', 'POST', { artistId: b.dataset.id });
+          toast('已关联投稿');
+          await mailProfile(result.artistId);
+        } finally { b.disabled = false; }
+        return;
+      }
       if (a === 'new') {
         if (write()) form();
       }
@@ -803,6 +873,43 @@ const ArtistLibrary = (() => {
     const f = e.target;
     try {
       if (f.id === 'al-artist-form') return await saveForm(f);
+      if (f.matches('.al-mail-search, .al-mail-assign, .al-mail-supplement')) {
+        const btn = f.querySelector('[type=submit],button');
+        btn.disabled = true;
+        const fd = new FormData(f);
+        try {
+          if (f.matches('.al-mail-search')) {
+            const matches = root.querySelector('#al-mail-matches');
+            const data = await api('?' + new URLSearchParams({ q: fd.get('q') }));
+            if (!matches.isConnected) return;
+            matches.innerHTML = data.rows.length ? data.rows.map(p =>
+              `<div class="al-mail-match"><span><strong>${esc(p.data.name)}</strong> · ${esc(p.data.medium || p.data.location || p.data.source)}</span>
+              ${button('mail-assign', '关联此档案', `data-id="${esc(p.id)}" data-import="${esc(matches.dataset.import)}"`)}</div>`).join('') +
+              (data.total > data.rows.length ? '<p>结果较多，请缩小搜索范围。</p>' : '') : '<p>没有找到相符档案。</p>';
+          } else if (f.matches('.al-mail-assign')) {
+            const r = await api('/mail/' + f.dataset.import + '/assign', 'POST', { name: fd.get('name') });
+            toast('已新建档案并关联投稿');
+            await mailProfile(r.artistId);
+          } else {
+            const file = fd.get('file');
+            if (!file?.size || file.size > s.options.maxFileBytes) throw Error('请选择限额内的文件');
+            const base = await Store._ensureClient();
+            const res = await fetch(base + '/rest/v1/artist-library/files?' + new URLSearchParams({ name: file.name, category: '邮件投稿附件' }),
+              { method: 'POST', headers: { ...Auth.authHeaders(), 'Content-Type': 'application/octet-stream' }, body: file });
+            const uploaded = await res.json();
+            if (!res.ok) throw Error(uploaded.error || '上传失败');
+            try {
+              await api('/mail/' + f.dataset.import + '/supplement', 'POST', { itemKey: f.dataset.item, fileId: uploaded.id });
+            } catch (err) {
+              await api('/files/' + uploaded.id, 'DELETE').catch(() => {});
+              throw err;
+            }
+            toast('原件已补存');
+            await mailDetail(f.dataset.import);
+          }
+        } finally { btn.disabled = false; }
+        return;
+      }
 
       if (f.dataset.recordKind) {
         const btn = f.querySelector('[type=submit]');

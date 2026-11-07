@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
+const mail = require('./artist-mail');
 const RELATIONS = ['收藏', '合作', '招募投稿', '日常发现'];
 const STATUSES = [
   '待了解',
@@ -20,6 +21,8 @@ const TYPES = {
   '.docx':
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.zip': 'application/zip',
+  '.rar': 'application/vnd.rar',
+  '.7z': 'application/x-7z-compressed',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -134,6 +137,11 @@ function signature(ext, b) {
     return b.subarray(0, 8).equals(Buffer.from('d0cf11e0a1b11ae1', 'hex'));
   if (['.zip', '.docx'].includes(ext))
     return b.subarray(0, 2).toString() === 'PK';
+  if (ext === '.rar')
+    return b.subarray(0, 7).equals(Buffer.from('526172211a0700', 'hex')) ||
+      b.subarray(0, 8).equals(Buffer.from('526172211a070100', 'hex'));
+  if (ext === '.7z')
+    return b.subarray(0, 6).equals(Buffer.from('377abcaf271c', 'hex'));
   if (ext === '.png')
     return b.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'));
   if (['.jpg', '.jpeg'].includes(ext))
@@ -394,6 +402,24 @@ module.exports = function ({
         return;
       if (process.env.ARTIST_LIBRARY_ENABLED === 'false')
         return sendError(res, 503, '艺术家资料库暂未启用');
+      if (id === 'mail') {
+        if (!ensureRole(res, user, ['admin', 'editor'])) return;
+        if (!sub && req.method === 'GET')
+          return sendJSON(res, 200, await mail.list(pool, q));
+        if (sub && parts.length === 2 && req.method === 'GET')
+          return sendJSON(res, 200, await mail.detail(pool, sub));
+        if (sub && parts[2] === 'assign' && req.method === 'POST') {
+          const input = await json(req);
+          return sendJSON(res, 200, await transaction(c =>
+            mail.assign(c, sub, input, user, { clean, profile, audit })));
+        }
+        if (sub && parts[2] === 'supplement' && req.method === 'POST') {
+          const input = await json(req);
+          return sendJSON(res, 200, await transaction(c =>
+            mail.supplement(c, sub, input, user, { filePath, audit })));
+        }
+        fail('操作不支持', 405);
+      }
       if (id === 'files') {
         if (!sub && req.method === 'POST')
           return sendJSON(res, 201, await upload(req, user, q));
@@ -407,6 +433,7 @@ module.exports = function ({
             !f ||
             f.state === 'removed' ||
             (f.state === 'staged' && f.owner_id !== user.id) ||
+            (f.state === 'active' && !f.artist_id && user.role === 'viewer') ||
             (f.archived && user.role !== 'admin')
           )
             fail('文件不存在或不可访问', 404);
@@ -707,3 +734,5 @@ module.exports = function ({
   };
 };
 module.exports.normalizeUrls = urls;
+module.exports.fileTypes = TYPES;
+module.exports.fileSignature = signature;

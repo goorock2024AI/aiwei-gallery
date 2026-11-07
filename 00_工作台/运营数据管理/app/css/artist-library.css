@@ -876,3 +876,22 @@
   margin-right: 12px;
   background: #efede7;
 }
+.artist-library .al-mail-panel {
+  display: grid;
+  gap: 1rem;
+  background: var(--al-surface, #fff);
+  border: 1px solid var(--al-border, #e8e5df);
+  border-radius: 12px;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+.artist-library .al-mail-panel :is(h2, h3, p) { margin: 0; }
+.artist-library .al-mail-body .al-prose { margin-top: .75rem; overflow-wrap: anywhere; }
+.artist-library .al-mail-panel summary { cursor: pointer; }
+.artist-library .al-mail-panel form, .artist-library .al-mail-match {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .6rem;
+  margin: .5rem 0;
+}
+.artist-library .al-mail-supplement input { max-width: 13rem; }

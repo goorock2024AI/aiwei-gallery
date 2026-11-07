@@ -3,12 +3,8 @@ const fs = require('node:fs'),
   path = require('node:path');
 const { Client } = require('pg');
 async function migrate(client) {
-  await client.query(
-    fs.readFileSync(
-      path.join(__dirname, '../sql/20261103_artist_library.sql'),
-      'utf8',
-    ),
-  );
+  for (const file of ['20261103_artist_library.sql', '20261107_artist_mail.sql'])
+    await client.query(fs.readFileSync(path.join(__dirname, '../sql', file), 'utf8'));
 }
 module.exports = migrate;
 if (require.main === module) {

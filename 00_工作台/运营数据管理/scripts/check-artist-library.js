@@ -688,6 +688,59 @@ async function run() {
     assert.equal((await api('editor','GET','/'+reverseId)).works.length,0);
     await page.getByRole('button',{name:'完成',exact:true}).click();
     await page.locator('.modal-overlay #aw-save-btn').evaluate(el=>el.closest('.modal-overlay').remove());
+    const source = {
+      op: 'register', mailbox: 'fixture@example.com', messageId: 'mail-fixture-1',
+      threadId: 'mail-thread-1', subject: '邮件归档验证', sender: 'Fixture <artist@example.com>',
+      receivedAt: '2026-11-07T00:00:00Z', body: '<script>not executed</script>',
+      complete: true,
+      items: [
+        { key: 'file:portfolio', name: '原始作品集.pdf' },
+        { key: 'url:missing', name: '外链资料', url: 'https://example.com/files' },
+      ],
+    };
+    function ingest(input, bytes = Buffer.alloc(0), expectStatus = 0) {
+      const child = spawnSync(process.execPath, ['scripts/artist-mail-ingest.js'], {
+        cwd: root, input: Buffer.concat([Buffer.from(JSON.stringify(input) + '\n'), bytes]),
+        env: { ...process.env, DB_HOST: cfg.host, DB_PORT: String(cfg.port), DB_NAME: name,
+          DB_PASS: cfg.password, ARTIST_FILE_DIR: dir }, windowsHide: true,
+      });
+      assert.equal(child.status, expectStatus, child.stderr.toString());
+      if (!expectStatus) return JSON.parse(child.stdout.toString());
+    }
+    const message = ingest(source);
+    assert.equal(message.created, true);
+    assert.equal(ingest(source).created, false);
+    const envelope = { op: 'file', id: message.id, itemKey: 'file:portfolio', name: '原始作品集.pdf',
+      size: pdf.length, sha256: crypto.createHash('sha256').update(pdf).digest('hex') };
+    ingest({ ...envelope, sha256: 'bad-checksum' }, pdf, 1);
+    assert.equal(ingest(envelope, pdf).saved, true);
+    assert.equal(ingest(envelope, pdf).existing, true);
+    await api('none', 'GET', '/mail', undefined, 401);
+    await api('viewer', 'GET', '/mail', undefined, 403);
+    await api('viewer', 'POST', '/mail/' + message.id + '/assign', { artistId: reverseId }, 403);
+    const queue = await api('editor', 'GET', '/mail/' + message.id);
+    const original = queue.items.find(i => i.file_id);
+    await api('viewer', 'GET', '/files/' + original.file_id, undefined, 404);
+    const originalResponse = await fetch(base + '/rest/v1/artist-library/files/' + original.file_id,
+      { headers: { Authorization: 'Bearer ' + tokens.editor } });
+    assert.deepEqual(Buffer.from(await originalResponse.arrayBuffer()), pdf);
+    await page.goto(base + '/index.html#artists');
+    await page.getByRole('button', { name: '邮件投稿', exact: true }).click();
+    await page.getByRole('button', { name: '查看投稿', exact: true }).click();
+    await page.getByText('外链原件待下载或补传', { exact: true }).waitFor();
+    await page.getByRole('textbox', { name: '查找已有艺术家' }).fill('反向关联测试');
+    await page.locator('.al-mail-search button').click();
+    await page.getByRole('button', { name: '关联此档案' }).click();
+    await page.getByRole('button', { name: '查看邮件与待补材料' }).click();
+    await page.getByLabel('选择待补原件').setInputFiles({ name: '补充原件.pdf', mimeType: 'application/pdf', buffer: pdf });
+    await page.getByRole('button', { name: '补传原件' }).click();
+    await page.getByRole('button', { name: '下载原件' }).nth(1).waitFor();
+    const assigned = await api('editor', 'GET', '/' + reverseId);
+    assert.equal(assigned.records.filter(r => r.kind === 'submission').length, 1);
+    assert.equal(assigned.records.find(r => r.kind === 'submission').data.fileIds.length, 2);
+    assert.equal((await api('editor', 'GET', '/mail')).rows.length, 0);
+    assert.equal((await api('editor', 'GET', '/mail?filter=assigned')).rows.length, 1);
+    await api('editor', 'POST', '/mail/' + message.id + '/assign', { artistId: id }, 409);
     assert.deepEqual(errors, []);
     assert.deepEqual(consoleErrors, []);
     assert.equal(await digest(), worksBefore);
@@ -717,6 +770,8 @@ async function run() {
         'artist_files',
         'artist_artwork_links',
         'artist_records',
+        'artist_mail_imports',
+        'artist_mail_items',
       ].map((t) => '--table=' + t),
     ]);
     await stop();
@@ -797,6 +852,7 @@ async function run() {
             'same-name profiles',
             'work links preserve old facts',
             'submission provenance',
+            'mail ingestion, hash rejection, replay, assignment, manual supplement and private access',
             'followups',
             'archive restore',
             'browser form/save/preview/download/edit/record',
